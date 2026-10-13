@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/AI--assisted-Modding-purple.svg" alt="AI Assisted">
 </p>
 
-> **Contents:** [Overview](#overview) · [Key Features](#key-features) · [Download & Play](#download--play-via-opengoal-launcher-players) · [Developer Setup](#developer-setup--local-compilation) · [Demo Video](#demonstration-video) · [Technical Documentation](#technical-documentation)
+> **Contents:** [Overview](#overview) · [Key Features](#key-features) · [How to Play](#how-to-play) · [Download & Play](#download--play-via-opengoal-launcher-players) · [Developer Setup](#developer-setup--local-compilation) · [Demo Video](#demonstration-video) · [Technical Documentation](#technical-documentation)
 
 ---
 
@@ -17,9 +17,45 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 - **Repository:** [`whozghiar/jak3-mod-multiplayer`](https://github.com/whozghiar/jak3-mod-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
 
 ## Key Features
-- **Feature 1:** Simple description of the first key feature.
-- **Feature 2:** Simple description of the second key feature.
-- **Feature 3:** Simple description of the third key feature.
+- **Host or join from the start menu:** START > Options > Multiplayer. Type the server address
+  (`ip:port`) and your player name with the D-pad, then host or join. Up to 8 players.
+- **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere.
+- **Your color:** ten tints, seen by the other players on your character and your health bar.
+- **See each other:** every player appears with their name and health bar over their head, and
+  as a dot on the minimap.
+- **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
+  triangle to ride next to them when it has two seats.
+- **Enemies fight everyone:** enemies can target any player, and the hits they land count.
+- **Cheats menu:** in the Mods menu (L3 + SELECT): refill ammo, restore health, dark eco and
+  light eco, invincibility, teleport to a zone or to a player.
+- **Administration for the host:** kick or ban a player, teleport players to you, allow or forbid
+  cheats for guests, share your time of day, stop the server.
+
+## How to Play
+1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
+   multiplayer**. The setting is remembered.
+2. Press **START**, open **Options > Multiplayer**.
+3. Set **Player name**, **Character**, **Color** and **Server address**. To edit a text field:
+   confirm, then up / down to change a letter, left / right to move, square to delete, confirm
+   to save (triangle cancels).
+4. The host picks **Host a server**; the others enter the host's address and pick **Join the
+   server**.
+
+| Action | Control |
+|---|---|
+| Mods menu (cheats, teleports) | L3 + SELECT |
+| Steal a player's vehicle | Triangle next to it |
+| Ride as passenger | Hold triangle next to it |
+| Get off as passenger | Triangle |
+
+> [!NOTE]
+> **Playing over the Internet:** the host must open (forward) TCP port 7777, or the port they
+> chose, on their router, and give the others their public IP address. On a local network, use the
+> host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
+> mod.
+
+Each player keeps their own save and story progress: you play together in the same world, but
+missions are not shared.
 
 ## Download & Play via OpenGOAL Launcher (Players)
 
@@ -66,8 +102,8 @@ task set-game-jak3
 ```
 
 ### 2. Binary Compilation
-- **Status:** [Not required (GOAL-only mod, standard binaries sufficient) / `task build-release-game` (engine or compiler C++ changed) / `task build-release` + `task extract` (decompiler or decompiler/config changed)]
-- **Details:** [Specify which C++ layer was modified — see `docs/modding/guides/task_scripts_reference.md`, section 3]
+- **Status:** `task build-release-game` (the runtime `gk` changed).
+- **Details:** the network layer lives in the game runtime (`game/kernel/jak3/kmultiplayer.cpp`).
 ```bash
 # GOAL-only mod: nothing to build — go straight to the REPL below.
 # Engine / compiler C++ changed:
@@ -77,8 +113,9 @@ task build-release-decomp
 ```
 
 ### 3. Asset Extraction
-- **Status:** [Required (`task extract`) / Standard extraction sufficient]
-- **Details:** [Specify if custom 3D models, textures, or sound banks require extraction]
+- **Status:** Standard extraction sufficient.
+- **Details:** no custom asset. The mod only moves the playable-Daxter animations into the
+  always-loaded GAME package, which the normal build does.
 ```bash
 task extract
 ```

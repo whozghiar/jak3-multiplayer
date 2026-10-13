@@ -3,9 +3,7 @@
   "ladder.o"
   "jak-ladder+0-ag.go"
   "jak-pole+0-ag.go"
-  "target-indax.o"
-  "target-indax-hang.o"
-  "jak-indax+0-ag.go"
+  ;; MOD multiplayer -- target-indax.o, target-indax-hang.o and jak-indax+0-ag.go moved to GAME
   "tpage-13.go"
   "tpage-15.go"
   "tpage-510.go"

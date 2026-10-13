@@ -3,7 +3,7 @@
   "vinroom-part.o"
   "power-game.o"
   "ljkdxvin-texture.o"
-  "jak-indax+0-ag.go"
+  ;; MOD multiplayer -- jak-indax+0-ag.go moved to GAME
   "tpage-1026.go"
   "tpage-1024.go"
   "tpage-1023.go"

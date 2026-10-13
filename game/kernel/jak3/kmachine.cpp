@@ -24,6 +24,7 @@
 #include "game/kernel/jak3/klisten.h"
 #include "game/kernel/jak3/kmachine_extras.h"
 #include "game/kernel/jak3/kmalloc.h"
+#include "game/kernel/jak3/kmultiplayer.h"
 #include "game/kernel/jak3/kscheme.h"
 #include "game/kernel/jak3/ksound.h"
 #include "game/sce/deci2.h"
@@ -498,6 +499,9 @@ void InitMachine_PCPort() {
                               (void*)kmachine_extras::pc_sr_mode_init_custom_category_info);
   make_function_symbol_from_c("pc-sr-mode-dump-new-custom-category",
                               (void*)kmachine_extras::pc_sr_mode_dump_new_custom_category);
+
+  // MOD multiplayer -- network session for the multiplayer mod (kmultiplayer.cpp)
+  init_multiplayer_functions();
 
   // setup string constants
   auto user_dir_path = file_util::get_user_config_dir();

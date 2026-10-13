@@ -8,9 +8,7 @@
   "target-ladder.o"
   "ladder.o"
   "jak-ladder+0-ag.go"
-  "target-indax.o"
-  "target-indax-hang.o"
-  "jak-indax+0-ag.go"
+  ;; MOD multiplayer -- target-indax.o, target-indax-hang.o and jak-indax+0-ag.go moved to GAME
   "chain-physics.o"
   "hover-formation-h.o"
   "hover-nav-control-h.o"

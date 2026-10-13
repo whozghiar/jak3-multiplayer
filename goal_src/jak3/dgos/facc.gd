@@ -15,9 +15,7 @@
   "hover-nav-factoryc.o"
   "factoryc-obs.o"
   "factoryc-obs2.o"
-  "target-indax.o"
-  "target-indax-hang.o"
-  "jak-indax+0-ag.go"
+  ;; MOD multiplayer -- target-indax.o, target-indax-hang.o and jak-indax+0-ag.go moved to GAME
   "tpage-2233.go"
   "tpage-2305.go"
   "tpage-2235.go"

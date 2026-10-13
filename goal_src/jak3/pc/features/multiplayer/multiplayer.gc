@@ -1,0 +1,1553 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; name: multiplayer.gc
+;; dgos: GAME
+;;
+;; Jak 3 multiplayer mod -- everything that runs in game. The network session itself (TCP host or
+;; client, relay, interpolation of remote players) is C++: game/kernel/jak3/kmultiplayer.cpp,
+;; reached through the pc-mp-* kernel functions declared below. The menus live in
+;; multiplayer-menu.gc.
+;;
+;; How a frame goes:
+;;   1. `mp-frame-hook` (installed on *mods-menu-hook*, runs every frame, even paused) describes the
+;;      local player in *mp-local*, pumps the network with it, copies every remote player's
+;;      interpolated state into *mp-players*, then draws names and health bars over them.
+;;   2. The `mp-manager` process (frozen while paused) keeps one `mp-puppet` per remote player,
+;;      applies network events, switches the player to Daxter, and handles shared vehicles.
+;;
+;; Every feature is off until the player enables "Multiplayer" in the Mods menu (L3 + SELECT):
+;; with the toggle off, the hook only runs the Mods menu and the two wrapped methods (enemy
+;; `mark-as-dead`, progress `set-menu-options`) behave as stock.
+
+;; ------------------------------------------------------------------------------------------------
+;; Shared types (mirrored field for field by kmultiplayer.h)
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_MAX_PLAYERS 8)
+
+;; Session mode, as returned by pc-mp-update.
+(defenum mp-mode
+  :type int32
+  (offline 0)
+  (connecting 1)
+  (client 2)
+  (host 3)
+  )
+
+;; What a player is doing, sent with its state.
+(defenum mp-flag
+  :type uint32
+  :bitfield #t
+  (driving 0)      ;; drives a vehicle: the veh-* and seat-* fields are valid
+  (riding 1)       ;; sits next to the driver in ride-slot
+  (dead 2)         ;; dying or respawning
+  (hidden 3)       ;; not drawn (no player, cutscene, model hidden)
+  (invulnerable 4) ;; invincibility cheat on
+  (indax 5)        ;; plays as Daxter: anim-index is an index in Daxter's art group
+  (paused 6)       ;; in a menu
+  )
+
+;; Network events (mp-event kind). The C++ session only routes them.
+(defenum mp-event-kind
+  :type int32
+  (kill-entity 1) ;; iarg 0: aid of an enemy that died on the sender's screen
+  (steal 2)       ;; to a driver: the sender takes your vehicle, get out
+  (hit 3)         ;; to a player: an enemy hit your character on the sender's screen, fvec x = damage
+  (teleport 4)    ;; to a player or everyone: go to player iarg 0 (administration)
+  (world 5)       ;; host to everyone: iarg 0 = mp-world-flag bits, fvec x = time of day
+  )
+
+;; Server settings chosen by the host in the administration page.
+(defenum mp-world-flag
+  :type int32
+  :bitfield #t
+  (cheats 0)    ;; guests may use the cheats of the Mods menu
+  (sync-time 1) ;; guests follow the host's time of day
+  )
+
+;; One player's state. 192 bytes, mirrors mp::PlayerState.
+(deftype mp-player-state (structure)
+  ((trans      vector     :inline)
+   (quat       quaternion :inline)
+   (vel        vector     :inline)
+   (veh-trans  vector     :inline)
+   (veh-quat   quaternion :inline)
+   (seat-trans vector     :inline)
+   (anim-frame float)
+   (health     float)
+   (health-max float)
+   (flags      mp-flag)
+   (anim-index int16)
+   (veh-type   int16)
+   (character  int8)
+   (color      int8)
+   (seat-count int8)
+   (ride-slot  int8)
+   (time-ms    uint32)
+   (pad        uint32)
+   (name       uint8 16)
+   (level      uint8 16)
+   (cont       uint8 32)
+   )
+  :size-assert #xc0
+  )
+
+;; One network event. 80 bytes, mirrors mp::Event.
+(deftype mp-event (structure)
+  ((kind mp-event-kind)
+   (from int32)
+   (to   int32)
+   (iarg int32 4)
+   (pad  int32)
+   (fvec vector :inline)
+   (text uint8 32)
+   )
+  :size-assert #x50
+  )
+
+;; Settings kept between boots in <settings>/multiplayer.cfg. 64 bytes, mirrors mp::Config.
+(deftype mp-config (structure)
+  ((name      uint8 16)
+   (address   uint8 32)
+   (character int32)
+   (color     int32)
+   (enabled   int32)
+   (pad       int32)
+   )
+  :size-assert #x40
+  )
+
+;; The remote players' interpolated states, refreshed every frame by the hook.
+(deftype mp-player-table (structure)
+  ((state mp-player-state MP_MAX_PLAYERS :inline)
+   (valid symbol MP_MAX_PLAYERS)
+   )
+  )
+
+;; Kernel functions (game/kernel/jak3/kmultiplayer.cpp).
+(define-extern pc-mp-host (function string int symbol))
+(define-extern pc-mp-join (function string symbol))
+(define-extern pc-mp-leave (function none))
+(define-extern pc-mp-update (function mp-player-state int))
+(define-extern pc-mp-get-player (function int mp-player-state symbol))
+(define-extern pc-mp-send-event (function mp-event none))
+(define-extern pc-mp-pop-event (function mp-event symbol))
+(define-extern pc-mp-kick (function int symbol none))
+(define-extern pc-mp-local-slot (function int))
+(define-extern pc-mp-message (function string none))
+(define-extern pc-mp-config-load (function mp-config symbol))
+(define-extern pc-mp-config-save (function mp-config none))
+
+;; ------------------------------------------------------------------------------------------------
+;; Global state
+;; ------------------------------------------------------------------------------------------------
+
+(define *mp-config* (new 'global 'mp-config))
+(define *mp-local* (new 'global 'mp-player-state))
+(define *mp-players* (new 'global 'mp-player-table))
+(dotimes (i MP_MAX_PLAYERS)
+  (set! (-> *mp-players* valid i) #f)
+  )
+
+;; Editable copies of the config strings (the start menu edits these).
+(define *mp-name* (new 'global 'string 16 (the-as string #f)))
+(define *mp-address* (new 'global 'string 32 (the-as string #f)))
+
+(define *mp-mode* (mp-mode offline))
+(define *mp-local-slot* -1)
+;; Host: the settings sent to guests. Guest: the settings received from the host.
+(define *mp-world* (mp-world-flag cheats sync-time))
+;; Invincibility cheat (Mods menu).
+(define *mp-invulnerable* #f)
+(define *mp-invulnerable-applied* #f)
+;; Slot of the driver this player rides with, -1 when not riding.
+(define *mp-ride-slot* -1)
+;; Slot of the remote vehicle the player stands next to (interaction prompt), -1 for none.
+(define *mp-prompt-slot* -1)
+;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
+(define *mp-request-teleport* -1)
+;; Handle of the mp-manager process.
+(define *mp-manager* (the-as handle #f))
+
+;; On-screen notification (joins, leaves, kicks...).
+(define *mp-message* (new 'global 'string 128 (the-as string #f)))
+(define *mp-message-time* (the-as time-frame 0))
+(define *mp-status* (new 'global 'string 128 (the-as string #f)))
+(define *mp-temp-string* (new 'global 'string 64 (the-as string #f)))
+
+;; Last time a hit was forwarded to each player (real clock), to rate-limit them.
+(define *mp-hit-sent* (new 'global 'boxed-array time-frame MP_MAX_PLAYERS))
+
+;; aid of enemies recently killed because another player said so: their death is not echoed back.
+(define *mp-remote-kills* (new 'global 'boxed-array uint32 8))
+(define *mp-remote-kill-index* 0)
+
+;; Tints applied to a player's model (draw-control color-mult), one per selectable color. The
+;; start menu lists them in the same order (multiplayer-menu.gc).
+(define *mp-colors*
+  (new 'static 'boxed-array :type vector
+    (new 'static 'vector :x 1.0 :y 1.0 :z 1.0 :w 1.0)   ;; natural
+    (new 'static 'vector :x 1.5 :y 0.55 :z 0.55 :w 1.0) ;; red
+    (new 'static 'vector :x 0.6 :y 0.75 :z 1.6 :w 1.0)  ;; blue
+    (new 'static 'vector :x 0.6 :y 1.4 :z 0.6 :w 1.0)   ;; green
+    (new 'static 'vector :x 1.4 :y 1.3 :z 0.5 :w 1.0)   ;; yellow
+    (new 'static 'vector :x 1.2 :y 0.6 :z 1.4 :w 1.0)   ;; purple
+    (new 'static 'vector :x 1.5 :y 0.9 :z 0.45 :w 1.0)  ;; orange
+    (new 'static 'vector :x 0.55 :y 1.3 :z 1.4 :w 1.0)  ;; cyan
+    (new 'static 'vector :x 1.5 :y 0.75 :z 1.1 :w 1.0)  ;; pink
+    (new 'static 'vector :x 0.45 :y 0.45 :z 0.5 :w 1.0) ;; shadow
+    )
+  )
+
+;; Teleport destinations of the Mods menu: label, then continue point (engine/level/level-info.gc).
+(define *mp-zones*
+  (new 'static 'boxed-array :type string
+    "Haven City: port" "ctyport-start"
+    "Haven City: slums" "ctysluma-start"
+    "Haven City: industrial" "ctygenb-start"
+    "Haven City: Hip Hog Saloon" "hiphog-start"
+    "Haven City: Freedom HQ" "freehq-start"
+    "Haven City: sewers" "sewer-start"
+    "Spargus: city" "wascitya-start"
+    "Spargus: upper city" "wascityb-start"
+    "Spargus: arena" "wasstada-start"
+    "Spargus: palace" "waspala-start"
+    "Wasteland: desert" "desert-start"
+    "Eco mine" "minea-start"
+    "Forest" "foresta-start"
+    "Precursor temple" "templex-start"
+    "Volcano" "volcanox-start"
+    "Metal Head nest" "nsta-start"
+    "Metal Head tower" "towera-start"
+    "KG war factory" "factoryb-start"
+    "Precursor core" "precura-start"
+    )
+  )
+
+;; Vehicle type names, indexed by `vehicle-type` (engine/ai/traffic-h.gc). The vehicle classes
+;; are level code, unknown to this GAME file, so vehicles are recognized by their type name, and
+;; their model is found as "skel-<name>".
+(define *mp-vehicle-types*
+  (new 'static 'boxed-array :type symbol
+    'h-bike-a 'h-bike-b 'h-bike-c 'h-car-a 'h-car-b 'h-car-c 'h-bike-d 'h-hellcat 'h-warf 'h-glider
+    'h-sled 'h-kg-pickup 'v-turtle 'v-snake 'v-scorpion 'v-toad 'v-fox 'v-rhino 'v-mirage 'v-x-ride
+    'v-marauder 'v-faccar 'v-catapult 'v-marauder-b
+    )
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Small helpers
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-enabled? ()
+  "#t when the multiplayer mod is enabled (Mods menu toggle)."
+  (nonzero? (-> *mp-config* enabled))
+  )
+
+(defun mp-online? ()
+  "#t while hosting or connected to a host."
+  (or (= *mp-mode* (mp-mode host)) (= *mp-mode* (mp-mode client)))
+  )
+
+(defun mp-cheats-allowed? ()
+  "Cheats are always allowed offline and for the host; guests need the host's permission."
+  (or (!= *mp-mode* (mp-mode client)) (logtest? *mp-world* (mp-world-flag cheats)))
+  )
+
+(defun mp-now ()
+  "Real-time clock (keeps running while paused), for UI timers."
+  (-> *display* real-clock frame-counter)
+  )
+
+(defun mp-show-message ((msg string))
+  "Show `msg` at the bottom of the screen for a few seconds."
+  (copy-string<-string *mp-message* msg)
+  (set! *mp-message-time* (mp-now))
+  (none)
+  )
+
+(defun mp-color ((index int))
+  "Tint for a color index (clamped)."
+  (-> *mp-colors* (max 0 (min index (+ (-> *mp-colors* length) -1))))
+  )
+
+(defun mp-color-rgba ((index int))
+  "On-screen color of a player's health bar, from its tint."
+  (let ((c (mp-color index)))
+    (the-as rgba (logior (min 255 (the int (* 100.0 (-> c x))))
+                         (shl (min 255 (the int (* 100.0 (-> c y)))) 8)
+                         (shl (min 255 (the int (* 100.0 (-> c z)))) 16)
+                         (shl #x80 24)
+                         )
+            )
+    )
+  )
+
+(defun mp-remote-state ((slot int))
+  "The interpolated state of a remote player, or #f when that slot is empty."
+  (if (and (>= slot 0) (< slot MP_MAX_PLAYERS) (-> *mp-players* valid slot))
+      (-> *mp-players* state slot)
+      (the-as mp-player-state #f)
+      )
+  )
+
+(defun mp-level-active? ((name (pointer uint8)))
+  "#t when the level called `name` (a C string) is loaded and active here, so a player standing in
+   it can be drawn."
+  (dotimes (i (-> *level* length))
+    (let ((lev (-> *level* level i)))
+      (if (and (= (-> lev status) 'active) (string-charp= (symbol->string (-> lev name)) name))
+          (return #t)
+          )
+      )
+    )
+  #f
+  )
+
+(defun mp-inherits? ((typ type) (name symbol))
+  "#t when `typ` is the type called `name` or one of its children (walks at most 16 parents)."
+  (dotimes (i 16)
+    (if (= (-> typ symbol) name)
+        (return #t)
+        )
+    (set! typ (-> typ parent))
+    )
+  #f
+  )
+
+(defun mp-vehicle-type-of ((proc process))
+  "The vehicle-type of a vehicle process, or -1 when its class is not in *mp-vehicle-types*."
+  (let ((typ (-> proc type)))
+    (dotimes (depth 16)
+      (dotimes (i (-> *mp-vehicle-types* length))
+        (if (= (-> typ symbol) (-> *mp-vehicle-types* i))
+            (return i)
+            )
+        )
+      (set! typ (-> typ parent))
+      )
+    )
+  -1
+  )
+
+(defun mp-vehicle-seat-count ((veh process))
+  "Seats of a vehicle. Calls vehicle method 65 (vehicle-util.gc) through the method table, since
+   the vehicle type is level code this GAME file cannot name."
+  ((the-as (function process int) (-> veh type method-table 65)) veh)
+  )
+
+(defun mp-vehicle-seat-pos ((veh process) (seat int) (out vector))
+  "World position of a vehicle seat, through vehicle method 66 (see mp-vehicle-seat-count)."
+  ((the-as (function process vector int none) (-> veh type method-table 66)) veh out seat)
+  out
+  )
+
+(defun mp-vehicle-skel ((vtype int))
+  "The model of a vehicle type, or #f when its art is not loaded here."
+  (when (and (>= vtype 0) (< vtype (-> *mp-vehicle-types* length)))
+    (format (clear *mp-temp-string*) "skel-~S" (symbol->string (-> *mp-vehicle-types* vtype)))
+    (return (the-as skeleton-group (art-group-get-by-name *level* *mp-temp-string* (the-as (pointer level) #f))))
+    )
+  (the-as skeleton-group #f)
+  )
+
+(defun mp-character-skel ((daxter? symbol))
+  "The model of a character: Daxter (resident in GAME) or Jak in the player's current outfit."
+  (if daxter?
+      (the-as skeleton-group (art-group-get-by-name *level* "skel-sidekick" (the-as (pointer level) #f)))
+      (target-skel-group)
+      )
+  )
+
+(defun mp-send-event ((kind mp-event-kind) (to int) (arg0 int) (f float))
+  "Send a network event to player `to` (-1 = everyone else)."
+  (let ((ev (new 'stack 'mp-event)))
+    (set! (-> ev kind) kind)
+    (set! (-> ev to) to)
+    (set! (-> ev iarg 0) arg0)
+    (set! (-> ev fvec x) f)
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defun mp-target-state-name ()
+  "Name of the player's current (or next) state, or #f."
+  (if (and *target* (-> *target* next-state))
+      (-> *target* next-state name)
+      #f
+      )
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Config
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-config-save! ()
+  "Write the editable settings back to the config and save it to disk."
+  (copyn-charp<-string (-> *mp-config* name) *mp-name* 16)
+  (copyn-charp<-string (-> *mp-config* address) *mp-address* 32)
+  (pc-mp-config-save *mp-config*)
+  (none)
+  )
+
+(defun mp-config-load! ()
+  "Load the saved settings, or set defaults on the first run."
+  (copyn-charp<-string (-> *mp-config* name) "Player" 16)
+  (copyn-charp<-string (-> *mp-config* address) "127.0.0.1:7777" 32)
+  (set! (-> *mp-config* character) 0)
+  (set! (-> *mp-config* color) 0)
+  (set! (-> *mp-config* enabled) 0)
+  (pc-mp-config-load *mp-config*)
+  (string<-charp *mp-name* (-> *mp-config* name))
+  (string<-charp *mp-address* (-> *mp-config* address))
+  (none)
+  )
+
+(mp-config-load!)
+
+;; ------------------------------------------------------------------------------------------------
+;; Session control (called from the start menu)
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-host! ()
+  "Start a server on the port of the address field."
+  (mp-config-save!)
+  (pc-mp-host *mp-address* MP_MAX_PLAYERS)
+  (pc-mp-message *mp-status*)
+  (mp-show-message *mp-status*)
+  (none)
+  )
+
+(defun mp-join! ()
+  "Connect to the server of the address field."
+  (mp-config-save!)
+  (pc-mp-join *mp-address*)
+  (pc-mp-message *mp-status*)
+  (mp-show-message *mp-status*)
+  (none)
+  )
+
+(defun mp-leave! ()
+  "Leave the session (a host stops its server)."
+  (pc-mp-leave)
+  (set! *mp-mode* (mp-mode offline))
+  (pc-mp-message *mp-status*)
+  (mp-show-message *mp-status*)
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Local player -> network
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-build-local-state ()
+  "Describe the local player in *mp-local*. Runs every frame from the hook, even paused."
+  (let ((st *mp-local*))
+    (copyn-charp<-string (-> st name) *mp-name* 16)
+    (set! (-> st character) (-> *mp-config* character))
+    (set! (-> st color) (-> *mp-config* color))
+    (set! (-> st flags) (mp-flag))
+    (set! (-> st anim-index) -1)
+    (set! (-> st veh-type) -1)
+    (set! (-> st seat-count) 0)
+    (set! (-> st ride-slot) *mp-ride-slot*)
+    (if (paused?)
+        (logior! (-> st flags) (mp-flag paused))
+        )
+    (if *mp-invulnerable*
+        (logior! (-> st flags) (mp-flag invulnerable))
+        )
+    (if (>= *mp-ride-slot* 0)
+        (logior! (-> st flags) (mp-flag riding))
+        )
+    (cond
+      ((not *target*)
+       (logior! (-> st flags) (mp-flag hidden))
+       )
+      (else
+        (let ((tgt *target*))
+          (vector-copy! (-> st trans) (-> tgt control trans))
+          (quaternion-copy! (-> st quat) (-> tgt control quat))
+          (vector-copy! (-> st vel) (-> tgt control transv))
+          (set! (-> st health) (-> tgt fact health))
+          (set! (-> st health-max) (-> tgt fact health-max))
+          (if (focus-test? tgt indax)
+              (logior! (-> st flags) (mp-flag indax))
+              )
+          (if (focus-test? tgt dead)
+              (logior! (-> st flags) (mp-flag dead))
+              )
+          ;; a passenger's own model is hidden on purpose: others still draw it in the seat
+          (if (and (logtest? (-> tgt draw status) (draw-control-status no-draw)) (< *mp-ride-slot* 0))
+              (logior! (-> st flags) (mp-flag hidden))
+              )
+          ;; current animation, as an index in the art group (the same on every machine)
+          (let ((skel (-> tgt skel))
+                (ag (-> tgt draw art-group))
+                )
+            (when (> (-> skel active-channels) 0)
+              (let ((fg (-> skel root-channel 0 frame-group)))
+                (when fg
+                  (dotimes (i (-> ag length))
+                    (when (= (-> ag data i) fg)
+                      (set! (-> st anim-index) i)
+                      (set! (-> st anim-frame) (-> skel root-channel 0 frame-num))
+                      (set! i (-> ag length))
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          ;; driven vehicle
+          (when (and (focus-test? tgt pilot) (nonzero? (-> tgt pilot)))
+            (let ((veh (handle->process (-> tgt pilot vehicle))))
+              (when (and veh (mp-inherits? (-> veh type) 'vehicle))
+                (logior! (-> st flags) (mp-flag driving))
+                (set! (-> st veh-type) (mp-vehicle-type-of veh))
+                (vector-copy! (-> st veh-trans) (-> (the-as process-drawable veh) root trans))
+                (quaternion-copy! (-> st veh-quat) (-> (the-as process-drawable veh) root quat))
+                (set! (-> st seat-count) (mp-vehicle-seat-count veh))
+                (if (> (-> st seat-count) 1)
+                    (mp-vehicle-seat-pos veh 1 (-> st seat-trans))
+                    (vector-copy! (-> st seat-trans) (-> st veh-trans))
+                    )
+                )
+              )
+            )
+          ;; where the player is, for drawing and teleports
+          (let ((lev (-> tgt current-level)))
+            (if lev
+                (copyn-charp<-string (-> st level) (symbol->string (-> lev name)) 16)
+                (set! (-> st level 0) (the-as uint 0))
+                )
+            )
+          (if (-> *game-info* current-continue)
+              (copyn-charp<-string (-> st cont) (-> *game-info* current-continue name) 32)
+              (set! (-> st cont 0) (the-as uint 0))
+              )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-read-remote-states ()
+  "Copy every remote player's interpolated state into *mp-players*, announcing joins and leaves."
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((was (-> *mp-players* valid i))
+          (now (pc-mp-get-player i (-> *mp-players* state i)))
+          )
+      (set! (-> *mp-players* valid i) now)
+      ;; no announcement once the session is over: the reason it ended stays on screen
+      (when (and (!= was now) (mp-online?))
+        (string<-charp *mp-temp-string* (-> *mp-players* state i name))
+        (format (clear *mp-message*) (if now "~S joined the game" "~S left the game") *mp-temp-string*)
+        (set! *mp-message-time* (mp-now))
+        )
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Remote player puppet
+;; ------------------------------------------------------------------------------------------------
+
+;; Draws one remote player: its character in its color, playing the animation it plays, with a
+;; ghost of the vehicle it drives. Focusable and listed with the player (collide-spec jak), so
+;; enemies may choose it as their target; their hits are forwarded to that player.
+(deftype mp-puppet (process-focusable)
+  ((slot       int32)          ;; player slot shown
+   (daxter?    symbol)         ;; #t: Daxter model, else Jak
+   (local?     symbol)         ;; #t: shows the local player sitting as a passenger
+   (skel-group skeleton-group) ;; model in use, to notice an outfit change
+   (minimap    connection-minimap)
+   (ghost      handle)         ;; manipy drawing the driven vehicle
+   (ghost-type int32)
+   (ghost-skel skeleton-group)
+   )
+  )
+
+(defun mp-forward-hit ((slot int))
+  "An enemy hit the puppet of `slot` here: tell that player (at most once a second)."
+  (when (and (mp-online?) (>= slot 0) (< slot MP_MAX_PLAYERS)
+             (>= (- (mp-now) (-> *mp-hit-sent* slot)) (seconds 1))
+             )
+    (set! (-> *mp-hit-sent* slot) (mp-now))
+    (mp-send-event (mp-event-kind hit) slot 0 1.0)
+    )
+  (none)
+  )
+
+(defbehavior mp-puppet-kill-ghost mp-puppet ()
+  "Remove the vehicle ghost, if any."
+  (let ((ghost (handle->process (-> self ghost))))
+    (if ghost
+        (deactivate ghost)
+        )
+    )
+  (set! (-> self ghost) (the-as handle #f))
+  (none)
+  )
+
+(defbehavior mp-puppet-update-ghost mp-puppet ((st mp-player-state) (shown? symbol))
+  "Keep a ghost of the vehicle the player drives, at its interpolated place. The ghost is removed
+   as soon as its art stops being loaded here (its level is leaving), before the art is freed."
+  (cond
+    ((and shown? (logtest? (-> st flags) (mp-flag driving)) (>= (-> st veh-type) 0))
+     (let ((sg (mp-vehicle-skel (-> st veh-type)))
+           (ghost (handle->process (-> self ghost)))
+           )
+       (when (and ghost (or (!= (-> self ghost-type) (-> st veh-type)) (!= (-> self ghost-skel) sg)))
+         (mp-puppet-kill-ghost)
+         (set! ghost #f)
+         )
+       (when (and (not ghost) sg)
+         (let ((proc (process-spawn
+                       manipy
+                       :init manipy-init
+                       (-> st veh-trans)
+                       (the-as entity-actor #f)
+                       sg
+                       (the-as vector #f)
+                       (the-as manipy-options 0)
+                       :name "mp-ghost-vehicle"
+                       :to self
+                       :stack-size #x10000
+                       )
+                     )
+               )
+           (when proc
+             (set! (-> self ghost) (ppointer->handle proc))
+             (set! (-> self ghost-type) (-> st veh-type))
+             (set! (-> self ghost-skel) sg)
+             (set! ghost (ppointer->process proc))
+             )
+           )
+         )
+       (when ghost
+         (send-event ghost 'trans (-> st veh-trans))
+         (send-event ghost 'rot-quat (-> st veh-quat))
+         )
+       )
+     )
+    (else
+      (mp-puppet-kill-ghost)
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-puppet-update mp-puppet ()
+  "Copy the player's state onto the puppet: place, visibility, tint, animation, vehicle."
+  (let ((st (if (-> self local?)
+                *mp-local*
+                (mp-remote-state (-> self slot))
+                )
+            )
+        )
+    (when st
+      (let ((shown? (and (not (logtest? (-> st flags) (mp-flag hidden))) (mp-level-active? (-> st level)))))
+        (when (-> self local?)
+          ;; the passenger's own view: always shown, in the seat
+          (set! shown? #t)
+          )
+        (move-to-point! (-> self root) (-> st trans))
+        (quaternion-copy! (-> self root quat) (-> st quat))
+        (vector-copy! (-> (the-as collide-shape-moving (-> self root)) transv) (-> st vel))
+        (cond
+          (shown?
+            (logclear! (-> self draw status) (draw-control-status no-draw))
+            (set! (-> self focus-status) (if (logtest? (-> st flags) (mp-flag dead))
+                                             (focus-status dead)
+                                             (focus-status)
+                                             )
+                  )
+            )
+          (else
+            (logior! (-> self draw status) (draw-control-status no-draw))
+            (set! (-> self focus-status) (focus-status disable))
+            )
+          )
+        (let ((c (mp-color (-> st color))))
+          (set-vector! (-> self draw color-mult) (-> c x) (-> c y) (-> c z) 1.0)
+          )
+        ;; the animation the player plays, by index; one that is not loaded here falls back to
+        ;; the idle stance (resident). Indices: engine/data/art-elts.gc.
+        (let* ((ag (-> self draw art-group))
+               (idx (-> st anim-index))
+               (anim (if (and (>= idx 0) (< idx (-> ag length)))
+                         (-> ag data idx)
+                         (the-as art-element #f)
+                         )
+                     )
+               )
+          (if (not (and anim (type? anim art-joint-anim)))
+              (set! anim (if (-> self daxter?)
+                             (-> ag data 473) ;; daxter-indax-stance-ja
+                             (-> ag data 18)  ;; jakb-stance-loop-ja
+                             )
+                    )
+              )
+          (when (and anim (type? anim art-joint-anim))
+            (let ((ja-anim (the-as art-joint-anim anim)))
+              (ja :group! ja-anim
+                  :num! (identity (fmax 0.0 (fmin (-> st anim-frame) (the float (+ (-> ja-anim frames num-frames) -1)))))
+                  )
+              )
+            )
+          )
+        (if (not (-> self local?))
+            (mp-puppet-update-ghost st shown?)
+            )
+        )
+      )
+    )
+  (none)
+  )
+
+(defstate mp-puppet-idle (mp-puppet)
+  :event (behavior ((proc process) (argc int) (message symbol) (block event-message-block))
+    (case message
+      (('attack)
+       ;; an enemy of this machine hit this player: the damage happens on that player's machine
+       (if (not (-> self local?))
+           (mp-forward-hit (-> self slot))
+           )
+       #t
+       )
+      )
+    )
+  :exit (behavior ()
+    (mp-puppet-kill-ghost)
+    (when (-> self minimap)
+      (kill-callback (-> *minimap* engine) (-> self minimap))
+      (set! (-> self minimap) #f)
+      )
+    )
+  :code (behavior ()
+    (loop
+      (suspend)
+      )
+    )
+  :post (behavior ()
+    (mp-puppet-update)
+    (ja-post)
+    )
+  )
+
+(defbehavior mp-puppet-init-by-other mp-puppet ((slot int) (daxter? symbol) (local? symbol))
+  "Set up a puppet for `slot`. `daxter?` picks the model; `local?` shows the local player (passenger
+   view) and keeps the puppet out of enemies' sight, the minimap and the hit forwarding."
+  (set! (-> self slot) slot)
+  (set! (-> self daxter?) daxter?)
+  (set! (-> self local?) local?)
+  (set! (-> self ghost) (the-as handle #f))
+  (set! (-> self ghost-type) -1)
+  (set! (-> self minimap) #f)
+  ;; one sphere, listed with the player: enemies may pick it as their focus
+  (let ((cshape (new 'process 'collide-shape-moving self (collide-list-enum hit-by-others))))
+    (set! (-> cshape dynam) (copy *standard-dynamics* 'process))
+    (set! (-> cshape reaction) cshape-reaction-default)
+    (set! (-> cshape no-reaction)
+          (the-as (function collide-shape-moving collide-query vector vector object) nothing)
+          )
+    (let ((prim (new 'process 'collide-shape-prim-sphere cshape (the-as uint 0))))
+      (set! (-> prim prim-core collide-as) (if local?
+                                                (collide-spec)
+                                                (collide-spec jak)
+                                                )
+            )
+      (set! (-> prim prim-core collide-with) (collide-spec))
+      (set-vector! (-> prim local-sphere) 0.0 (meters 1) 0.0 (meters 1))
+      (set! (-> cshape total-prims) (the-as uint 1))
+      (set! (-> cshape root-prim) prim)
+      )
+    (set! (-> cshape nav-radius) (meters 0.75))
+    (let ((prim (-> cshape root-prim)))
+      (set! (-> cshape backup-collide-as) (-> prim prim-core collide-as))
+      (set! (-> cshape backup-collide-with) (-> prim prim-core collide-with))
+      )
+    (set! (-> self root) cshape)
+    )
+  (let ((st (if local?
+                *mp-local*
+                (mp-remote-state slot)
+                )
+            )
+        )
+    (if st
+        (vector-copy! (-> self root trans) (-> st trans))
+        )
+    )
+  ;; the manager only spawns a puppet when this model is available
+  (let ((sg (mp-character-skel daxter?)))
+    (set! (-> self skel-group) sg)
+    (initialize-skeleton self sg (the-as pair 0))
+    )
+  (ja-channel-set! 1)
+  (set! (-> self focus-status) (focus-status disable))
+  (if (not local?)
+      (set! (-> self minimap) (add-icon! *minimap* self (the-as uint 124) (the-as int #f) (the-as vector #t) 0))
+      )
+  (go mp-puppet-idle)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Passenger seat marker
+;; ------------------------------------------------------------------------------------------------
+
+;; An invisible point that follows the passenger seat of a remote driver's vehicle. The local
+;; player rides it with the stock `target-grab-ride` state, which moves the player to the trans of
+;; the process that asked for the ride, every frame. Its root is a plain trsqv: no collision, so
+;; nothing ever picks it as a focus.
+(deftype mp-seat (process-focusable)
+  ((driver int32)
+   )
+  )
+
+(defbehavior mp-seat-follow mp-seat ()
+  "Move to the driver's passenger seat."
+  (let ((st (mp-remote-state (-> self driver))))
+    (when st
+      (vector-copy! (-> self root trans) (-> st seat-trans))
+      (quaternion-copy! (-> self root quat) (-> st veh-quat))
+      )
+    )
+  (none)
+  )
+
+(defstate mp-seat-idle (mp-seat)
+  :code (behavior ()
+    (loop
+      (mp-seat-follow)
+      (suspend)
+      )
+    )
+  )
+
+(defbehavior mp-seat-init-by-other mp-seat ((driver int))
+  "Set up a seat marker for the vehicle of player `driver`."
+  (set! (-> self driver) driver)
+  (set! (-> self root) (the-as collide-shape (new 'process 'trsqv)))
+  (mp-seat-follow)
+  (go mp-seat-idle)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Enemies: shared deaths
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-remote-kill? ((aid uint))
+  "#t when `aid` died because another player said so (its death must not be echoed back)."
+  (dotimes (i (-> *mp-remote-kills* length))
+    (if (= (-> *mp-remote-kills* i) aid)
+        (return #t)
+        )
+    )
+  #f
+  )
+
+(defun mp-on-enemy-died ((this enemy))
+  "An enemy died on this machine: the other players kill their copy of it."
+  (when (and (mp-online?) (-> this entity) (nonzero? (-> this entity aid)) (not (mp-remote-kill? (-> this entity aid))))
+    (mp-send-event (mp-event-kind kill-entity) -1 (the-as int (-> this entity aid)) 0.0)
+    )
+  (none)
+  )
+
+(defun mp-apply-remote-kill ((aid uint))
+  "Another player killed the enemy of entity `aid`: kill it here too, with its death animation."
+  (let ((ent (entity-by-aid aid)))
+    (when ent
+      (let ((proc (-> (the-as entity-actor ent) extra process)))
+        (when (and proc (type? proc enemy) (not (focus-test? (the-as enemy proc) dead)))
+          (set! (-> *mp-remote-kills* *mp-remote-kill-index*) aid)
+          (set! *mp-remote-kill-index* (mod (+ *mp-remote-kill-index* 1) (-> *mp-remote-kills* length)))
+          (send-event proc 'instant-death)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- wrap the stock enemy death bookkeeping (engine/common-obs/enemy-states.gc) to
+;; share deaths. Every enemy death goes through it (from on-dying); no enemy class overrides it.
+;; define-perm keeps the stock method when this file is reloaded in a REPL session.
+(define-perm *mp-stock-mark-as-dead* (function enemy none)
+  (the-as (function enemy none) (method-of-type enemy mark-as-dead))
+  )
+
+(defmethod mark-as-dead ((this enemy))
+  "Stock behavior, then tell the other players (multiplayer mod, no-op offline)."
+  (*mp-stock-mark-as-dead* this)
+  (mp-on-enemy-died this)
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Manager process
+;; ------------------------------------------------------------------------------------------------
+
+;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
+;; is enabled, killed when it is disabled.
+(deftype mp-manager (process)
+  ((puppets     handle MP_MAX_PLAYERS)
+   (self-puppet handle)     ;; the local player's own model while riding as a passenger
+   (seat        handle)     ;; mp-seat ridden
+   (ride-want   int32)      ;; driver to ride with once the player can, -1
+   (steal-want  int32)      ;; driver to rob once the player can, -1
+   (steal-veh   handle)     ;; our vehicle that was stolen, removed once we got out
+   (steal-time  time-frame)
+   (tri-slot    int32)      ;; vehicle under the triangle press, -1
+   (tri-time    time-frame)
+   (tp-slot     int32)      ;; player to reach once a continue point is loaded, -1
+   (tp-time     time-frame)
+   (world-time  time-frame)
+   (last-hit    time-frame)
+   (event       mp-event :inline)
+   )
+  )
+
+(defbehavior mp-manager-update-puppets mp-manager ()
+  "One puppet per remote player, with the model of its current character."
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i))
+          (proc (the-as mp-puppet (handle->process (-> self puppets i))))
+          )
+      (when (and proc
+                 (or (not st)
+                     (!= (-> proc daxter?) (logtest? (-> st flags) (mp-flag indax)))
+                     (!= (-> proc skel-group) (mp-character-skel (-> proc daxter?)))
+                     )
+                 )
+        (deactivate proc)
+        (set! proc #f)
+        (set! (-> self puppets i) (the-as handle #f))
+        )
+      (when (and st (not proc) (mp-character-skel (logtest? (-> st flags) (mp-flag indax))))
+        (let ((new-proc (process-spawn
+                          mp-puppet
+                          i
+                          (logtest? (-> st flags) (mp-flag indax))
+                          #f
+                          :name "mp-puppet"
+                          :to self
+                          :stack-size #x20000
+                          )
+                        )
+              )
+          (if new-proc
+              (set! (-> self puppets i) (ppointer->handle new-proc))
+              )
+          )
+        )
+      )
+    )
+  ;; the passenger sees its own model in the seat (its real one is hidden while riding)
+  (let ((proc (handle->process (-> self self-puppet))))
+    (cond
+      ((and (>= *mp-ride-slot* 0) (not proc) (mp-character-skel (= (-> *mp-config* character) 1)))
+       (let ((new-proc (process-spawn
+                         mp-puppet
+                         *mp-local-slot*
+                         (= (-> *mp-config* character) 1)
+                         #t
+                         :name "mp-puppet-self"
+                         :to self
+                         :stack-size #x20000
+                         )
+                       )
+             )
+         (if new-proc
+             (set! (-> self self-puppet) (ppointer->handle new-proc))
+             )
+         )
+       )
+      ((and (< *mp-ride-slot* 0) proc)
+       (deactivate proc)
+       (set! (-> self self-puppet) (the-as handle #f))
+       )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-move-target-to mp-manager ((pos vector))
+  "Put the player next to `pos` (same loaded level)."
+  (let ((dst (new 'stack-no-clear 'vector)))
+    (vector-copy! dst pos)
+    (+! (-> dst x) (meters 1.5))
+    (+! (-> dst y) (meters 0.5))
+    (move-to-point! (-> *target* control) dst)
+    (vector-reset! (-> *target* control transv))
+    )
+  (none)
+  )
+
+(defbehavior mp-teleport-to-player mp-manager ((slot int))
+  "Go to player `slot`: directly when its level is loaded here, else through its continue point,
+   then to the player once that level is in."
+  (let ((st (mp-remote-state slot)))
+    (cond
+      ((not st)
+       (mp-show-message "This player is not connected")
+       )
+      ((focus-test? *target* pilot)
+       (mp-show-message "Get out of your vehicle first")
+       )
+      ((mp-level-active? (-> st level))
+       (mp-move-target-to (-> st trans))
+       )
+      (else
+        (string<-charp *mp-temp-string* (-> st cont))
+        (let ((cp (get-continue-by-name *game-info* *mp-temp-string*)))
+          (cond
+            (cp
+              (send-event *target* 'continue cp)
+              (set! (-> self tp-slot) slot)
+              (set-time! (-> self tp-time))
+              )
+            (else
+              (mp-show-message "Cannot reach this player")
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-on-stolen mp-manager ()
+  "Another player took our vehicle: get out; the vehicle is removed once we are out."
+  (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
+    (set! (-> self steal-veh) (-> *target* pilot vehicle))
+    (set-time! (-> self steal-time))
+    (send-event *target* 'end-mode 'pilot)
+    (mp-show-message "Your vehicle was stolen!")
+    )
+  (none)
+  )
+
+(defbehavior mp-on-hit mp-manager ((damage float))
+  "An enemy hit our character on another player's screen: take the hit (once a second at most)."
+  (when (and (time-elapsed? (-> self last-hit) (seconds 1))
+             (not *mp-invulnerable*)
+             (not (focus-test? *target* dead grabbed))
+             )
+    (set-time! (-> self last-hit))
+    (send-event *target* 'attack #f (static-attack-info ((id (new-attack-id)) (damage damage) (mode 'generic))))
+    )
+  (none)
+  )
+
+(defbehavior mp-apply-world mp-manager ((ev mp-event))
+  "Settings and time of day from the host."
+  (when (and (= *mp-mode* (mp-mode client)) (zero? (-> ev from)))
+    (set! *mp-world* (the-as mp-world-flag (-> ev iarg 0)))
+    (when (and (logtest? *mp-world* (mp-world-flag sync-time)) *time-of-day*)
+      (let* ((host-time (-> ev fvec x))
+             (diff (fabs (- host-time (-> *time-of-day-context* time))))
+             )
+        ;; 15 minutes of drift is tolerated (and the 24h -> 0h wrap is not a drift)
+        (when (and (< 0.25 diff) (< diff 23.75))
+          (let ((hour (the int host-time)))
+            (send-event
+              (ppointer->process *time-of-day*)
+              'change
+              'hour
+              hour
+              (the int (* 60.0 (- host-time (the float hour))))
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-manager-handle-events mp-manager ()
+  "Apply the events received since last frame."
+  (let ((ev (-> self event)))
+    (while (pc-mp-pop-event ev)
+      (case (-> ev kind)
+        (((mp-event-kind kill-entity))
+         (mp-apply-remote-kill (the-as uint (-> ev iarg 0)))
+         )
+        (((mp-event-kind steal))
+         (if *target*
+             (mp-on-stolen)
+             )
+         )
+        (((mp-event-kind hit))
+         (if *target*
+             (mp-on-hit (-> ev fvec x))
+             )
+         )
+        (((mp-event-kind teleport))
+         (when (and *target* (!= (-> ev iarg 0) *mp-local-slot*))
+           (mp-show-message "The host teleports you")
+           (mp-teleport-to-player (-> ev iarg 0))
+           )
+         )
+        (((mp-event-kind world))
+         (mp-apply-world ev)
+         )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-character mp-manager ()
+  "Play as the chosen character: Daxter is the stock playable-Daxter mode (indax), entered and
+   left from the idle stance only, and never while riding or driving."
+  (let ((daxter? (= (-> *mp-config* character) 1))
+        (state (mp-target-state-name))
+        )
+    (cond
+      ((and daxter?
+            (< *mp-ride-slot* 0)
+            (< (-> self ride-want) 0)
+            (< (-> self steal-want) 0)
+            (= state 'target-stance)
+            (not (focus-test? *target* indax pilot dead grabbed))
+            )
+       (send-event *target* 'change-mode 'indax #f 'stance)
+       )
+      ((and (not daxter?) (focus-test? *target* indax) (= state 'target-indax-stance))
+       (send-event *target* 'end-mode 'indax)
+       )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-invulnerability mp-manager ()
+  "Keep the invincibility flag on while the cheat is on (dark Jak clears it when he ends)."
+  (if (and *mp-invulnerable* (not (mp-cheats-allowed?)))
+      (set! *mp-invulnerable* #f)
+      )
+  (cond
+    (*mp-invulnerable*
+      ;; tf4 is what the stock invulnerability secret relies on: no damage, but falls and lava
+      ;; still kill, so the player cannot get stuck
+      (logior! (-> *target* target-flags) (target-flags tf4))
+      (set! *mp-invulnerable-applied* #t)
+      )
+    (*mp-invulnerable-applied*
+      (logclear! (-> *target* target-flags) (target-flags tf4))
+      (set! *mp-invulnerable-applied* #f)
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-stop-riding mp-manager ()
+  "Get off a remote player's vehicle."
+  (if (= (mp-target-state-name) 'target-grab-ride)
+      (send-event *target* 'end-mode 'grab)
+      )
+  (send-event *target* 'draw #t)
+  (let ((seat (handle->process (-> self seat))))
+    (if seat
+        (deactivate seat)
+        )
+    )
+  (set! (-> self seat) (the-as handle #f))
+  (set! *mp-ride-slot* -1)
+  (none)
+  )
+
+(defun mp-seat-free? ((driver int))
+  "#t when the vehicle of `driver` has a passenger seat no other player uses."
+  (let ((st (mp-remote-state driver)))
+    (when (and st (< 1 (-> st seat-count)))
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((other (mp-remote-state i)))
+          (if (and other (logtest? (-> other flags) (mp-flag riding)) (= (-> other ride-slot) driver))
+              (return #f)
+              )
+          )
+        )
+      (return #t)
+      )
+    )
+  #f
+  )
+
+(defbehavior mp-update-ride mp-manager ()
+  "Passenger mode: sit next to a remote driver until they stop, or until triangle is pressed."
+  (let ((state (mp-target-state-name)))
+    (cond
+      ((>= (-> self ride-want) 0)
+       (let ((st (mp-remote-state (-> self ride-want))))
+         (cond
+           ((or (not st) (not (logtest? (-> st flags) (mp-flag driving))))
+            (set! (-> self ride-want) -1)
+            )
+           ((focus-test? *target* indax)
+            ;; Daxter's mode has its own grab states: back to Jak for the ride
+            (send-event *target* 'end-mode 'indax)
+            )
+           ((= state 'target-stance)
+            (let ((seat (process-spawn mp-seat (-> self ride-want) :name "mp-seat" :to self)))
+              (when seat
+                (set! (-> self seat) (ppointer->handle seat))
+                (set! *mp-ride-slot* (-> self ride-want))
+                (send-event *target* 'change-mode 'grab-ride #t :from (ppointer->process seat))
+                (send-event *target* 'draw #f)
+                (mp-show-message "Press triangle to get off")
+                )
+              )
+            (set! (-> self ride-want) -1)
+            )
+           )
+         )
+       )
+      ((>= *mp-ride-slot* 0)
+       (let ((st (mp-remote-state *mp-ride-slot*)))
+         (if (or (not st)
+                 (not (logtest? (-> st flags) (mp-flag driving)))
+                 (cpad-pressed? 0 triangle)
+                 (!= state 'target-grab-ride)
+                 )
+             (mp-stop-riding)
+             )
+         )
+       )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-steal-now mp-manager ((slot int))
+  "Take the vehicle of player `slot`: it leaves it, and we get the same vehicle in its place."
+  (let ((st (mp-remote-state slot)))
+    ;; its art being loaded means the level code that spawns it is loaded too
+    (when (and st (logtest? (-> st flags) (mp-flag driving)) (mp-vehicle-skel (-> st veh-type)))
+      (move-to-point! (-> *target* control) (-> st veh-trans))
+      (quaternion-copy! (-> *target* control quat) (-> st veh-quat))
+      (quaternion-copy! (-> *target* control quat-for-control) (-> st veh-quat))
+      ;; #f vehicle: the target spawns one of this type where it stands (target-handler.gc)
+      (send-event *target* 'change-mode 'pilot #f (-> st veh-type) #t)
+      ;; the driver only gets out if we really got a vehicle (the spawn fails when the vehicle's
+      ;; level is not the one that can spawn it)
+      (if (= (mp-target-state-name) 'target-pilot-start)
+          (mp-send-event (mp-event-kind steal) slot 0 0.0)
+          (mp-show-message "This vehicle cannot be taken here")
+          )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-steal mp-manager ()
+  "Steal requests that wait for Daxter to turn back into Jak, and removal of our stolen vehicle."
+  (when (>= (-> self steal-want) 0)
+    (cond
+      ((focus-test? *target* indax)
+       (send-event *target* 'end-mode 'indax)
+       )
+      ((= (mp-target-state-name) 'target-stance)
+       (mp-steal-now (-> self steal-want))
+       (set! (-> self steal-want) -1)
+       )
+      )
+    )
+  ;; our vehicle was taken: once we are out, it disappears (the thief drives its own copy)
+  (let ((veh (handle->process (-> self steal-veh))))
+    (when (and veh (not (focus-test? *target* pilot)) (time-elapsed? (-> self steal-time) (seconds 0.5)))
+      (send-event veh 'go-die)
+      (set! (-> self steal-veh) (the-as handle #f))
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-vehicle-interaction mp-manager ()
+  "Next to a remote player's vehicle, on foot: press triangle to steal it, hold it to ride along."
+  (set! *mp-prompt-slot* -1)
+  (when (and (< *mp-ride-slot* 0)
+             (< (-> self ride-want) 0)
+             (< (-> self steal-want) 0)
+             (not (focus-test? *target* pilot grabbed dead))
+             )
+    (let ((best -1)
+          (best-dist (meters 5))
+          )
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (when (and st
+                     (logtest? (-> st flags) (mp-flag driving))
+                     (>= (-> st veh-type) 0)
+                     (mp-level-active? (-> st level))
+                     )
+            (let ((d (vector-vector-distance (-> *target* control trans) (-> st veh-trans))))
+              (when (< d best-dist)
+                (set! best i)
+                (set! best-dist d)
+                )
+              )
+            )
+          )
+        )
+      (set! *mp-prompt-slot* best)
+      (cond
+        ((< best 0)
+         (set! (-> self tri-slot) -1)
+         )
+        ((cpad-pressed? 0 triangle)
+         (set! (-> self tri-slot) best)
+         (set-time! (-> self tri-time))
+         )
+        ((!= (-> self tri-slot) best)
+         )
+        ((and (cpad-hold? 0 triangle) (time-elapsed? (-> self tri-time) (seconds 0.5)))
+         (set! (-> self tri-slot) -1)
+         (if (mp-seat-free? best)
+             (set! (-> self ride-want) best)
+             (mp-show-message "No free seat in this vehicle")
+             )
+         )
+        ((not (cpad-hold? 0 triangle))
+         (set! (-> self tri-slot) -1)
+         (set! (-> self steal-want) best)
+         )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-pending-teleport mp-manager ()
+  "Finish a teleport to a player once the continue point loaded its level."
+  (when (>= *mp-request-teleport* 0)
+    (mp-teleport-to-player *mp-request-teleport*)
+    (set! *mp-request-teleport* -1)
+    )
+  (when (>= (-> self tp-slot) 0)
+    (let ((st (mp-remote-state (-> self tp-slot))))
+      (cond
+        ((or (not st) (time-elapsed? (-> self tp-time) (seconds 30)))
+         (set! (-> self tp-slot) -1)
+         )
+        ((and (not (focus-test? *target* teleporting)) (mp-level-active? (-> st level)))
+         (mp-move-target-to (-> st trans))
+         (set! (-> self tp-slot) -1)
+         )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-manager-update mp-manager ()
+  "Everything the mod does in game, once per (unpaused) frame."
+  (when (mp-online?)
+    (mp-manager-handle-events)
+    (when (and (= *mp-mode* (mp-mode host)) (time-elapsed? (-> self world-time) (seconds 2)))
+      (set-time! (-> self world-time))
+      (mp-send-event (mp-event-kind world) -1 (the-as int *mp-world*) (-> *time-of-day-context* time))
+      )
+    )
+  (mp-manager-update-puppets)
+  (cond
+    (*target*
+      (mp-update-character)
+      (mp-update-invulnerability)
+      (mp-update-ride)
+      (mp-update-steal)
+      (mp-update-vehicle-interaction)
+      (mp-update-pending-teleport)
+      )
+    (else
+      (set! *mp-ride-slot* -1)
+      (set! *mp-prompt-slot* -1)
+      )
+    )
+  (none)
+  )
+
+(defstate mp-manager-active (mp-manager)
+  :exit (behavior ()
+    (if (and *target* (>= *mp-ride-slot* 0))
+        (mp-stop-riding)
+        )
+    (if (and *target* *mp-invulnerable-applied*)
+        (logclear! (-> *target* target-flags) (target-flags tf4))
+        )
+    (set! *mp-invulnerable-applied* #f)
+    (set! *mp-ride-slot* -1)
+    (set! *mp-prompt-slot* -1)
+    )
+  :code (behavior ()
+    (loop
+      (mp-manager-update)
+      (suspend)
+      )
+    )
+  )
+
+(defbehavior mp-manager-init-by-other mp-manager ()
+  "Start with no puppet and nothing pending."
+  (dotimes (i MP_MAX_PLAYERS)
+    (set! (-> self puppets i) (the-as handle #f))
+    )
+  (set! (-> self self-puppet) (the-as handle #f))
+  (set! (-> self seat) (the-as handle #f))
+  (set! (-> self steal-veh) (the-as handle #f))
+  (set! (-> self ride-want) -1)
+  (set! (-> self steal-want) -1)
+  (set! (-> self tri-slot) -1)
+  (set! (-> self tp-slot) -1)
+  (go mp-manager-active)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Overlay: names and health bars over the players, prompts, notifications
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-draw-text ((buf dma-buffer) (str string) (x int) (y int) (scale float))
+  "Draw `str` centered at x, y (512x416 screen)."
+  (pc-encode-utf8-string str *pc-encoded-temp-string*)
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* x y 0.0 (font-color default) (font-flags shadow kerning middle large))))
+    (set! (-> ctx scale) scale)
+    (draw-string-adv *pc-encoded-temp-string* buf ctx)
+    )
+  (none)
+  )
+
+(defun mp-draw-nameplate ((buf dma-buffer) (slot int))
+  "Name and health bar over a remote player standing in a level loaded here."
+  (let ((st (-> *mp-players* state slot))
+        (pos (new 'stack-no-clear 'vector))
+        (scr (new 'stack-no-clear 'vector))
+        )
+    (vector-copy! pos (-> st trans))
+    (+! (-> pos y) (if (logtest? (-> st flags) (mp-flag indax))
+                       (meters 1.6)
+                       (meters 2.6)
+                       )
+        )
+    (when (and (< (vector-vector-distance pos (math-camera-pos)) (meters 80)) (transform-point-vector! scr pos))
+      (let ((x (the int (+ -1792.0 (-> scr x))))
+            (y (the int (+ -1840.0 (-> scr y))))
+            )
+        (when (and (< 24 x) (< x 488) (< 24 y) (< y 400))
+          (draw-sprite2d-xy buf (+ x -21) (+ y -1) 42 6 (new 'static 'rgba :a #x80) #x3fffff)
+          (draw-sprite2d-xy
+            buf
+            (+ x -20)
+            y
+            (the int (* 40.0 (fmax 0.0 (fmin 1.0 (/ (-> st health) (fmax 1.0 (-> st health-max)))))))
+            4
+            (mp-color-rgba (-> st color))
+            #x3fffff
+            )
+          (string<-charp *mp-temp-string* (-> st name))
+          (mp-draw-text buf *mp-temp-string* x (+ y -14) 0.45)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-overlay ()
+  "Draw the multiplayer overlay. Runs from the hook, after the frame's draw."
+  (when (and *target* (not (paused?)) (not (movie?)))
+    (with-dma-buffer-add-bucket ((buf (-> (current-frame) global-buf)) (bucket-id debug-no-zbuf1))
+      (dma-buffer-add-gs-set-flusha buf
+                                    (alpha-1 (new 'static 'gs-alpha :b #x1 :d #x1))
+                                    (tex1-1 (new 'static 'gs-tex1 :mmag #x1 :mmin #x1))
+                                    )
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (if (and st
+                   (not (logtest? (-> st flags) (mp-flag hidden)))
+                   (mp-level-active? (-> st level))
+                   )
+              (mp-draw-nameplate buf i)
+              )
+          )
+        )
+      (when (>= *mp-prompt-slot* 0)
+        (string<-charp *mp-temp-string* (-> *mp-players* state *mp-prompt-slot* name))
+        (format (clear *mp-status*) "Triangle: steal ~S's vehicle. Hold: ride along" *mp-temp-string*)
+        (mp-draw-text buf *mp-status* 256 330 0.5)
+        )
+      (when (< (- (mp-now) *mp-message-time*) (seconds 4))
+        (mp-draw-text buf *mp-message* 256 360 0.5)
+        )
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Per-frame hook
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-shutdown ()
+  "Mod disabled: leave the session and remove the manager (and with it every puppet)."
+  (when (!= *mp-mode* (mp-mode offline))
+    (pc-mp-leave)
+    (set! *mp-mode* (mp-mode offline))
+    )
+  (let ((proc (handle->process *mp-manager*)))
+    (if proc
+        (deactivate proc)
+        )
+    )
+  (set! *mp-manager* (the-as handle #f))
+  (dotimes (i MP_MAX_PLAYERS)
+    (set! (-> *mp-players* valid i) #f)
+    )
+  (none)
+  )
+
+(defun mp-frame-hook ()
+  "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
+   then, when the mod is enabled, the network and the overlay. Network traffic must keep flowing
+   while paused, or the other players would time out."
+  (mods-menu-update)
+  (cond
+    ((mp-enabled?)
+     (let ((was *mp-mode*))
+       (mp-build-local-state)
+       (set! *mp-mode* (the-as mp-mode (pc-mp-update *mp-local*)))
+       (set! *mp-local-slot* (pc-mp-local-slot))
+       ;; the session ended on its own (host gone, kicked...): say why
+       (when (and (!= was (mp-mode offline)) (= *mp-mode* (mp-mode offline)))
+         (pc-mp-message *mp-status*)
+         (mp-show-message *mp-status*)
+         )
+       )
+     (mp-read-remote-states)
+     (when (not (handle->process *mp-manager*))
+       (let ((proc (process-spawn mp-manager :name "mp-manager" :to *pc-pool*)))
+         (if proc
+             (set! *mp-manager* (ppointer->handle proc))
+             )
+         )
+       )
+     (mp-draw-overlay)
+     )
+    ((or (!= *mp-mode* (mp-mode offline)) (handle->process *mp-manager*))
+     (mp-shutdown)
+     )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- chain the per-frame hook: mods-menu.gc installed mods-menu-update, which
+;; mp-frame-hook calls first.
+(set! *mods-menu-hook* mp-frame-hook)

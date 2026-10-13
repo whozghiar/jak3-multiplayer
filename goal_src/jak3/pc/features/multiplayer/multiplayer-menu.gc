@@ -1,0 +1,703 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; name: multiplayer-menu.gc
+;; dgos: GAME
+;;
+;; Jak 3 multiplayer mod -- menus:
+;;   - START > Options > Multiplayer: name, character, color, server address, host / join /
+;;     disconnect, and the Server administration page while hosting (kick, ban, teleports, cheat
+;;     permission, time-of-day sharing, stop). The entry only exists while the mod is enabled.
+;;   - Mods menu (L3 + SELECT) > multiplayer: the on/off toggle, the cheats, the teleports.
+;; The start menu ring has exactly ten slots (36 degrees each, matching its 3D model), so the
+;; Multiplayer page hangs off the Options page instead, which is a plain list.
+
+;; ------------------------------------------------------------------------------------------------
+;; Players listed in menus (connected remote players, in slot order)
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-player-count ()
+  "Number of remote players connected."
+  (let ((n 0))
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (-> *mp-players* valid i)
+          (+! n 1)
+          )
+      )
+    n
+    )
+  )
+
+(defun mp-nth-player-slot ((n int))
+  "Slot of the n-th connected remote player, or -1."
+  (dotimes (i MP_MAX_PLAYERS)
+    (when (-> *mp-players* valid i)
+      (if (zero? n)
+          (return i)
+          )
+      (+! n -1)
+      )
+    )
+  -1
+  )
+
+(defun mp-player-label ((n int) (dst string))
+  "Name of the n-th connected remote player, into `dst`."
+  (let ((slot (mp-nth-player-slot n)))
+    (if (>= slot 0)
+        (string<-charp dst (-> *mp-players* state slot name))
+        (clear dst)
+        )
+    )
+  (none)
+  )
+
+(define *mp-menu-label* (new 'global 'string 64 (the-as string #f)))
+
+(defun mp-status-text ()
+  "One line describing the session, for the menus."
+  (let ((players (+ 1 (mp-player-count))))
+    (case *mp-mode*
+      (((mp-mode host))
+       (format (clear *mp-menu-label*) "Hosting: ~D player(s)" players)
+       )
+      (((mp-mode client))
+       (format (clear *mp-menu-label*) "Connected: ~D player(s)" players)
+       )
+      (((mp-mode connecting))
+       (format (clear *mp-menu-label*) "Connecting to ~S..." *mp-address*)
+       )
+      (else
+        (pc-mp-message *mp-status*)
+        (if (zero? (length *mp-status*))
+            (format (clear *mp-menu-label*) "Offline")
+            (format (clear *mp-menu-label*) "Offline: ~S" *mp-status*)
+            )
+        )
+      )
+    )
+  *mp-menu-label*
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Start menu: a read-only line, and a text field edited with the D-pad
+;; ------------------------------------------------------------------------------------------------
+
+;; A grayed line whose text comes from a function (the session status).
+(deftype menu-mp-label-option (menu-generic-option)
+  ((get-label (function string))
+   )
+  )
+
+(defmethod draw-option ((this menu-mp-label-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "Draw the current text of the line."
+  (when (not (-> this mounted?))
+    (on-mount! this)
+    )
+  (draw-generic-simple-string-option this progress font-ctx option-index ((-> this get-label)))
+  (none)
+  )
+
+(defmethod respond-progress ((this menu-mp-label-option) (progress progress) (selected? symbol))
+  "Read-only."
+  0
+  )
+
+;; A text field, for controllers as well as keyboards: confirm to edit, up / down change the
+;; character under the cursor, left / right move the cursor, square deletes, confirm saves,
+;; triangle cancels.
+(deftype menu-mp-text-option (menu-generic-option)
+  ((get-value  (function string)) ;; the string this field edits
+   (charset    string)            ;; characters offered, in order
+   (max-length int32)
+   (on-confirm (function none))   ;; called after a confirmed edit
+   (edit       string)            ;; working copy while editing
+   (cursor     int32)
+   (last-move  time-frame)
+   )
+  )
+
+(defmethod on-mount! ((this menu-mp-text-option))
+  "Allocate the working copy once."
+  (set! (-> this mounted?) #t)
+  (if (zero? (-> this edit))
+      (set! (-> this edit) (new 'global 'string 40 (the-as string #f)))
+      )
+  (none)
+  )
+
+(defun mp-charset-index ((charset string) (c uint))
+  "Position of character `c` in `charset`, or -1."
+  (dotimes (i (length charset))
+    (if (= (-> charset data i) c)
+        (return i)
+        )
+    )
+  -1
+  )
+
+(defun mp-text-cycle! ((this menu-mp-text-option) (dir int))
+  "Change the character under the cursor by `dir` steps in the charset; at the end of the text,
+   add a character."
+  (let* ((edit (-> this edit))
+         (len (length edit))
+         (cur (-> this cursor))
+         (cs (-> this charset))
+         (n (length cs))
+         )
+    (cond
+      ((< cur len)
+       (let ((idx (mp-charset-index cs (-> edit data cur))))
+         (set! (-> edit data cur) (-> cs data (mod (+ idx dir n) n)))
+         )
+       )
+      ((< len (-> this max-length))
+       (set! (-> edit data cur) (-> cs data (if (> dir 0)
+                                                 0
+                                                 (+ n -1)
+                                                 )
+                                     )
+             )
+       (set! (-> edit data (+ cur 1)) (the-as uint 0))
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-text-delete! ((this menu-mp-text-option))
+  "Delete the character under the cursor, or the last one when the cursor is at the end."
+  (let* ((edit (-> this edit))
+         (len (length edit))
+         (cur (-> this cursor))
+         )
+    (cond
+      ((< cur len)
+       (let ((i cur))
+         (while (< i len)
+           (set! (-> edit data i) (-> edit data (+ i 1)))
+           (+! i 1)
+           )
+         )
+       )
+      ((> cur 0)
+       (set! (-> edit data (+ cur -1)) (the-as uint 0))
+       (set! (-> this cursor) (+ cur -1))
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-text-trim! ((str string))
+  "Remove trailing spaces."
+  (let ((i (+ (length str) -1)))
+    (while (and (>= i 0) (= (-> str data i) 32))
+      (set! (-> str data i) (the-as uint 0))
+      (+! i -1)
+      )
+    )
+  (none)
+  )
+
+(defmethod respond-progress ((this menu-mp-text-option) (progress progress) (selected? symbol))
+  "Edit the text while the option is selected (see the type's comment for the buttons)."
+  (let ((edit (-> this edit)))
+    (cond
+      ((not selected?)
+       ;; this confirm selects the option: start from the current value
+       (when (cpad-pressed? 0 confirm)
+         (copy-string<-string edit ((-> this get-value)))
+         (set! (-> this cursor) (length edit))
+         )
+       )
+      ((cpad-pressed? 0 confirm)
+       (mp-text-trim! edit)
+       (copy-string<-string ((-> this get-value)) edit)
+       ((-> this on-confirm))
+       (sound-play "generic-beep")
+       )
+      ((or (cpad-pressed? 0 up l-analog-up)
+           (and (cpad-hold? 0 up l-analog-up) (time-elapsed? (-> this last-move) (seconds 0.15)))
+           )
+       (set-time! (-> this last-move))
+       (mp-text-cycle! this 1)
+       (sound-play "roll-over")
+       )
+      ((or (cpad-pressed? 0 down l-analog-down)
+           (and (cpad-hold? 0 down l-analog-down) (time-elapsed? (-> this last-move) (seconds 0.15)))
+           )
+       (set-time! (-> this last-move))
+       (mp-text-cycle! this -1)
+       (sound-play "roll-over")
+       )
+      ((cpad-pressed? 0 right l-analog-right)
+       (set! (-> this cursor) (min (+ (-> this cursor) 1) (min (length edit) (+ (-> this max-length) -1))))
+       )
+      ((cpad-pressed? 0 left l-analog-left)
+       (set! (-> this cursor) (max 0 (+ (-> this cursor) -1)))
+       )
+      ((cpad-pressed? 0 square)
+       (mp-text-delete! this)
+       (sound-play "generic-beep")
+       )
+      )
+    )
+  0
+  )
+
+(define *mp-text-before* (new 'global 'string 40 (the-as string #f)))
+(define *mp-text-after* (new 'global 'string 40 (the-as string #f)))
+
+(defmethod draw-option ((this menu-mp-text-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "Label on the first line, value on the second; while editing, the cursor is highlighted."
+  (when (not (-> this mounted?))
+    (on-mount! this)
+    )
+  (let ((alpha (fmax 0.0 (* 2.0 (- 0.5 (-> progress menu-transition))))))
+    (set! (-> font-ctx alpha) alpha)
+    (set-flags! font-ctx (font-flags kerning middle large))
+    (set-scale! font-ctx FONT_SIZE_OPTION)
+    (+! (-> font-ctx origin y) (if (= (get-aspect-ratio) 'aspect4x3)
+                                   7.0
+                                   5.0
+                                   )
+        )
+    (cond
+      (selected?
+        (set-color! font-ctx (font-color font-color-34))
+        (draw-generic-highlight (the int (- (-> font-ctx origin y) 2.0)) HIGHLIGHT_SIZE_LARGE alpha)
+        )
+      ((= option-index (-> *progress-pc-generic-store* current-menu-hover-index))
+       (set-color! font-ctx (font-color font-color-33))
+       (draw-generic-highlight (the int (+ -2.0 (-> font-ctx origin y))) HIGHLIGHT_SIZE alpha)
+       )
+      (else
+        (set-color! font-ctx (font-color font-color-32))
+        )
+      )
+    (print-game-text (lookup-text! *common-text* (-> this name) #f) font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
+    (+! (-> font-ctx origin y) 18.0)
+    (set-scale! font-ctx FONT_SIZE_OPTION_EXTRA)
+    (cond
+      (selected?
+        (let* ((edit (-> this edit))
+               (len (length edit))
+               (cur (min (-> this cursor) len))
+               )
+          (copyn-string<-charp *mp-text-before* (-> edit data) cur)
+          (if (< cur len)
+              (string<-charp *mp-text-after* (&-> edit data (+ cur 1)))
+              (clear *mp-text-after*)
+              )
+          (format
+            (clear *progress-generic-temp-string*)
+            "~1L~S~33L~C~1L~S"
+            *mp-text-before*
+            (if (< cur len)
+                (-> edit data cur)
+                95 ;; "_" marks the end, where up / down add a character
+                )
+            *mp-text-after*
+            )
+          )
+        )
+      (else
+        (format (clear *progress-generic-temp-string*) "~S" ((-> this get-value)))
+        )
+      )
+    (print-game-text *progress-generic-temp-string* font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Administration (host)
+;; ------------------------------------------------------------------------------------------------
+
+;; Player chosen in the administration page, -1 for none.
+(define *mp-admin-slot* -1)
+
+(defun mp-admin-index ()
+  "Position of the chosen player in the carousel."
+  (let ((n 0))
+    (dotimes (i MP_MAX_PLAYERS)
+      (when (-> *mp-players* valid i)
+        (if (= i *mp-admin-slot*)
+            (return n)
+            )
+        (+! n 1)
+        )
+      )
+    )
+  0
+  )
+
+(defun mp-admin-no-player? ()
+  "#t when no connected player is chosen."
+  (not (mp-remote-state *mp-admin-slot*))
+  )
+
+(defun mp-admin-kick ((ban symbol))
+  "Disconnect the chosen player (and refuse its address until the server stops, with `ban`)."
+  (when (mp-remote-state *mp-admin-slot*)
+    (string<-charp *mp-temp-string* (-> *mp-players* state *mp-admin-slot* name))
+    (format (clear *mp-message*) (if ban "~S was banned" "~S was kicked") *mp-temp-string*)
+    (set! *mp-message-time* (mp-now))
+    (pc-mp-kick *mp-admin-slot* ban)
+    (set! *mp-admin-slot* -1)
+    )
+  (none)
+  )
+
+(defun mp-admin-bring ((all? symbol))
+  "Teleport the chosen player (or everyone) to the host."
+  (when (or all? (mp-remote-state *mp-admin-slot*))
+    (mp-send-event (mp-event-kind teleport) (if all? -1 *mp-admin-slot*) *mp-local-slot* 0.0)
+    (mp-show-message "Teleport sent")
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Start menu pages
+;; ------------------------------------------------------------------------------------------------
+
+(define *mp-menu-options*
+  (progress-new-generic-scrolling-page (text-id progress-mp-multiplayer)
+    (new 'static 'menu-mp-label-option
+      :name (text-id progress-mp-multiplayer)
+      :should-disable? (lambda () #t)
+      :get-label (lambda () (mp-status-text))
+      )
+    (new 'static 'menu-mp-text-option
+      :name (text-id progress-mp-name)
+      :get-value (lambda () *mp-name*)
+      :charset "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_ "
+      :max-length 15
+      :on-confirm (lambda () (mp-config-save!) (none))
+      )
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-mp-character)
+      :items (new 'static 'boxed-array :type text-id (text-id progress-mp-jak) (text-id progress-mp-daxter))
+      :get-item-index-fn (lambda () (-> *mp-config* character))
+      :on-confirm (lambda ((index int) (the-progress progress))
+                    (set! (-> *mp-config* character) index)
+                    (mp-config-save!)
+                    (none)
+                    )
+      )
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-mp-color)
+      :items (new 'static 'boxed-array :type text-id
+               (text-id progress-mp-color-natural)
+               (text-id progress-mp-color-red)
+               (text-id progress-mp-color-blue)
+               (text-id progress-mp-color-green)
+               (text-id progress-mp-color-yellow)
+               (text-id progress-mp-color-purple)
+               (text-id progress-mp-color-orange)
+               (text-id progress-mp-color-cyan)
+               (text-id progress-mp-color-pink)
+               (text-id progress-mp-color-shadow)
+               )
+      :get-item-index-fn (lambda () (-> *mp-config* color))
+      :on-confirm (lambda ((index int) (the-progress progress))
+                    (set! (-> *mp-config* color) index)
+                    (mp-config-save!)
+                    (none)
+                    )
+      )
+    (new 'static 'menu-mp-text-option
+      :name (text-id progress-mp-address)
+      :get-value (lambda () *mp-address*)
+      :charset "0123456789.:abcdefghijklmnopqrstuvwxyz-"
+      :max-length 31
+      :on-confirm (lambda () (mp-config-save!) (none))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-host)
+      :should-disable? (lambda () (!= *mp-mode* (mp-mode offline)))
+      :on-confirm (lambda ((the-progress progress)) (mp-host!) (none))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-join)
+      :should-disable? (lambda () (!= *mp-mode* (mp-mode offline)))
+      :on-confirm (lambda ((the-progress progress)) (mp-join!) (none))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-leave)
+      :should-disable? (lambda () (= *mp-mode* (mp-mode offline)))
+      :on-confirm (lambda ((the-progress progress)) (mp-leave!) (none))
+      )
+    (progress-new-generic-link-to-scrolling-page (text-id progress-mp-admin)
+      :should-disable? (lambda () (!= *mp-mode* (mp-mode host)))
+      (new 'static 'menu-mp-label-option
+        :name (text-id progress-mp-admin)
+        :should-disable? (lambda () #t)
+        :get-label (lambda () (mp-status-text))
+        )
+      (new 'static 'menu-generic-carousel-option
+        :name (text-id progress-mp-player)
+        :get-max-size-fn (lambda () (mp-player-count))
+        :get-item-label-fn (lambda ((index int)) (mp-player-label index *mp-menu-label*) *mp-menu-label*)
+        :get-item-index-fn (lambda () (mp-admin-index))
+        :on-confirm (lambda ((index int) (the-progress progress)) (set! *mp-admin-slot* (mp-nth-player-slot index)) (none))
+        )
+      (new 'static 'menu-generic-button-option
+        :name (text-id progress-mp-kick)
+        :should-disable? (lambda () (mp-admin-no-player?))
+        :on-confirm (lambda ((the-progress progress)) (mp-admin-kick #f) (none))
+        )
+      (new 'static 'menu-generic-button-option
+        :name (text-id progress-mp-ban)
+        :should-disable? (lambda () (mp-admin-no-player?))
+        :on-confirm (lambda ((the-progress progress)) (mp-admin-kick #t) (none))
+        )
+      (new 'static 'menu-generic-button-option
+        :name (text-id progress-mp-bring)
+        :should-disable? (lambda () (mp-admin-no-player?))
+        :on-confirm (lambda ((the-progress progress)) (mp-admin-bring #f) (none))
+        )
+      (new 'static 'menu-generic-button-option
+        :name (text-id progress-mp-bring-all)
+        :on-confirm (lambda ((the-progress progress)) (mp-admin-bring #t) (none))
+        )
+      (new 'static 'menu-generic-boolean-option
+        :name (text-id progress-mp-allow-cheats)
+        :truthy-text (text-id progress-on)
+        :falsey-text (text-id progress-off)
+        :get-value-fn (lambda () (logtest? *mp-world* (mp-world-flag cheats)))
+        :on-confirm (lambda ((val symbol))
+                      (if val
+                          (logior! *mp-world* (mp-world-flag cheats))
+                          (logclear! *mp-world* (mp-world-flag cheats))
+                          )
+                      (none)
+                      )
+        )
+      (new 'static 'menu-generic-boolean-option
+        :name (text-id progress-mp-sync-time)
+        :truthy-text (text-id progress-on)
+        :falsey-text (text-id progress-off)
+        :get-value-fn (lambda () (logtest? *mp-world* (mp-world-flag sync-time)))
+        :on-confirm (lambda ((val symbol))
+                      (if val
+                          (logior! *mp-world* (mp-world-flag sync-time))
+                          (logclear! *mp-world* (mp-world-flag sync-time))
+                          )
+                      (none)
+                      )
+        )
+      (new 'static 'menu-generic-confirm-option
+        :name (text-id progress-mp-stop)
+        :on-confirm (lambda () (mp-leave!) (none))
+        )
+      )
+    )
+  )
+
+;; MOD multiplayer -- route the 'multiplayer page (START > Options > Multiplayer) and let every
+;; other page through the stock method (pc/progress/progress-pc.gc). define-perm keeps the stock
+;; method when this file is reloaded in a REPL session.
+(define-perm *mp-stock-set-menu-options* (function progress symbol int)
+  (the-as (function progress symbol int) (method-of-type progress set-menu-options))
+  )
+
+(defmethod set-menu-options ((this progress) (arg0 symbol))
+  "Stock behavior, plus the multiplayer page."
+  (cond
+    ((= arg0 'multiplayer)
+     (set! (-> this current-options) *mp-menu-options*)
+     0
+     )
+    (else
+      (*mp-stock-set-menu-options* this arg0)
+      )
+    )
+  )
+
+;; The Options page entry, added to the stock list while the mod is enabled. The page places its
+;; entries at fractions of its height (offset-y), so the entries are spread again to make room.
+(define *mp-options-entry*
+  (new 'static 'menu-sub-menu-option :name (text-id progress-mp-multiplayer) :offset-y 0.8 :next-state 'multiplayer)
+  )
+
+(define-perm *mp-stock-options* (array menu-option) (-> *options-options-pc* options))
+
+;; The stock entries' offsets, captured once (a REPL reload must not capture the spread ones).
+(define-perm *mp-stock-offsets* (array float)
+  (let ((offsets (new 'global 'boxed-array float (-> *mp-stock-options* length))))
+    (dotimes (i (-> *mp-stock-options* length))
+      (set! (-> offsets i) (-> *mp-stock-options* i offset-y))
+      )
+    offsets
+    )
+  )
+
+(define *mp-options-with-entry* (new 'global 'boxed-array menu-option (+ (-> *mp-stock-options* length) 1)))
+
+(dotimes (i (-> *mp-stock-options* length))
+  (set! (-> *mp-options-with-entry* i) (-> *mp-stock-options* i))
+  )
+
+(set! (-> *mp-options-with-entry* (-> *mp-stock-options* length)) *mp-options-entry*)
+
+(defun mp-update-options-entry ()
+  "Show the Multiplayer entry in START > Options only while the mod is enabled."
+  (let ((n (-> *mp-stock-options* length)))
+    (cond
+      ((mp-enabled?)
+       ;; n + 1 entries over the stock span (first to last offset)
+       (let* ((first (-> *mp-stock-offsets* 0))
+              (step (/ (- (-> *mp-stock-offsets* (+ n -1)) first) (the float n)))
+              )
+         (dotimes (i (+ n 1))
+           (set! (-> *mp-options-with-entry* i offset-y) (+ first (* step (the float i))))
+           )
+         )
+       (set! (-> *options-options-pc* options) *mp-options-with-entry*)
+       )
+      (else
+        (dotimes (i n)
+          (set! (-> *mp-stock-options* i offset-y) (-> *mp-stock-offsets* i))
+          )
+        (set! (-> *options-options-pc* options) *mp-stock-options*)
+        )
+      )
+    )
+  (none)
+  )
+
+(mp-update-options-entry)
+
+;; ------------------------------------------------------------------------------------------------
+;; Cheats and teleports (Mods menu)
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-set-enabled! ((on? symbol))
+  "Turn the mod on or off, remember it between boots."
+  (set! (-> *mp-config* enabled) (if on? 1 0))
+  (mp-config-save!)
+  (mp-update-options-entry)
+  (none)
+  )
+
+(defun mp-cheat-ammo ()
+  "Refill every gun's ammo to its current maximum."
+  (when (mp-cheats-allowed?)
+    (set! (-> *game-info* gun-ammo 0) (get-max-ammo-for-gun *game-info* (pickup-type ammo-yellow)))
+    (set! (-> *game-info* gun-ammo 1) (get-max-ammo-for-gun *game-info* (pickup-type ammo-red)))
+    (set! (-> *game-info* gun-ammo 2) (get-max-ammo-for-gun *game-info* (pickup-type ammo-blue)))
+    (set! (-> *game-info* gun-ammo 3) (get-max-ammo-for-gun *game-info* (pickup-type ammo-dark)))
+    (mp-show-message "Ammo refilled")
+    )
+  (none)
+  )
+
+(defun mp-cheat-health ()
+  "Restore full health."
+  (when (and (mp-cheats-allowed?) *target*)
+    (set! (-> *target* fact health) (-> *target* fact health-max))
+    (mp-show-message "Health restored")
+    )
+  (none)
+  )
+
+(defun mp-cheat-dark-eco ()
+  "Fill the dark eco meter."
+  (when (mp-cheats-allowed?)
+    (set! (-> *game-info* eco-pill-dark) (-> *FACT-bank* eco-pill-dark-max-default))
+    (mp-show-message "Dark eco restored")
+    )
+  (none)
+  )
+
+(defun mp-cheat-light-eco ()
+  "Fill the light eco meter."
+  (when (mp-cheats-allowed?)
+    (set! (-> *game-info* eco-pill-light) (-> *FACT-bank* eco-pill-light-max-default))
+    (mp-show-message "Light eco restored")
+    )
+  (none)
+  )
+
+(defun mp-teleport-zone ((index int))
+  "Go to zone `index` of *mp-zones* (through its continue point)."
+  (when (and (mp-cheats-allowed?) *target* (>= index 0) (< (* 2 index) (-> *mp-zones* length)))
+    (let ((cp (get-continue-by-name *game-info* (-> *mp-zones* (+ (* 2 index) 1)))))
+      (if cp
+          (send-event *target* 'continue cp)
+          (mp-show-message "Unknown zone")
+          )
+      )
+    )
+  (none)
+  )
+
+(defun mp-teleport-player ((index int))
+  "Go to the index-th connected player (applied by the manager on its next frame)."
+  (when (and (mp-cheats-allowed?) (>= (mp-nth-player-slot index) 0))
+    (set! *mp-request-teleport* (mp-nth-player-slot index))
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Mods menu
+;; ------------------------------------------------------------------------------------------------
+
+(define *mod-multiplayer-menu*
+  (new 'static 'popup-menu-submenu :label "multiplayer"
+    :entries (new 'static 'boxed-array :type popup-menu-entry
+      (new 'static 'popup-menu-flag :label "Enable multiplayer (START > Options)"
+           :is-toggled? (lambda () (mp-enabled?))
+           :on-confirm (lambda () (mp-set-enabled! (not (mp-enabled?))) (none))
+           )
+      (new 'static 'popup-menu-button :label "Refill ammo"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :on-confirm (lambda () (mp-cheat-ammo) (none))
+           )
+      (new 'static 'popup-menu-button :label "Restore health"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :on-confirm (lambda () (mp-cheat-health) (none))
+           )
+      (new 'static 'popup-menu-button :label "Restore dark eco"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :on-confirm (lambda () (mp-cheat-dark-eco) (none))
+           )
+      (new 'static 'popup-menu-button :label "Restore light eco"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :on-confirm (lambda () (mp-cheat-light-eco) (none))
+           )
+      (new 'static 'popup-menu-flag :label "Invincible"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :is-toggled? (lambda () *mp-invulnerable*)
+           :on-confirm (lambda () (set! *mp-invulnerable* (and (not *mp-invulnerable*) (mp-cheats-allowed?))) (none))
+           )
+      (new 'static 'popup-menu-dynamic-submenu :label "Teleport to a zone"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :get-length (lambda () (/ (-> *mp-zones* length) 2))
+           :get-entry-label (lambda ((index int) (dst string)) (copy-string<-string dst (-> *mp-zones* (* 2 index))) (none))
+           :on-entry-confirm (lambda ((index int)) (mp-teleport-zone index) (none))
+           :entry-selected? (lambda ((index int)) #f)
+           :on-reset (lambda () (none))
+           )
+      (new 'static 'popup-menu-dynamic-submenu :label "Teleport to a player"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :get-length (lambda () (mp-player-count))
+           :get-entry-label (lambda ((index int) (dst string)) (mp-player-label index dst) (none))
+           :on-entry-confirm (lambda ((index int)) (mp-teleport-player index) (none))
+           :entry-selected? (lambda ((index int)) #f)
+           :on-reset (lambda () (none))
+           )
+      )
+    )
+  )
+
+(defun mod-multiplayer-build-menu ()
+  "Return this mod's entry for the Mods menu (pure: the menu is static)."
+  (the-as popup-menu-entry *mod-multiplayer-menu*)
+  )
+
+(mods-menu-register "multiplayer" mod-multiplayer-build-menu)

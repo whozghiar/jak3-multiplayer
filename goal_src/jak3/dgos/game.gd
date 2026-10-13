@@ -458,6 +458,7 @@
   "jak-dark+0-ag.go"
   "jak-light+0-ag.go"
   "jak-swim+0-ag.go"
+  "jak-indax+0-ag.go" ;; MOD multiplayer -- playable Daxter animations, see target-indax.o below
   "blocking-plane-ag.go"
   "com-rod-of-god-ag.go"
   "los-control-h.o"
@@ -490,4 +491,11 @@
   "debris.o"
   "shield-sphere.o"
   "entity-debug.o" ;; added
+  ;; MOD multiplayer -- playable Daxter (indax mode) resident, so a player can be Daxter anywhere.
+  ;; Moved here from FACC, VOCA and HALFPIPE (their art from VIN too): a copy in a level DGO would
+  ;; redefine these states in that level's heap, and they would dangle once it unloads.
+  "target-indax.o"
+  "target-indax-hang.o"
+  "multiplayer.o" ;; MOD multiplayer -- network play (pc/features/multiplayer/)
+  "multiplayer-menu.o" ;; MOD multiplayer -- start menu pages and Mods menu entries
  ))
