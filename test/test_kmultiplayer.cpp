@@ -78,5 +78,6 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   ASSERT_TRUE(client.join("127.0.0.1:47777", now()));
   pump(20);
   EXPECT_EQ(client.mode(), mp::Mode::Offline);
+  EXPECT_EQ(client.message(), "You are banned from this server");
   host.leave("");
 }

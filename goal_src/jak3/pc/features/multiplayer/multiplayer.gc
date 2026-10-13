@@ -413,28 +413,36 @@
 
 (defun mp-host! ()
   "Start a server on the port of the address field."
-  (mp-config-save!)
-  (pc-mp-host *mp-address* MP_MAX_PLAYERS)
-  (pc-mp-message *mp-status*)
-  (mp-show-message *mp-status*)
+  ;; only from offline: a menu button also fires on the confirm that deselects it
+  (when (= *mp-mode* (mp-mode offline))
+    (mp-config-save!)
+    (pc-mp-host *mp-address* MP_MAX_PLAYERS)
+    (pc-mp-message *mp-status*)
+    (mp-show-message *mp-status*)
+    )
   (none)
   )
 
 (defun mp-join! ()
   "Connect to the server of the address field."
-  (mp-config-save!)
-  (pc-mp-join *mp-address*)
-  (pc-mp-message *mp-status*)
-  (mp-show-message *mp-status*)
+  ;; only from offline: a menu button also fires on the confirm that deselects it
+  (when (= *mp-mode* (mp-mode offline))
+    (mp-config-save!)
+    (pc-mp-join *mp-address*)
+    (pc-mp-message *mp-status*)
+    (mp-show-message *mp-status*)
+    )
   (none)
   )
 
 (defun mp-leave! ()
   "Leave the session (a host stops its server)."
-  (pc-mp-leave)
-  (set! *mp-mode* (mp-mode offline))
-  (pc-mp-message *mp-status*)
-  (mp-show-message *mp-status*)
+  (when (!= *mp-mode* (mp-mode offline))
+    (pc-mp-leave)
+    (set! *mp-mode* (mp-mode offline))
+    (pc-mp-message *mp-status*)
+    (mp-show-message *mp-status*)
+    )
   (none)
   )
 
@@ -656,8 +664,32 @@
           ;; the passenger's own view: always shown, in the seat
           (set! shown? #t)
           )
-        (move-to-point! (-> self root) (-> st trans))
-        (quaternion-copy! (-> self root quat) (-> st quat))
+        ;; a passenger sits in its driver's seat as this machine sees that vehicle: its own reported
+        ;; position comes through the network twice and would trail behind the vehicle
+        (let ((driver (cond
+                        ((or (-> self local?) (not (logtest? (-> st flags) (mp-flag riding))))
+                         (the-as mp-player-state #f)
+                         )
+                        ((= (-> st ride-slot) *mp-local-slot*)
+                         *mp-local*
+                         )
+                        (else
+                          (mp-remote-state (-> st ride-slot))
+                          )
+                        )
+                      )
+              )
+          (cond
+            ((and driver (logtest? (-> driver flags) (mp-flag driving)))
+             (move-to-point! (-> self root) (-> driver seat-trans))
+             (quaternion-copy! (-> self root quat) (-> driver veh-quat))
+             )
+            (else
+              (move-to-point! (-> self root) (-> st trans))
+              (quaternion-copy! (-> self root quat) (-> st quat))
+              )
+            )
+          )
         (vector-copy! (-> (the-as collide-shape-moving (-> self root)) transv) (-> st vel))
         (cond
           (shown?
@@ -1231,8 +1263,16 @@
 (defbehavior mp-steal-now mp-manager ((slot int))
   "Take the vehicle of player `slot`: it leaves it, and we get the same vehicle in its place."
   (let ((st (mp-remote-state slot)))
-    ;; its art being loaded means the level code that spawns it is loaded too
-    (when (and st (logtest? (-> st flags) (mp-flag driving)) (mp-vehicle-skel (-> st veh-type)))
+    ;; its art being loaded means the level code that spawns it is loaded too, for the player
+    ;; vehicles: city bikes and cars (0-6, CWI) and Spargus buggies (12-19, WASALL). The others
+    ;; (catapult, marauders...) have art in levels without the vehicle spawner.
+    (when (and st
+               (logtest? (-> st flags) (mp-flag driving))
+               (or (and (>= (-> st veh-type) 0) (<= (-> st veh-type) 6))
+                   (and (>= (-> st veh-type) 12) (<= (-> st veh-type) 19))
+                   )
+               (mp-vehicle-skel (-> st veh-type))
+               )
       (move-to-point! (-> *target* control) (-> st veh-trans))
       (quaternion-copy! (-> *target* control quat) (-> st veh-quat))
       (quaternion-copy! (-> *target* control quat-for-control) (-> st veh-quat))

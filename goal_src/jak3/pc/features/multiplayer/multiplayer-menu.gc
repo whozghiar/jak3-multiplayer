@@ -91,7 +91,8 @@
 
 (defmethod draw-option ((this menu-mp-label-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
   "Draw the current text of the line."
-  (when (not (-> this mounted?))
+  ;; a static object's symbol fields start at 0, not #f (same test as the stock pages)
+  (when (or (zero? (-> this mounted?)) (not (-> this mounted?)))
     (on-mount! this)
     )
   (draw-generic-simple-string-option this progress font-ctx option-index ((-> this get-label)))
@@ -202,6 +203,9 @@
 
 (defmethod respond-progress ((this menu-mp-text-option) (progress progress) (selected? symbol))
   "Edit the text while the option is selected (see the type's comment for the buttons)."
+  (if (zero? (-> this edit))
+      (on-mount! this)
+      )
   (let ((edit (-> this edit)))
     (cond
       ((not selected?)
@@ -251,7 +255,8 @@
 
 (defmethod draw-option ((this menu-mp-text-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
   "Label on the first line, value on the second; while editing, the cursor is highlighted."
-  (when (not (-> this mounted?))
+  ;; a static object's symbol fields start at 0, not #f (same test as the stock pages)
+  (when (or (zero? (-> this mounted?)) (not (-> this mounted?)))
     (on-mount! this)
     )
   (let ((alpha (fmax 0.0 (* 2.0 (- 0.5 (-> progress menu-transition))))))
@@ -307,6 +312,21 @@
         )
       )
     (print-game-text *progress-generic-temp-string* font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
+    )
+  (none)
+  )
+
+;; A yes / no confirmation that only acts on yes. The stock menu-generic-confirm-option calls its
+;; action on confirm whatever the choice (pc/progress/progress-generic-pc.gc).
+(deftype menu-mp-confirm-option (menu-generic-confirm-option)
+  ()
+  )
+
+(defmethod call-on-confirm ((this menu-mp-confirm-option))
+  "Run the action only when the player chose yes."
+  (when (and (-> this confirmed?) (nonzero? (-> this on-confirm)) (-> this on-confirm))
+    (set! (-> this confirmed?) #f)
+    ((-> this on-confirm))
     )
   (none)
   )
@@ -489,7 +509,7 @@
                       (none)
                       )
         )
-      (new 'static 'menu-generic-confirm-option
+      (new 'static 'menu-mp-confirm-option
         :name (text-id progress-mp-stop)
         :on-confirm (lambda () (mp-leave!) (none))
         )

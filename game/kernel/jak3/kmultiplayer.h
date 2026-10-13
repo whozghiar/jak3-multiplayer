@@ -120,6 +120,7 @@ class Session {
   void handle_frame(Peer& p, u8 type, const u8* data, size_t len);
   void route_event(Event ev, int sender_slot);
   void drop(Peer& p, const std::string& reason);
+  void refuse(Peer& p, const char* why);
 
   Mode m_mode = Mode::Offline;
   int m_local_slot = -1;
@@ -132,6 +133,7 @@ class Session {
   std::set<std::string> m_banned;
   double m_connect_start = 0;
   double m_last_state_sent = -1e9;
+  double m_now = 0;  // time of the last update()
 };
 
 // Session used by the kernel functions below.

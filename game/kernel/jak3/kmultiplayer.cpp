@@ -60,6 +60,9 @@ static void set_nonblocking(sock_t s) {
   ioctlsocket(s, FIONBIO, &on);
 }
 constexpr int kSendFlags = 0;
+static void shutdown_send(sock_t s) {
+  shutdown(s, SD_SEND);
+}
 static void net_init() {
   static bool done = false;
   if (!done) {
@@ -82,13 +85,23 @@ static void close_sock(sock_t s) {
 static void set_nonblocking(sock_t s) {
   fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
 }
+#ifdef MSG_NOSIGNAL
 constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;  // macOS: SO_NOSIGPIPE is set on each socket instead
+#endif
+static void shutdown_send(sock_t s) {
+  shutdown(s, SHUT_WR);
+}
 static void net_init() {}
 #endif
 
 static void set_nodelay(sock_t s) {
   int on = 1;
   setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on));
+#ifdef SO_NOSIGPIPE
+  setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (const char*)&on, sizeof(on));
+#endif
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -119,6 +132,9 @@ struct Session::Peer {
   double last_recv = 0;
   bool dead = false;
   std::string dead_reason;
+  // Refused or kicked: kept open a moment, its input drained, so the reason is not lost to a reset.
+  bool closing = false;
+  double close_at = 0;
 
   void queue(u8 type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0) {
     size_t len = 1 + na + nb;
@@ -410,6 +426,17 @@ void Session::leave(const std::string& reason) {
   }
 }
 
+void Session::refuse(Peer& p, const char* why) {
+  p.queue(MSG_REJECT, why, strlen(why));
+  p.flush();
+  if (p.out.empty()) {
+    shutdown_send(p.fd);  // the client reads the reason, then the end of the stream
+  }
+  p.closing = true;
+  p.close_at = m_now + 1000.0;
+  drop(p, why);
+}
+
 void Session::drop(Peer& p, const std::string& reason) {
   if (!p.dead) {
     p.dead = true;
@@ -448,7 +475,7 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         }
         u32 version;
         memcpy(&version, data, 4);
-        const char* refuse = nullptr;
+        const char* reason = nullptr;
         int slot = -1;
         for (int i = 1; i < m_max_players && slot < 0; i++) {
           bool used =
@@ -458,13 +485,12 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
           }
         }
         if (version != kProtocolVersion) {
-          refuse = "Version mismatch: update the mod";
+          reason = "Version mismatch: update the mod";
         } else if (slot < 0) {
-          refuse = "The server is full";
+          reason = "The server is full";
         }
-        if (refuse) {
-          p.queue(MSG_REJECT, refuse, strlen(refuse));
-          drop(p, refuse);
+        if (reason) {
+          refuse(p, reason);
           return;
         }
         p.slot = slot;
@@ -543,6 +569,7 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
 }
 
 void Session::update(PlayerState local, double now) {
+  m_now = now;
   if (m_mode == Mode::Offline) {
     return;
   }
@@ -569,9 +596,7 @@ void Session::update(PlayerState local, double now) {
       p->ip = ip;
       p->last_recv = now;
       if (m_banned.count(p->ip)) {
-        const char* why = "You are banned from this server";
-        p->queue(MSG_REJECT, why, strlen(why));
-        drop(*p, why);
+        refuse(*p, "You are banned from this server");
       }
       m_peers.push_back(p);
     }
@@ -612,6 +637,14 @@ void Session::update(PlayerState local, double now) {
 
   // Read and dispatch.
   for (auto* p : m_peers) {
+    if (p->dead && p->closing) {
+      p->in.clear();
+      if (!p->receive(now)) {
+        p->close_at = 0;  // the client closed: no need to wait
+      }
+      p->in.clear();
+      continue;
+    }
     if (p->dead || !p->connected) {
       continue;
     }
@@ -674,11 +707,16 @@ void Session::update(PlayerState local, double now) {
       lg::info("[multiplayer] player {} left: {}", p->slot, p->dead_reason);
       m_remotes[p->slot].clear();
       u8 s = (u8)p->slot;
+      p->slot = -1;  // free the slot now, even if the socket lingers
       for (auto* o : m_peers) {
         if (o != p && o->slot >= 0) {
           o->queue(MSG_LEAVE, &s, 1);
         }
       }
+    }
+    if (p->closing && now < p->close_at) {
+      i++;
+      continue;
     }
     close_sock(p->fd);
     delete p;
@@ -721,9 +759,7 @@ void Session::kick(int slot, bool ban) {
       if (ban) {
         m_banned.insert(p->ip);
       }
-      p->queue(MSG_REJECT, why, strlen(why));
-      p->flush();
-      drop(*p, why);
+      refuse(*p, why);
     }
   }
 }

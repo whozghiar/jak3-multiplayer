@@ -119,10 +119,16 @@ but its minimap icon keeps moving. A model change (character, outfit) respawns t
 - **Other machines** draw a ghost of that vehicle: a `manipy` with `skel-<type>`, only while that
   art is loaded (the ghost is removed as soon as the lookup fails, before the level is freed).
   Buggy wheels are separate processes and are not drawn on the ghost.
-- **Steal (press triangle):** the thief sends `steal`, stands where the vehicle is and asks the
-  target for a new vehicle of that type (`'change-mode 'pilot #f type #t`, stock spawn path in
-  `target-handler.gc`). The driver gets out (`'end-mode 'pilot`) and its copy is removed with
-  `'go-die` half a second later.
+- **Steal (press triangle):** the thief stands where the vehicle is and asks the target for a new
+  vehicle of that type (`'change-mode 'pilot #f type #t`, stock spawn path in
+  `target-handler.gc`). Only once that worked (the target is in `target-pilot-start`) does it send
+  `steal`: the driver gets out (`'end-mode 'pilot`) and its copy is removed with `'go-die` half a
+  second later. Only the player vehicles can be stolen: city bikes and cars (types 0-6, spawner in
+  CWI) and Spargus buggies (12-19, WASALL). The others (catapult, marauders, factory car) have
+  their art in levels that lack `vehicle-manager.o`, whose `vehicle-spawn` the stock path calls.
+- **A passenger's puppet** sits in its driver's seat as each machine sees that vehicle (the
+  driver's own machine uses its real vehicle), not at the passenger's reported position, which
+  crosses the network twice and would trail behind.
 - **Ride (hold triangle 0.5 s):** only with a second seat that no other player uses. The manager
   spawns an `mp-seat` (invisible, follows the driver's seat 1) and puts the player in the stock
   `target-grab-ride` state, which moves the player to that process every frame. The player's model
@@ -174,6 +180,14 @@ Checklist (by a human, the agent cannot launch the game):
   not loaded them.
 - Vehicle ghosts have no wheels; hover vehicles look complete.
 - Text fields use the D-pad (keyboard arrows work too); there is no typed text input.
+- Remote Jaks wear the local player's outfit (`target-skel-group` reads the local `ext-geo`).
+- Animation indices match across machines when every clip sits at its `master-art-group-index`;
+  `link-art-to-master` falls back to any free slot when that one is taken, so a remote player can
+  show a wrong clip (never a crash: the clip type is checked).
+- Not audited: enemy code that assumes its focus is the `target` type could misbehave when it
+  focuses a puppet.
+- The resident indax code and `jak-indax+0-ag` (421 KB) add to the global heap; not measured
+  (the PC global heap is about 300 MB).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
 ## 7. Change log
@@ -184,3 +198,12 @@ Checklist (by a human, the agent cannot launch the game):
   name, health bar and minimap icon, focusable by enemies with hit forwarding; vehicle ghosts,
   steal and passenger seat; playable Daxter made resident in GAME; shared enemy deaths and time of
   day. Built and unit-tested; not yet played.
+- **2026-10-14:** fixes from a code review. Text fields crashed on confirm (a static object's
+  `mounted?` starts at 0, not `#f`, so the edit buffer was never allocated). Host and Join fired
+  again on the confirm that deselects the button, and Host then dropped every guest; both now
+  act only from offline. "Stop the server" stopped even on "No" (stock confirm option); a
+  subclass now checks the choice. Refusal reasons (full, version, banned) were never sent; a
+  refused or kicked connection now gets its reason, a half-close, and a second of drained input
+  before closing, so no reset swallows the reason (covered by the test). Stealing is limited to
+  the player vehicle types; the steal event is sent only after the new vehicle exists; passengers
+  are drawn in their driver's seat. macOS build: `MSG_NOSIGNAL` fallback.
