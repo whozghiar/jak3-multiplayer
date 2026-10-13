@@ -14,7 +14,7 @@
 Jak 3 online: host or join a server from the pause menu and explore the world together as Jak or Daxter.
 
 - **Target Game:** Jak 3
-- **Repository:** [`whozghiar/jak3-mod-multiplayer`](https://github.com/whozghiar/jak3-mod-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
+- **Repository:** [`whozghiar/jak3-multiplayer`](https://github.com/whozghiar/jak3-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
 
 ## Key Features
 - **Host or join from the start menu:** START > Options > Multiplayer. Type the server address
@@ -66,13 +66,13 @@ missions are not shared.
 1. In the **OpenGOAL Launcher**, navigate to **Settings ▸ Mods ▸ Add Custom Mod Source**.
 2. Paste this catalog URL:
    ```text
-   https://raw.githubusercontent.com/whozghiar/jak3-mod-multiplayer/main/index.json
+   https://raw.githubusercontent.com/whozghiar/jak3-multiplayer/main/index.json
    ```
 3. Go to the **Mods** tab, locate **Multiplayer**, and click **Install**.
 4. Select your clean PS2 game ISO when prompted. The launcher will automatically extract assets and launch the game!
 
 ### Option B — Manual Installation from GitHub Releases
-1. Download the pre-built package for your operating system from the [Releases](https://github.com/whozghiar/jak3-mod-multiplayer/releases) tab (`windows-v*.zip` or `linux-v*.zip`).
+1. Download the pre-built package for your operating system from the [Releases](https://github.com/whozghiar/jak3-multiplayer/releases) tab (`windows-v*.zip` or `linux-v*.zip`).
 2. Extract the archive into your OpenGOAL Launcher features directory:
    - **Windows:** `%APPDATA%\OpenGOAL-Launcher\features\jak3\mods\_local\multiplayer\`
    - **Linux:** `~/.config/OpenGOAL-Launcher/features/jak3/mods/_local/multiplayer/`
@@ -87,11 +87,11 @@ If you want to modify or compile this mod locally from source:
 ### 0. Get the Source
 Already working in a clone of [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)? Switch to this mod there, keeping your extracted game data:
 ```bash
-task modding-switch -- jak3-mod-multiplayer
+task modding-switch -- jak3-multiplayer
 ```
 Otherwise clone it on its own; the knowledge base used by AI agents is a submodule, so clone with it:
 ```bash
-git clone --recurse-submodules https://github.com/whozghiar/jak3-mod-multiplayer.git
+git clone --recurse-submodules https://github.com/whozghiar/jak3-multiplayer.git
 ```
 To pull the latest modding base into this mod later, run `task modding-sync-branch`.
 
