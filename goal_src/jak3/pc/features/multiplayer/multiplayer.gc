@@ -586,6 +586,7 @@
    (ghost      handle)         ;; manipy drawing the driven vehicle
    (ghost-type int32)
    (ghost-skel skeleton-group)
+   (ghost-retry time-frame)    ;; last failed ghost spawn (process pool full)
    )
   )
 
@@ -623,7 +624,7 @@
          (mp-puppet-kill-ghost)
          (set! ghost #f)
          )
-       (when (and (not ghost) sg)
+       (when (and (not ghost) sg (time-elapsed? (-> self ghost-retry) (seconds 1)))
          (let ((proc (process-spawn
                        manipy
                        :init manipy-init
@@ -638,11 +639,16 @@
                        )
                      )
                )
-           (when proc
-             (set! (-> self ghost) (ppointer->handle proc))
-             (set! (-> self ghost-type) (-> st veh-type))
-             (set! (-> self ghost-skel) sg)
-             (set! ghost (ppointer->process proc))
+           (cond
+             (proc
+               (set! (-> self ghost) (ppointer->handle proc))
+               (set! (-> self ghost-type) (-> st veh-type))
+               (set! (-> self ghost-skel) sg)
+               (set! ghost (ppointer->process proc))
+               )
+             (else
+               (set-time! (-> self ghost-retry))
+               )
              )
            )
          )
@@ -951,6 +957,7 @@
    (tp-time     time-frame)
    (world-time  time-frame)
    (last-hit    time-frame)
+   (spawn-retry time-frame) ;; last failed puppet spawn (process pool full)
    (event       mp-event :inline)
    )
   )
@@ -971,7 +978,11 @@
         (set! proc #f)
         (set! (-> self puppets i) (the-as handle #f))
         )
-      (when (and st (not proc) (mp-character-skel (logtest? (-> st flags) (mp-flag indax))))
+      (when (and st
+                 (not proc)
+                 (mp-character-skel (logtest? (-> st flags) (mp-flag indax)))
+                 (time-elapsed? (-> self spawn-retry) (seconds 1))
+                 )
         (let ((new-proc (process-spawn
                           mp-puppet
                           i
@@ -985,6 +996,7 @@
               )
           (if new-proc
               (set! (-> self puppets i) (ppointer->handle new-proc))
+              (set-time! (-> self spawn-retry))
               )
           )
         )
