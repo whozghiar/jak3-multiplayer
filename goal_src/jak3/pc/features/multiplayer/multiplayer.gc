@@ -167,12 +167,21 @@
 (define *mp-prompt-slot* -1)
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
-;; Handle of the mp-manager process.
-(define *mp-manager* (the-as handle #f))
+
+;; Values wider than 32 bits. A global symbol only holds 32 bits (goalc writes symbol values with a
+;; 32-bit store): a handle kept in one loses its pid (upper half) and never resolves again.
+(deftype mp-globals (structure)
+  ((manager       handle)     ;; the mp-manager process
+   (manager-retry time-frame) ;; real-clock time of the last failed manager spawn
+   (message-time  time-frame) ;; real-clock time the notification was set
+   )
+  )
+
+(define *mp-globals* (new 'global 'mp-globals))
+(set! (-> *mp-globals* manager) (the-as handle #f))
 
 ;; On-screen notification (joins, leaves, kicks...).
 (define *mp-message* (new 'global 'string 128 (the-as string #f)))
-(define *mp-message-time* (the-as time-frame 0))
 (define *mp-status* (new 'global 'string 128 (the-as string #f)))
 (define *mp-temp-string* (new 'global 'string 64 (the-as string #f)))
 
@@ -263,7 +272,7 @@
 (defun mp-show-message ((msg string))
   "Show `msg` at the bottom of the screen for a few seconds."
   (copy-string<-string *mp-message* msg)
-  (set! *mp-message-time* (mp-now))
+  (set! (-> *mp-globals* message-time) (mp-now))
   (none)
   )
 
@@ -554,7 +563,7 @@
       (when (and (!= was now) (mp-online?))
         (string<-charp *mp-temp-string* (-> *mp-players* state i name))
         (format (clear *mp-message*) (if now "~S joined the game" "~S left the game") *mp-temp-string*)
-        (set! *mp-message-time* (mp-now))
+        (set! (-> *mp-globals* message-time) (mp-now))
         )
       )
     )
@@ -1524,7 +1533,7 @@
         (format (clear *mp-status*) "Triangle: steal ~S's vehicle. Hold: ride along" *mp-temp-string*)
         (mp-draw-text buf *mp-status* 256 330 0.5)
         )
-      (when (< (- (mp-now) *mp-message-time*) (seconds 4))
+      (when (< (- (mp-now) (-> *mp-globals* message-time)) (seconds 4))
         (mp-draw-text buf *mp-message* 256 360 0.5)
         )
       )
@@ -1542,12 +1551,12 @@
     (pc-mp-leave)
     (set! *mp-mode* (mp-mode offline))
     )
-  (let ((proc (handle->process *mp-manager*)))
+  (let ((proc (handle->process (-> *mp-globals* manager))))
     (if proc
         (deactivate proc)
         )
     )
-  (set! *mp-manager* (the-as handle #f))
+  (set! (-> *mp-globals* manager) (the-as handle #f))
   (dotimes (i MP_MAX_PLAYERS)
     (set! (-> *mp-players* valid i) #f)
     )
@@ -1572,16 +1581,20 @@
          )
        )
      (mp-read-remote-states)
-     (when (not (handle->process *mp-manager*))
+     ;; when the process pool is full, retry once a second instead of every frame
+     (when (and (not (handle->process (-> *mp-globals* manager)))
+                (>= (- (mp-now) (-> *mp-globals* manager-retry)) (seconds 1))
+                )
        (let ((proc (process-spawn mp-manager :name "mp-manager" :to *pc-pool*)))
          (if proc
-             (set! *mp-manager* (ppointer->handle proc))
+             (set! (-> *mp-globals* manager) (ppointer->handle proc))
+             (set! (-> *mp-globals* manager-retry) (mp-now))
              )
          )
        )
      (mp-draw-overlay)
      )
-    ((or (!= *mp-mode* (mp-mode offline)) (handle->process *mp-manager*))
+    ((or (!= *mp-mode* (mp-mode offline)) (handle->process (-> *mp-globals* manager)))
      (mp-shutdown)
      )
     )

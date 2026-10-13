@@ -207,3 +207,9 @@ Checklist (by a human, the agent cannot launch the game):
   before closing, so no reset swallows the reason (covered by the test). Stealing is limited to
   the player vehicle types; the steal event is sent only after the new vehicle exists; passengers
   are drawn in their driver's seat. macOS build: `MSG_NOSIGNAL` fallback.
+- **2026-10-14:** first in-game report: the log filled with `mp-manager could not be allocated,
+  because *nk-dead-pool* was empty`, and the start menu (`progress`) could not open. The manager's
+  handle was kept in a global symbol, which only holds 32 bits: the pid was cut off, the handle
+  never resolved, and the hook spawned a new manager every frame until the process pool was full.
+  The handle (and the notification timer) now live in the `mp-globals` structure, and a failed
+  manager spawn is retried once a second.

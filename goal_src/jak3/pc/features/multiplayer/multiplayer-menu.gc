@@ -363,7 +363,7 @@
   (when (mp-remote-state *mp-admin-slot*)
     (string<-charp *mp-temp-string* (-> *mp-players* state *mp-admin-slot* name))
     (format (clear *mp-message*) (if ban "~S was banned" "~S was kicked") *mp-temp-string*)
-    (set! *mp-message-time* (mp-now))
+    (set! (-> *mp-globals* message-time) (mp-now))
     (pc-mp-kick *mp-admin-slot* ban)
     (set! *mp-admin-slot* -1)
     )
