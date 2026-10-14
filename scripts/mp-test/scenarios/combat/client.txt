@@ -1,0 +1,12 @@
+# Combat test, guest side: stands 4 m from the host and watches its gun, shots and impacts.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+52 goto-player 0 7
+53 face-player 0
+57 log
+58 screenshot gun
+60 screenshot firing
+60.3 screenshot firing2
+62 log

@@ -1,0 +1,12 @@
+# Props test, guest side: stands next to the host and looks at it: Daxter on its shoulder, its gun.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+56 goto-player 0 4
+57 face-player 0
+58 log
+60 screenshot dax
+63 screenshot gun
+63 log
+70 screenshot after

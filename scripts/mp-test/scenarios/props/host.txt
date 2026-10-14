@@ -1,0 +1,10 @@
+# Props test, host side: draws its gun (R1) so the guest can see it on the host's puppet.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+58 log
+62 press r1 300
+63 screenshot gun
+63 log
+70 screenshot after

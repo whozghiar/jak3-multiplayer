@@ -99,6 +99,26 @@
     (-> *mp-world-state* replica-count)
     (-> *mp-world-state* suppressed-count)
     )
+  (format
+    0
+    "[mp-test] fx effects sent ~D shown ~D shots sent ~D shown ~D~%"
+    (-> *mp-fx* total-effects-sent)
+    (-> *mp-fx* total-effects-shown)
+    (-> *mp-fx* total-shots-sent)
+    (-> *mp-fx* total-shots-shown)
+    )
+  ;; the local props sent with the player
+  (when (and *target* (nonzero? (-> *target* gun)))
+    (let ((gun (the-as process-drawable (ppointer->process (-> *target* gun gun))))
+          (dax (the-as process-drawable (ppointer->process (-> *target* sidekick))))
+          )
+      (format 0 "[mp-test] props gun ~A skel ~A~%" gun (if (and gun (nonzero? (-> gun draw))) (mp-skel-of gun) #f))
+      (format 0 "[mp-test] props dax ~A skel ~A~%" dax (if (and dax (nonzero? (-> dax draw))) (mp-skel-of dax) #f))
+      (when gun
+        (format 0 "[mp-test] props gun draw ~A skel-ctl ~A ag ~A jgeo ~A~%" (-> gun draw) (-> gun skel) (if (nonzero? (-> gun draw)) (-> gun draw art-group) #f) (if (nonzero? (-> gun draw)) (-> gun draw jgeo) #f))
+        )
+      )
+    )
   ;; what the guest received, and the replica drawn for each
   (dotimes (i (min 8 (-> *mp-actors-in* count)))
     (let* ((st (-> *mp-actors-in* state i))
@@ -248,8 +268,22 @@
            )
          )
         ((string= cmd "goto-player")
-         (let ((slot (mp-test-int)))
-           (set! *mp-request-teleport* slot)
+         ;; goto-player <slot> [meters]: stand that far from the player (along x), else 1.5 m
+         (let* ((slot (mp-test-int))
+                (dist (mp-test-int))
+                (st (mp-remote-state slot))
+                )
+           (cond
+             ((and st *target* (> dist 0))
+              (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans))))
+                (+! (-> pos x) (* (meters 1) (the float dist)))
+                (move-to-point! (-> *target* control) pos)
+                )
+              )
+             (else
+               (set! *mp-request-teleport* slot)
+               )
+             )
            )
          )
         ((string= cmd "goto-actor")
@@ -282,6 +316,16 @@
              ((string= which "invuln") (set! *mp-invulnerable* (not *mp-invulnerable*)))
              )
            )
+         )
+        ((string= cmd "gun")
+         ;; unlock the gun (red and yellow) with ammo, and take it out
+         (logior! (-> *game-info* features) (game-feature gun gun-red-1 gun-yellow-1))
+         (dotimes (i 4)
+           (set! (-> *game-info* gun-ammo i) 100.0)
+           )
+         (if *target*
+             (send-event *target* 'change-mode 'gun #f (pickup-type gun-yellow-1))
+             )
          )
         ((string= cmd "zone")
          (mp-teleport-zone (mp-test-int))

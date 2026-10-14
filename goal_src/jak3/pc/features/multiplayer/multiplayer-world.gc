@@ -4,18 +4,20 @@
 ;; name: multiplayer-world.gc
 ;; dgos: GAME
 ;;
-;; Jak 3 multiplayer mod -- shared world. The host is the authority on the NPCs: every character
-;; (the `enemy` family: citizens, guards, monsters, marauders...) and every vehicle it simulates
-;; near a player is sent 15 times a second (position, orientation, animation, body variant). The
-;; guests do not simulate their own NPCs while connected: their ambient traffic is turned off and
-;; their own actors are put to sleep, hidden and made intangible. They draw the host's NPCs as
-;; replicas instead, built from the same skeleton, interpolated 100 ms in the past by the runtime
-;; (game/kernel/jak3/kmultiplayer.cpp).
+;; Jak 3 multiplayer mod -- shared world. Objects are replicated 15 times a second (position,
+;; orientation, animation, body variant) from the player who simulates them to the others, who draw
+;; them as replicas built from the same skeleton, interpolated 100 ms in the past by the runtime
+;; (game/kernel/jak3/kmultiplayer.cpp) with the owner's clock, like the owner's own puppet:
+;;   - the host's NPCs: every character (the `enemy` family: citizens, guards, monsters,
+;;     marauders...), vehicle and wheel it simulates near a player. The host is their authority:
+;;     the guests do not simulate their own NPCs while connected (ambient traffic off, their own
+;;     actors asleep, hidden and intangible);
+;;   - every player's props: Daxter on the shoulder, the gun, the vehicle driven and its wheels.
 ;;
-;; A guest's blow or shot on a replica is sent to the host, which applies it to the real NPC with
-;; the guest's puppet as the attacker; the NPC's reaction and death come back as its state. A guest
-;; who presses triangle next to a replica vehicle gets the same vehicle, and the host removes its
-;; own.
+;; A blow or shot on a replica is sent to its owner, which applies it to the real object with the
+;; attacker's puppet as the attacker; the reaction and the death come back as its state. A guest
+;; who presses triangle next to one of the host's NPC vehicles gets the same vehicle, and the host
+;; removes its own.
 ;;
 ;; Called from the manager (multiplayer.gc) every unpaused frame.
 
@@ -32,12 +34,13 @@
   (hidden 0)  ;; not drawn on the host
   (dead 1)    ;; dying on the host
   (vehicle 2) ;; a vehicle (else a character)
+  (prop 3)    ;; a player's prop (Daxter, gun): drawn, not solid
   )
 
 (deftype mp-actor-state (structure)
   ((trans      vector     :inline) ;; w = uniform scale
    (quat       quaternion :inline)
-   (id         uint32)             ;; host process pid
+   (id         uint32)             ;; owner slot << 24 | owner process pid
    (anim-index int16)
    (flags      mp-actor-flag)
    (anim-frame float)
@@ -94,13 +97,14 @@
 ;; ------------------------------------------------------------------------------------------------
 
 (defun mp-actor-kind ((proc process))
-  "1 for a character (the enemy family), 2 for a vehicle, 0 for anything else."
+  "1 for a character (the enemy family), 2 for a vehicle, 3 for a vehicle wheel, 0 otherwise."
   (let ((typ (-> proc type)))
     (dotimes (i 14)
       (let ((name (-> typ symbol)))
         (cond
           ((= name 'enemy) (return 1))
           ((= name 'vehicle) (return 2))
+          ((= name 'vehicle-wheel) (return 3))
           ((or (= name 'process-drawable) (= name 'process)) (return 0))
           )
         )
@@ -111,12 +115,12 @@
   )
 
 (defun mp-driven-vehicle? ((proc process))
-  "#t for the vehicle the local player drives (sent as part of the player, not as an NPC)."
-  (and *target*
-       (focus-test? *target* pilot)
-       (nonzero? (-> *target* pilot))
-       (= (handle->process (-> *target* pilot vehicle)) proc)
-       )
+  "#t for the vehicle the local player drives, or one of its wheels (they are the player's props)."
+  (when (and *target* (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
+    (let ((veh (handle->process (-> *target* pilot vehicle))))
+      (and veh (or (= veh proc) (= (ppointer->process (-> proc parent)) veh)))
+      )
+    )
   )
 
 (defun mp-near-a-player? ((pos vector))
@@ -138,7 +142,7 @@
   "The skeleton-group `proc` was built from. A process keeps only its art group and joint geometry,
    so the active levels' art-group arrays (where defskelgroup registers every skeleton-group) are
    searched for a skeleton-group with that art group and that geometry. Cached per geometry; the
-   cache is reset whenever a level loads (see mp-world-host-update). #f when not found."
+   cache is reset whenever a level loads (see mp-world-send). #f when not found."
   (let ((ws *mp-world-state*)
         (jgeo (-> proc draw jgeo))
         (ag (-> proc draw art-group))
@@ -207,46 +211,40 @@
 
 (define *mp-collect-count* 0)
 
-(defun mp-collect-actor ((proc process-drawable))
-  "iterate-process-tree callback: add `proc` to the batch when it is an NPC near a player."
+(defun mp-add-actor ((proc process-drawable) (flags mp-actor-flag))
+  "Add `proc` to the batch being built. #f when it cannot be drawn elsewhere (no skeleton found)."
   (when (and (< *mp-collect-count* MP_MAX_ACTORS)
-             (type? proc process-drawable)
              (nonzero? (-> proc root))
              (nonzero? (-> proc draw))
              (nonzero? (-> proc skel))
              (nonzero? (-> proc draw jgeo))
              (nonzero? (-> proc draw art-group))
              )
-    (let ((kind (mp-actor-kind proc)))
-      (when (and (> kind 0) (not (mp-driven-vehicle? proc)) (mp-near-a-player? (-> proc root trans)))
-        (let ((sg (mp-skel-of proc)))
-          (when sg
-            (let ((st (-> *mp-actors-out* state *mp-collect-count*)))
-              (vector-copy! (-> st trans) (-> proc root trans))
-              (set! (-> st trans w) (-> proc root scale x))
-              (quaternion-copy! (-> st quat) (-> proc root quat))
-              (set! (-> st id) (the-as uint (-> proc pid)))
-              (set! (-> st anim-index) (mp-anim-index proc))
-              (set! (-> st anim-frame) (if (>= (-> st anim-index) 0)
-                                           (-> proc skel root-channel 0 frame-num)
-                                           0.0
-                                           )
-                    )
-              (set! (-> st flags) (mp-actor-flag))
-              (if (= kind 2)
-                  (logior! (-> st flags) (mp-actor-flag vehicle))
-                  )
-              (if (logtest? (-> proc draw status) (draw-control-status no-draw))
-                  (logior! (-> st flags) (mp-actor-flag hidden))
-                  )
-              (if (and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) dead))
-                  (logior! (-> st flags) (mp-actor-flag dead))
-                  )
-              (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
-              (copyn-charp<-string (-> st skel) (-> sg name) 32)
-              (+! *mp-collect-count* 1)
+    (let ((sg (mp-skel-of proc)))
+      (when sg
+        (let ((st (-> *mp-actors-out* state *mp-collect-count*)))
+          (vector-copy! (-> st trans) (-> proc root trans))
+          (set! (-> st trans w) (-> proc root scale x))
+          (quaternion-copy! (-> st quat) (-> proc root quat))
+          ;; the runtime puts the owner's slot in the top byte
+          (set! (-> st id) (the-as uint (logand (-> proc pid) #xffffff)))
+          (set! (-> st anim-index) (mp-anim-index proc))
+          (set! (-> st anim-frame) (if (>= (-> st anim-index) 0)
+                                       (-> proc skel root-channel 0 frame-num)
+                                       0.0
+                                       )
+                )
+          (set! (-> st flags) flags)
+          (if (logtest? (-> proc draw status) (draw-control-status no-draw))
+              (logior! (-> st flags) (mp-actor-flag hidden))
               )
-            )
+          (if (and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) dead))
+              (logior! (-> st flags) (mp-actor-flag dead))
+              )
+          (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
+          (copyn-charp<-string (-> st skel) (-> sg name) 32)
+          (+! *mp-collect-count* 1)
+          (return #t)
           )
         )
       )
@@ -254,8 +252,81 @@
   #f
   )
 
-(defun mp-world-host-update ()
-  "Host: send the NPCs near the players, 15 times a second, while someone is connected."
+(defun mp-collect-actor ((proc process-drawable))
+  "iterate-process-tree callback (host): add `proc` when it is an NPC near a player."
+  (when (type? proc process-drawable)
+    (let ((kind (mp-actor-kind proc)))
+      (when (and (> kind 0) (not (mp-driven-vehicle? proc)) (mp-near-a-player? (-> proc root trans)))
+        (mp-add-actor proc (if (= kind 1)
+                               (mp-actor-flag)
+                               (mp-actor-flag vehicle)
+                               )
+                      )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-add-prop ((proc process-drawable))
+  "Add a prop attached to the player. Daxter and the gun keep their root still: their root joint is
+   computed from one of Jak's joints each frame, so that joint's world transform is sent instead."
+  (when (and (mp-add-actor proc (mp-actor-flag prop)) (nonzero? (-> proc node-list)))
+    (let ((st (-> *mp-actors-out* state (+ *mp-collect-count* -1)))
+          (mat (-> proc node-list data 0 bone transform))
+          )
+      (vector-copy! (-> st trans) (-> mat trans))
+      (set! (-> st trans w) 1.0)
+      (matrix->quaternion (-> st quat) mat)
+      (quaternion-normalize! (-> st quat))
+      )
+    )
+  (none)
+  )
+
+(defun mp-collect-props ()
+  "Add the local player's props: Daxter on the shoulder, the gun, the vehicle driven and its wheels."
+  (when *target*
+    (let ((dax (ppointer->process (-> *target* sidekick))))
+      (if (and dax (not (focus-test? *target* indax)))
+          (mp-add-prop (the-as process-drawable dax))
+          )
+      )
+    (when (nonzero? (-> *target* gun))
+      (let ((gun (ppointer->process (-> *target* gun gun))))
+        (if gun
+            (mp-add-prop (the-as process-drawable gun))
+            )
+        )
+      )
+    (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
+      (let ((veh (handle->process (-> *target* pilot vehicle))))
+        (when (and veh (type? veh process-drawable))
+          (mp-add-actor (the-as process-drawable veh) (mp-actor-flag vehicle))
+          (let ((child (-> veh child)))
+            (while child
+              (let ((node (ppointer->process child)))
+                (when (and node (type? node process) (= (mp-actor-kind (the-as process node)) 3))
+                  (mp-add-actor (the-as process-drawable node) (mp-actor-flag vehicle))
+                  )
+                (set! child (if node
+                                (-> node brother)
+                                (the-as (pointer process-tree) #f)
+                                )
+                      )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-world-send ()
+  "Send what this player simulates, 15 times a second: its props, and the NPCs near the players
+   when hosting."
   (let ((ws *mp-world-state*))
     ;; level art moves when a level loads: forget the cached skeletons then, and every 4 s
     (when (or (-> *level* loading-level) (>= (- (mp-now) (-> ws cache-time)) (seconds 4)))
@@ -265,11 +336,14 @@
     (when (and (> (mp-player-count) 0) (>= (- (mp-now) (-> ws last-send)) (seconds 0.066)))
       (set! (-> ws last-send) (mp-now))
       (set! *mp-collect-count* 0)
-      (iterate-process-tree
-        *active-pool*
-        (the-as (function object object) mp-collect-actor)
-        *null-kernel-context*
-        )
+      (mp-collect-props)
+      (if (= *mp-mode* (mp-mode host))
+          (iterate-process-tree
+            *active-pool*
+            (the-as (function object object) mp-collect-actor)
+            *null-kernel-context*
+            )
+          )
       (set! (-> *mp-actors-out* count) *mp-collect-count*)
       (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
       )
@@ -292,8 +366,8 @@
   )
 
 (defbehavior mp-on-actor-hit mp-manager ((ev mp-event))
-  "Host: a guest hit the replica of one of our NPCs. Apply it to the real one, from the guest's
-   puppet, so the NPC turns to that player and reacts as if hit here."
+  "Another player hit the replica of one of our objects (an NPC, our vehicle). Apply it to the real
+   one, from that player's puppet, so it turns to that player and reacts as if hit here."
   (let ((proc (mp-process-by-pid (-> ev iarg 0)))
         (attacker (handle->process (-> self puppets (max 0 (min (-> ev from) (+ MP_MAX_PLAYERS -1))))))
         (mode (-> *mp-attack-modes* (max 0 (min (-> ev iarg 1) (+ (-> *mp-attack-modes* length) -1)))))
@@ -326,7 +400,7 @@
   )
 
 (defbehavior mp-on-vehicle-taken mp-manager ((ev mp-event))
-  "Host: a guest took one of our NPC vehicles (it drives its own copy): remove ours."
+  "A guest took one of our NPC vehicles (it drives its own copy): remove ours."
   (let ((proc (mp-process-by-pid (-> ev iarg 0))))
     (if (and proc (= (mp-actor-kind proc) 2) (not (mp-driven-vehicle? proc)))
         (send-event proc 'go-die)
@@ -371,8 +445,9 @@
                )
           )
       (set! (-> ev kind) (mp-event-kind actor-hit))
-      (set! (-> ev to) 0)
-      (set! (-> ev iarg 0) (the-as int (-> self id)))
+      ;; to the object's owner, with the pid it knows
+      (set! (-> ev to) (the-as int (shr (-> self id) 24)))
+      (set! (-> ev iarg 0) (the-as int (logand (-> self id) #xffffff)))
       (set! (-> ev iarg 1) (if (and info (logtest? (attack-mask mode) (-> info mask)))
                                (mp-attack-mode-index (-> info mode))
                                0
@@ -479,9 +554,11 @@
         (cshape (new 'process 'collide-shape self (collide-list-enum usually-hit-by-player)))
         )
     (let ((prim (new 'process 'collide-shape-prim-sphere cshape (the-as uint 0))))
-      (set! (-> prim prim-core collide-as) (if vehicle?
-                                                (collide-spec obstacle)
-                                                (collide-spec enemy)
+      ;; props (Daxter, a gun) are only drawn
+      (set! (-> prim prim-core collide-as) (cond
+                                                ((logtest? (-> st flags) (mp-actor-flag prop)) (collide-spec))
+                                                (vehicle? (collide-spec obstacle))
+                                                (else (collide-spec enemy))
                                                 )
             )
       (set! (-> prim prim-core collide-with) (collide-spec))
@@ -582,6 +659,7 @@
     (dotimes (i (-> ws replica-count))
       (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
         (when (and proc
+                   (zero? (shr (-> proc id) 24))
                    (logtest? (-> proc net flags) (mp-actor-flag vehicle))
                    (not (logtest? (-> proc net flags) (mp-actor-flag hidden dead)))
                    )
@@ -615,7 +693,7 @@
     (when proc
       (let ((id (-> proc id)))
         (when (mp-get-vehicle-at (mp-vehicle-type-of-skel (-> proc net skel)) (-> proc root trans) (-> proc root quat))
-          (mp-send-event (mp-event-kind vehicle-taken) 0 (the-as int id) 0.0)
+          (mp-send-event (mp-event-kind vehicle-taken) (the-as int (shr id 24)) (the-as int (logand id #xffffff)) 0.0)
           (mp-replica-remove index)
           (return #t)
           )
@@ -681,8 +759,8 @@
   (none)
   )
 
-(defbehavior mp-world-client-update mp-manager ()
-  "Guest: keep our NPCs asleep and our traffic off, and draw the host's NPCs."
+(defbehavior mp-world-suppress mp-manager ()
+  "Guest: keep our NPCs asleep and our traffic off (the host's are shown instead)."
   (let ((ws *mp-world-state*))
     (when (not (-> ws traffic-off?))
       ;; settings belong to the process that sets them: the manager lives as long as the session
@@ -703,7 +781,13 @@
         )
       (iterate-process-tree *active-pool* (the-as (function object object) mp-suppress-actor) *null-kernel-context*)
       )
-    ;; the host's NPCs
+    )
+  (none)
+  )
+
+(defbehavior mp-world-receive mp-manager ()
+  "Draw the other players' objects (NPCs from the host, everyone's props) as replicas."
+  (let ((ws *mp-world-state*))
     (let ((count (pc-mp-get-actors (-> *mp-actors-in* state) MP_MAX_REPLICAS))
           (spawned 0)
           )
@@ -774,10 +858,13 @@
   "Shared world, once per unpaused frame."
   (case *mp-mode*
     (((mp-mode host))
-     (mp-world-host-update)
+     (mp-world-send)
+     (mp-world-receive)
      )
     (((mp-mode client))
-     (mp-world-client-update)
+     (mp-world-send)
+     (mp-world-suppress)
+     (mp-world-receive)
      )
     (else
       (if (or (> (-> *mp-world-state* replica-count) 0)
@@ -789,4 +876,297 @@
       )
     )
   (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Effects and projectiles
+;; ------------------------------------------------------------------------------------------------
+
+;; Every one-shot particle effect goes through part-tracker-init-base (generic-obs.gc), and every
+;; projectile through projectile-init-by-other (projectile.gc): both are wrapped to tell the other
+;; players, who start the same effect or fire the same projectile type. Each machine applies the
+;; damage of shots only to its own player (with its own copy of an NPC's shot), and the shooter's
+;; machine sends hits on other players' puppets and on replicas: copies of a player's shots are
+;; drawn only (they collide with the background alone).
+
+(deftype mp-fx-state (structure)
+  ((replaying?   symbol)     ;; spawning a copy: do not send it back
+   (frame        int64)      ;; frame of the counts below
+   (effects-sent int32)
+   (shots-sent   int32)
+   (recent-group sparticle-launch-group 8) ;; local effects just started, to skip duplicate copies
+   (recent-pos   vector 8 :inline)
+   (recent-time  time-frame 8)
+   (recent-next  int32)
+   (total-effects-sent int32)  ;; counters for the test log
+   (total-effects-shown int32)
+   (total-shots-sent int32)
+   (total-shots-shown int32)
+   )
+  )
+
+(define *mp-fx* (new 'global 'mp-fx-state))
+(set! (-> *mp-fx* replaying?) #f)
+
+(defun mp-fx-budget ((effect? symbol))
+  "At most 8 effects and 8 shots sent per frame."
+  (let ((fx *mp-fx*)
+        (frame (-> *display* real-frame-clock frame-counter))
+        )
+    (when (!= frame (-> fx frame))
+      (set! (-> fx frame) frame)
+      (set! (-> fx effects-sent) 0)
+      (set! (-> fx shots-sent) 0)
+      )
+    (cond
+      (effect?
+        (+! (-> fx effects-sent) 1)
+        (<= (-> fx effects-sent) 8)
+        )
+      (else
+        (+! (-> fx shots-sent) 1)
+        (<= (-> fx shots-sent) 8)
+        )
+      )
+    )
+  )
+
+(defun mp-under-replica? ((proc process-tree))
+  "#t when `proc` is a replica or puppet, or below one (their effects are replays already)."
+  (dotimes (i 6)
+    (cond
+      ((not proc)
+       (return #f)
+       )
+      ((or (type? proc mp-replica) (type? proc mp-puppet))
+       (return #t)
+       )
+      (else
+        (set! proc (ppointer->process (-> proc parent)))
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-part-group-index ((group sparticle-launch-group))
+  "Index of `group` in *part-group-id-table*, -1 when absent."
+  (dotimes (i (-> *part-group-id-table* length))
+    (if (= (-> *part-group-id-table* i) group)
+        (return i)
+        )
+    )
+  -1
+  )
+
+(defbehavior mp-effect-started part-tracker ((group sparticle-launch-group) (target process-drawable) (duration time-frame))
+  "A one-shot effect started here: remember it, and send it unless it is a copy or a replica's."
+  (let ((fx *mp-fx*)
+        (pos (if (and target (nonzero? (-> target root)))
+                 (-> target root trans)
+                 (-> self root trans)
+                 )
+             )
+        )
+    (when (not (-> fx replaying?))
+      (let ((i (-> fx recent-next)))
+        (set! (-> fx recent-group i) group)
+        (vector-copy! (-> fx recent-pos i) pos)
+        (set! (-> fx recent-time i) (mp-now))
+        (set! (-> fx recent-next) (logand (+ i 1) 7))
+        )
+      (when (and (mp-online?)
+                 (not (mp-under-replica? self))
+                 (not (and target (mp-under-replica? target)))
+                 (mp-near-a-player? pos)
+                 (mp-fx-budget #t)
+                 )
+        (let ((index (mp-part-group-index group)))
+          (when (>= index 0)
+            (let ((ev (new 'stack 'mp-event)))
+              (set! (-> ev kind) (mp-event-kind effect))
+              (set! (-> ev to) -1)
+              (set! (-> ev iarg 0) index)
+              (set! (-> ev iarg 1) (the-as int duration))
+              (vector-copy! (-> ev fvec) pos)
+              (pc-mp-send-event ev)
+              (+! (-> fx total-effects-sent) 1)
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-replay-effect ((ev mp-event))
+  "Start an effect another player saw start, unless an identical one just started here (the copy
+   of a shot makes its own impact)."
+  (let ((index (-> ev iarg 0))
+        (fx *mp-fx*)
+        )
+    (when (and (>= index 0) (< index (-> *part-group-id-table* length)))
+      (let ((group (-> *part-group-id-table* index)))
+        ;; a level's groups are empty while that level is not loaded here
+        (when (and (nonzero? group) (type? group sparticle-launch-group))
+          (dotimes (i 8)
+            (if (and (= (-> fx recent-group i) group)
+                     (< (- (mp-now) (-> fx recent-time i)) (seconds 0.5))
+                     (< (vector-vector-distance (-> fx recent-pos i) (-> ev fvec)) (meters 3))
+                     )
+                (return #f)
+                )
+            )
+          (set! (-> fx replaying?) #t)
+          (+! (-> fx total-effects-shown) 1)
+          (vector-copy! (-> *launch-matrix* trans) (-> ev fvec))
+          (if (logtest? (-> group flags) (sp-group-flag sp13))
+              (part-tracker-spawn part-tracker-subsampler :to *entity-pool* :group group :duration (the-as time-frame (-> ev iarg 1)))
+              (part-tracker-spawn part-tracker :to *entity-pool* :group group :duration (the-as time-frame (-> ev iarg 1)))
+              )
+          (set! (-> fx replaying?) #f)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-projectile-fired ((proj projectile) (params projectile-init-by-other-params))
+  "A projectile was fired here: send it when it is the local player's, or an NPC's on the host."
+  (when (and (mp-online?) (not (-> *mp-fx* replaying?)))
+    (let* ((owner (handle->process (-> params owner-handle)))
+           (shooter (if owner
+                        owner
+                        (ppointer->process (-> proj parent))
+                        )
+                    )
+           (mine? (mp-from-local-player? (the-as process shooter)))
+           )
+      (when (and (or mine?
+                     (and (= *mp-mode* (mp-mode host)) shooter (type? shooter process) (> (mp-actor-kind (the-as process shooter)) 0))
+                     )
+                 (mp-near-a-player? (-> params pos))
+                 (mp-fx-budget #f)
+                 )
+        (let ((ev (new 'stack 'mp-event)))
+          (set! (-> ev kind) (mp-event-kind projectile))
+          (set! (-> ev to) -1)
+          (vector-copy! (-> ev fvec) (-> params pos))
+          (set! (-> ev iarg 0) (the-as int (-> params vel x)))
+          (set! (-> ev iarg 1) (the-as int (-> params vel y)))
+          (set! (-> ev iarg 2) (the-as int (-> params vel z)))
+          (set! (-> ev iarg 3) (if mine?
+                                   -1
+                                   (logand (-> (the-as process shooter) pid) #xffffff)
+                                   )
+                )
+          (copyn-charp<-string (-> ev text) (symbol->string (-> proj type symbol)) 32)
+          (pc-mp-send-event ev)
+          (+! (-> *mp-fx* total-shots-sent) 1)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-replay-projectile ((ev mp-event))
+  "Fire the copy of another player's projectile, from that player's puppet or from the replica of
+   the NPC that fired it."
+  (let* ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+         (from (-> ev from))
+         (parent (cond
+                   ((not manager)
+                    #f
+                    )
+                   ((< (-> ev iarg 3) 0)
+                    (handle->process (-> manager puppets (max 0 (min from (+ MP_MAX_PLAYERS -1)))))
+                    )
+                   (else
+                     (let ((index (mp-replica-index (the-as uint (logior (shl from 24) (-> ev iarg 3))))))
+                       (if (>= index 0)
+                           (handle->process (-> *mp-world-state* replica index))
+                           )
+                       )
+                     )
+                   )
+                 )
+         )
+    (when parent
+      (string<-charp *mp-temp-string* (-> ev text))
+      (let ((typ (-> (string->symbol *mp-temp-string*) value)))
+        ;; the type is level code: it exists only when its level is loaded here
+        (when (and typ (type? typ type) (mp-inherits? (the-as type typ) 'projectile))
+          (let ((params (new 'stack 'projectile-init-by-other-params)))
+            (vector-copy! (-> params pos) (-> ev fvec))
+            (set! (-> params pos w) 1.0)
+            (set-vector!
+              (-> params vel)
+              (the-as float (-> ev iarg 0))
+              (the-as float (-> ev iarg 1))
+              (the-as float (-> ev iarg 2))
+              0.0
+              )
+            (set! (-> params target-handle) (the-as handle #f))
+            (set! (-> params ent) #f)
+            (set! (-> params charge) 1.0)
+            (set! (-> params attack-id) (new-attack-id))
+            (set! (-> params options) (projectile-options))
+            (set! (-> params notify-handle) (the-as handle #f))
+            (set! (-> params owner-handle) (process->handle (the-as process parent)))
+            (set! (-> params ignore-handle) (process->handle (the-as process parent)))
+            (set! (-> params timeout) (seconds 4))
+            (set! (-> params damage) 1.0)
+            (set! (-> params vehicle-damage-factor) 1.0)
+            (set! (-> params vehicle-impulse-factor) 1.0)
+            (set! (-> *mp-fx* replaying?) #t)
+            (+! (-> *mp-fx* total-shots-shown) 1)
+            (let ((proj (the-as projectile (ppointer->process (spawn-projectile (the-as type typ) params (the-as process-tree parent) *default-dead-pool*)))))
+              ;; a player's shot is only drawn: the shooter's machine sends its hits
+              (if (and proj (< (-> ev iarg 3) 0) (nonzero? (-> proj root)))
+                  (set! (-> proj root root-prim prim-core collide-with) (collide-spec backgnd))
+                  )
+              )
+            (set! (-> *mp-fx* replaying?) #f)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- wrap the stock entry points of effects and projectiles. define-perm keeps the
+;; stock function when this file is reloaded in a REPL session.
+(define-perm *mp-stock-part-tracker-init-base*
+             (function sparticle-launch-group time-frame (function part-tracker vector) uint process-drawable object none :behavior part-tracker)
+  part-tracker-init-base
+  )
+
+(defbehavior part-tracker-init-base part-tracker ((arg0 sparticle-launch-group)
+                                        (arg1 time-frame)
+                                        (arg2 (function part-tracker vector))
+                                        (arg3 uint)
+                                        (arg4 process-drawable)
+                                        (arg5 object)
+                                        )
+  "Stock behavior, then the other players see the effect too (multiplayer mod, no-op offline)."
+  (*mp-stock-part-tracker-init-base* arg0 arg1 arg2 arg3 arg4 arg5)
+  (if (nonzero? arg0)
+      (mp-effect-started arg0 arg4 arg1)
+      )
+  (none)
+  )
+
+(define-perm *mp-stock-projectile-init-by-other* (function projectile-init-by-other-params object :behavior projectile)
+  projectile-init-by-other
+  )
+
+(defbehavior projectile-init-by-other projectile ((arg0 projectile-init-by-other-params))
+  "The other players fire the same projectile (multiplayer mod, no-op offline), then the stock init,
+   which never returns (it goes to the projectile's first state)."
+  (mp-projectile-fired self arg0)
+  (*mp-stock-projectile-init-by-other* arg0)
   )

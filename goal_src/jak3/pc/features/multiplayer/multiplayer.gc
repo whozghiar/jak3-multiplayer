@@ -57,9 +57,13 @@
   (teleport 4)    ;; to a player or everyone: go to player iarg 0 (administration)
   (world 5)       ;; host to everyone: iarg 0 = mp-world-flag bits, fvec x = time of day
   (pvp 6)         ;; to a player: another player hit you, fvec xyz = attacker position, w = damage
-  (actor-hit 7)   ;; to the host: a guest hit the replica of NPC iarg 0 (pid); iarg 1 = attack mode
-                  ;; index, iarg 2-3 = penetrate-using, fvec xyz = attacker position, w = damage
+  (actor-hit 7)   ;; to an object's owner: the sender hit the replica of its object iarg 0 (pid);
+                  ;; iarg 1 = attack mode index, iarg 2-3 = penetrate-using, fvec w = damage
   (vehicle-taken 8) ;; to the host: a guest took NPC vehicle iarg 0 (pid) and drives its own copy
+  (effect 9)      ;; to everyone: a one-shot particle effect started; iarg 0 = group id, iarg 1 =
+                  ;; duration, fvec = position
+  (projectile 10) ;; to everyone: a projectile was fired; text = its type, fvec = position, iarg 0-2
+                  ;; = velocity (float bits), iarg 3 = owner pid, -1 for the sender's player
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -764,9 +768,7 @@
               )
             )
           )
-        (if (not (-> self local?))
-            (mp-puppet-update-ghost st shown?)
-            )
+        ;; the vehicle a remote player drives is drawn by its replica (multiplayer-world.gc)
         )
       )
     )
@@ -886,6 +888,10 @@
              (pc-mp-send-event ev)
              )
            )
+         )
+        ((type? attacker projectile)
+         ;; a shot (an NPC's, or a copy of another player's): each machine damages only its own
+         ;; player with its own copy of the shot, so the original is not forwarded
          )
         (else
           (mp-forward-hit (-> self slot))
@@ -1098,6 +1104,8 @@
 (define-extern mp-on-vehicle-taken (function mp-event none :behavior mp-manager))
 (define-extern mp-nearest-replica-vehicle (function vector int))
 (define-extern mp-take-replica-vehicle (function int symbol :behavior mp-manager))
+(define-extern mp-replay-effect (function mp-event none))
+(define-extern mp-replay-projectile (function mp-event none))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -1334,14 +1342,16 @@
              )
          )
         (((mp-event-kind actor-hit))
-         (if (= *mp-mode* (mp-mode host))
-             (mp-on-actor-hit ev)
-             )
+         (mp-on-actor-hit ev)
          )
         (((mp-event-kind vehicle-taken))
-         (if (= *mp-mode* (mp-mode host))
-             (mp-on-vehicle-taken ev)
-             )
+         (mp-on-vehicle-taken ev)
+         )
+        (((mp-event-kind effect))
+         (mp-replay-effect ev)
+         )
+        (((mp-event-kind projectile))
+         (mp-replay-projectile ev)
          )
         (((mp-event-kind pvp))
          (if (and *target* (logtest? *mp-world* (mp-world-flag pvp)))

@@ -1,0 +1,12 @@
+# Combat test, host side: takes the gun out and fires a few shots while the guest watches.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+55 gun
+57 log
+58 press r1 150
+59 press r1 150
+60 press r1 150
+60 screenshot firing
+62 log
