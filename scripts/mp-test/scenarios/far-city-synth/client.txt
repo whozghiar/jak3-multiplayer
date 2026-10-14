@@ -5,6 +5,8 @@
 45 join 127.0.0.1:7777
 52 log-levels
 53 continue ctyport-start
+66 announce-all-kinds
+72 announce-all-kinds
 78 log
 78 log-levels
 79 screenshot haven

@@ -17,8 +17,8 @@
 57.5 log-door
 60 log-door
 62 goto-elevator
+62.8 screenshot elevator-start
 63 log-elevator
 66 log-elevator
 69 log-elevator
-70 screenshot elevator
 72 log

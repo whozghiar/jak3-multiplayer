@@ -23,10 +23,12 @@
 ;;   log-tasks | close-task [n]                              story progress; close the first open node(s)
 ;;   log-sync                                                phase of a test cycle (host clock sync)
 ;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
+;;   ride-shown-elevator                                     once a trip of player 0 was shown here: stand by it
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
 ;;   far-levels <0|1>                                        load distant players' levels (default 1)
 ;;   synth-skels <0|1>                                       copies use the skeleton-groups rebuilt from descriptions
 ;;   log-art-kinds                                           every skeleton another player announced: drawable here?
+;;   announce-all-kinds | log-kinds-coverage                 describe every kind of our place; check those described
 ;;   log-shaders                                             texture shader lists intact, level heaps
 ;;   log-look <slot>                                         a player's color: model untinted, minimap, name marker
 ;;   log-copies <slot>                                       every object of a player received here, drawn or not
@@ -34,6 +36,7 @@
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
+(define-extern pc-mp-art-file-exists (function string symbol))
 (define-extern pc-mp-test-poll (function string symbol))
 (define-extern pc-mp-test-screenshot (function string none))
 (define-extern pc-mp-test-pad (function int int int none))
@@ -47,6 +50,15 @@
   )
 
 (define *mp-test* (new 'global 'mp-test-state))
+
+;; One-shot test steps.
+(deftype mp-test-misc (structure)
+  ((rode? symbol)  ;; ride-shown-elevator done
+   )
+  )
+
+(define *mp-test-misc* (new 'global 'mp-test-misc))
+(set! (-> *mp-test-misc* rode?) #f)
 (set! (-> *mp-test* line) (new 'global 'string 128 (the-as string #f)))
 (set! (-> *mp-test* word) (new 'global 'string 64 (the-as string #f)))
 
@@ -882,6 +894,20 @@
            (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
            )
          )
+        ((string= cmd "ride-shown-elevator")
+         ;; once this machine started an elevator trip because another player did (shown), stand
+         ;; 1 m beside player 0: on the elevator it rides, which this machine moves; once only
+         (let ((st (mp-remote-state 0)))
+           (when (and st *target* (> (-> *mp-world-state* elevator-trips-shown) 0) (not (-> *mp-test-misc* rode?)))
+             (set! (-> *mp-test-misc* rode?) #t)
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans))))
+               (+! (-> pos x) (meters 1))
+               (move-to-point! (-> *target* control) pos)
+               (format 0 "[mp-test] rides the elevator the host started~%")
+               )
+             )
+           )
+         )
         ((string= cmd "goto-player")
          ;; goto-player <slot> [x] [z]: stand that many meters from the player along x and z, else
          ;; next to it (teleport through its continue point when far)
@@ -1080,6 +1106,29 @@
         ((string= cmd "synth-skels")
          (set! *mp-synth-skels* (!= (mp-test-int) 0))
          )
+        ((string= cmd "announce-all-kinds")
+         ;; describe every kind of object of our place to the others (art-level and skel-def)
+         (mp-note-all-kinds)
+         (format 0 "[mp-test] kinds of this place noted ~D~%" (-> *mp-art-out* count))
+         )
+        ((string= cmd "log-kinds-coverage")
+         ;; every kind another player described: complete description, art group file here
+         (let ((defs *mp-skel-defs*)
+               (complete 0)
+               (files 0)
+               )
+           (dotimes (i (-> defs count))
+             (when (-> defs complete i)
+               (+! complete 1)
+               (if (pc-mp-art-file-exists (-> defs sg i art-group-name))
+                   (+! files 1)
+                   (format 0 "[mp-test] kind ~S: no art file ~S-ag.go~%" (-> defs sg i name) (-> defs sg i art-group-name))
+                   )
+               )
+             )
+           (format 0 "[mp-test] kinds described ~D complete ~D art files ~D~%" (-> defs count) complete files)
+           )
+         )
         ((string= cmd "log-art-kinds")
          ;; every skeleton another player announced (art-level): can it be drawn here (its group,
          ;; ours or rebuilt, and its art group)?
@@ -1091,10 +1140,13 @@
                     (sg (the-as skeleton-group (mp-art-group-get name (the-as (pointer level) #f))))
                     (art (and sg (type? sg skeleton-group) (mp-art-group-get (-> sg art-group-name) (the-as (pointer level) #f))))
                     )
-               (format 0 "[mp-test] kind ~S group ~A rebuilt ~A art ~A~%" name (if sg #t #f) (if (mp-skel-def-get name) #t #f) (if art #t #f))
-               (if art
-                   (+! ok 1)
-                   )
+               ;; drawable: its group here (ours or rebuilt) and its art loaded or loadable alone
+               (let ((loadable (and sg (type? sg skeleton-group) (or art (pc-mp-art-file-exists (-> sg art-group-name))))))
+                 (format 0 "[mp-test] kind ~S group ~A rebuilt ~A art ~A loadable ~A~%" name (if sg #t #f) (if (mp-skel-def-get name) #t #f) (if art #t #f) (if loadable #t #f))
+                 (if loadable
+                     (+! ok 1)
+                     )
+                 )
                )
              )
            (format 0 "[mp-test] kinds announced ~D drawable ~D groups rebuilt ~D~%" (-> tbl count) ok (-> *mp-skel-defs* rebuilt))

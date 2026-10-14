@@ -3692,9 +3692,9 @@
 
 (deftype mp-art-table (structure)
   ((count       int32)
-   (skel        symbol 64)  ;; skeleton name, interned
-   (level       symbol 64)  ;; the level whose art array holds its art group
-   (sent        symbol 64)
+   (skel        symbol 160) ;; skeleton name, interned
+   (level       symbol 160) ;; the level whose art array holds its art group
+   (sent        symbol 160)
    (time        time-frame)
    (tried       symbol 32)  ;; receiver: art groups loaded or tried with this far level
    (tried-count int32)
@@ -3741,13 +3741,70 @@
           (return 0)
           )
       )
-    (when (< (-> tbl count) 64)
+    (when (< (-> tbl count) 160)
       (let ((lev (mp-level-of-art (-> proc draw art-group))))
         (when lev
           (set! (-> tbl skel (-> tbl count)) name)
           (set! (-> tbl level (-> tbl count)) (-> lev name))
           (set! (-> tbl sent (-> tbl count)) #f)
           (+! (-> tbl count) 1)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-note-all-kinds ()
+  "Note every skeleton-group of the levels of our place (not the far ones) for mp-send-art: the
+   others then know every kind of object this place can send, not only those sent so far."
+  (let ((tbl *mp-art-out*))
+    (dotimes (i (-> *level* length))
+      (let ((lev (-> *level* level i)))
+        (when (and (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
+                   (not (mp-far-name? (-> lev name)))
+                   )
+          (let ((arr (-> lev art-group art-group-array)))
+            (dotimes (k (-> arr length))
+              (let ((sg (-> arr k)))
+                ;; a kind whose art is loaded here: one this place can show (a skeleton-group whose art
+                ;; the game never ships, defined in code all the same, is not one)
+                (when (and sg
+                           (type? sg skeleton-group)
+                           (< (-> tbl count) 160)
+                           (mp-art-group-get (-> (the-as skeleton-group sg) art-group-name) (the-as (pointer level) #f))
+                           )
+                  (let ((name (string->symbol (-> sg name)))
+                        (known? #f)
+                        )
+                    (dotimes (j (-> tbl count))
+                      (if (= (-> tbl skel j) name)
+                          (set! known? #t)
+                          )
+                      )
+                    (when (not known?)
+                      (set! (-> tbl skel (-> tbl count)) name)
+                      ;; its art group's level (a borrow level may hold the art of its host's group)
+                      (let* ((ag (mp-art-group-get (-> (the-as skeleton-group sg) art-group-name) (the-as (pointer level) #f)))
+                             (art-lev (if ag
+                                          (mp-level-of-art ag)
+                                          )
+                                      )
+                             )
+                        (set! (-> tbl level (-> tbl count)) (if art-lev
+                                                                (-> art-lev name)
+                                                                (-> lev name)
+                                                                )
+                              )
+                        )
+                      (set! (-> tbl sent (-> tbl count)) #f)
+                      (+! (-> tbl count) 1)
+                      )
+                    )
+                  )
+                )
+              )
+            )
           )
         )
       )
@@ -3808,7 +3865,7 @@
               (set! slot i)
               )
           )
-        (when (and (< slot 0) (< (-> tbl count) 64))
+        (when (and (< slot 0) (< (-> tbl count) 160))
           (set! slot (-> tbl count))
           (+! (-> tbl count) 1)
           )
@@ -3927,9 +3984,9 @@
 
 (deftype mp-skel-defs (structure)
   ((count    int32)
-   (name     symbol 32)
-   (sg       skeleton-group 32) ;; rebuilt groups, allocated once each
-   (complete symbol 32)
+   (name     symbol 160)
+   (sg       skeleton-group 160) ;; rebuilt groups, allocated once each
+   (complete symbol 160)
    (current  int32)             ;; entry the parts being received fill
    (rebuilt  int32)             ;; counter for the test log
    )
@@ -4006,7 +4063,7 @@
                (set! slot i)
                )
            )
-         (when (and (< slot 0) (< (-> defs count) 32))
+         (when (and (< slot 0) (< (-> defs count) 160))
            (set! slot (-> defs count))
            (set! (-> defs name slot) name)
            (set! (-> defs complete slot) #f)

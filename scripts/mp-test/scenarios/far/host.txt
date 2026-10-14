@@ -6,6 +6,7 @@
 1 color 1
 38 host 0.0.0.0:7777
 52 log
+56 announce-all-kinds
 52 log-levels
 52 log-shaders
 62 log-levels

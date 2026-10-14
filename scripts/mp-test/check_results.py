@@ -283,14 +283,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
     elif scenario == "world-objects":
         hs = unwrap([(float(t), float(p)) for t, p in grab(host, r"sync t (\d+(?:\.\d+)?) phase " + NUM)])
         gs = [(float(t), float(p)) for t, p in grab(client, r"sync t (\d+(?:\.\d+)?) phase " + NUM)]
-        diffs = []
+        # the samples are 250 ms apart; a frame that runs late is stamped late while the game clock,
+        # which moves per frame, did not move further: one frame of tolerance plus that lateness
+        diffs, over = [], []
+        prev = None
         for t, p in gs:
             ref = interp(hs, t)
+            late = max(0.0, (t - prev) - 250.0) if prev is not None else 0.0
+            prev = t
             if ref is not None:
                 d = abs(p - ref) % 1.0
-                diffs.append(min(d, 1.0 - d) * 4000.0)  # 4 s cycle -> ms
-        c.check(scenario, "cycles in phase with the host", bool(diffs) and max(diffs) <= 17,
-                f"largest {max(diffs):.0f} ms over {len(diffs)} samples" if diffs else "no sample at the same moment")
+                ms = min(d, 1.0 - d) * 4000.0  # 4 s cycle -> ms
+                diffs.append(ms)
+                if ms > 17 + late:
+                    over.append(round(ms))
+        c.check(scenario, "cycles in phase with the host", bool(diffs) and not over,
+                f"largest {max(diffs):.0f} ms over {len(diffs)} samples (one frame, plus a late frame's lateness), "
+                f"beyond {over}" if diffs else "no sample at the same moment")
         doors = grab(client, r"door aid \d+ state (\w+) at " + NUM)
         c.check(scenario, "the door at the host opens on the guest", bool(doors) and doors[0][0] != "open" and doors[-1][0] == "open",
                 f"{[d[0] for d in doors]}")
@@ -335,6 +344,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the host lets it go when the guest is back", bool(last) and last[-1][0] == "#f", f"{last[-1] if last else None}")
         broken = grab(host, r"shader links \d+ broken (\d+)")
         c.check(scenario, "texture shader lists intact", bool(broken) and all(b == "0" for (b,) in broken), f"broken {broken}")
+        kinds = grab(client, r"kinds announced (\d+) drawable (\d+) groups rebuilt (\d+)")
+        cov = grab(client, r"kinds described (\d+) complete (\d+) art files (\d+)")
+        c.check(scenario, "every kind of the host's place can be drawn by the far guest",
+                bool(kinds) and int(kinds[-1][0]) >= 10 and kinds[-1][0] == kinds[-1][1]
+                and bool(cov) and cov[-1][0] == cov[-1][1] == cov[-1][2],
+                f"{kinds[-1][1] if kinds else None} of {kinds[-1][0] if kinds else None} kinds drawable; "
+                f"{cov[-1][0] if cov else None} described, {cov[-1][2] if cov else None} art files")
 
     elif scenario in ("far-city", "far-city-synth"):
         far = grab(host, r"far level ctywide loads \d+ drops \d+ restored (\d+)")
@@ -363,6 +379,11 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(kinds) and int(kinds[-1][0]) > 0 and kinds[-1][0] == kinds[-1][1],
                 f"{kinds[-1][1] if kinds else None} of {kinds[-1][0] if kinds else None} kinds drawable, "
                 f"{kinds[-1][2] if kinds else None} skeleton-groups rebuilt from the guest's descriptions")
+        cov = grab(host, r"kinds described (\d+) complete (\d+) art files (\d+)")
+        c.check(scenario, "every kind of the guest's place described and its art file here",
+                bool(cov) and int(cov[-1][0]) >= 20 and cov[-1][0] == cov[-1][1] == cov[-1][2],
+                f"{cov[-1][0] if cov else None} kinds described, {cov[-1][1] if cov else None} complete, "
+                f"{cov[-1][2] if cov else None} art files present")
         if scenario == "far-city-synth":
             c.check(scenario, "copies built from rebuilt skeleton-groups (code in no level here)",
                     bool(kinds) and int(kinds[-1][2]) > 0, f"{kinds[-1][2] if kinds else None} groups rebuilt, all copies built from them")

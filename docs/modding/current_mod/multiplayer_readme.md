@@ -219,8 +219,9 @@ the union. Host setting **Share story progress** (on by default).
 - **Level heap below 256 MB.** The texture page dir links the shaders of each texture by address
   divided by 16 in 24 bits (`shader-ptr`): a level above 256 MB breaks the lists, and the next
   level unload crashes or hangs (`log-shaders`: 44 broken links in Spargus with the master-dev
-  multiplier of 15). `DEBUG_LEVEL_HEAP_MULT` is 12 here: the heap ends near `#xf400000`, 0 broken
-  links. This was likely the cause of the earlier crashes at a level unload.
+  multiplier of 15). `DEBUG_LEVEL_HEAP_MULT` is 12 here (and on master-dev since 3e47edcc6): the
+  heap ends near `#xf400000`, 0 broken links. This was likely the cause of the earlier crashes at
+  a level unload.
 - **Levels leaving.** A level that leaves kills its entities and their effects, then its memory is
   reused. Before that (`level` `deactivate`, wrapped; `unload!` calls it, also for a level only
   loaded), the copies drawn with its art, the part-trackers on copies playing its particle groups
@@ -402,9 +403,11 @@ A script line is `<seconds> <command>`:
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load distant players' levels (default 1); 0 for a counter-test. |
 | `synth-skels <0\|1>` | Copies use the skeleton-groups rebuilt from their sender's description, even when the code defining ours is loaded (the path of a group whose code is in no level here). |
-| `log-art-kinds` | Every kind of object (skeleton) another player announced: its group (ours or rebuilt), its art group, drawable here or not. |
+| `log-art-kinds` | Every kind of object (skeleton) another player announced: its group (ours or rebuilt), its art group loaded or loadable alone, drawable here or not. |
+| `announce-all-kinds`, `log-kinds-coverage` | Describe to the others every kind of object of our place (every skeleton-group whose art is loaded here); count the kinds another player described, complete, with their art group file here. |
+| `ride-shown-elevator` | Once this machine started an elevator trip because player 0 did, stand beside player 0 on it (once). |
 
-Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 156 checks passed, 0 failed, 21 scenarios):
+Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 159 checks passed, 0 failed, 21 scenarios):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -421,10 +424,11 @@ Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcan
 | `pose-all` | Every object type at the same moment: the player's model, NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each (122 for the player, on foot then driving), three runs: the player's model median 0.7 to 0.8 mm, largest 1.6 to 1.8 mm; a running NPC whose bones move 37 to 54 mm per frame, median 0.8 to 1.2 mm, largest 1.2 to 2.7 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). Two joints of the driver once read 1.5 m off: their matrix had `w` 0.9992 and the log read the translation alone, at 9.2 million units from the origin; the pose sent was right (traced in the runtime), the log now takes `w` in. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority, distant players and their levels | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there. The host loads the guest's `wascityb` in the free top of `wascitya`'s heap, not displayed (`far #t`, 2 entries put back by the sandbox); the guest loads the host's `wascitya` in `waswide`'s heap (10 put back) and, back next to the host, unloads that copy and loads `wascitya` as its own. No crash at any of these unloads; `log-shaders`: 0 broken links. The error "object #x147d21 is not a valid object" printed when the guest's `wascityb` unloads is the stock game's: it appears with `far-levels 0` too. |
+| `far-city`, `far` (kinds) | Every kind of object of a place, not only those passing by | The guest in Haven describes all 24 kinds whose art its levels hold (`announce-all-kinds`): the host has 24 described, complete, with their art file, all drawable. The host in Spargus describes its 65: the guest, far away, can draw all 65. (Skeleton-groups whose art no level ships, such as `mhcity-grunt-egg-a`, are no kind of object a player can see.) |
 | `far-city-synth` | Objects whose code is in no level here | The same as `far-city`, the host building every copy from the skeleton-groups the guest describes (`synth-skels 1`): 9 groups rebuilt, every kind the guest announced drawable (`log-art-kinds`), every object it draws drawn. |
 | `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps, and draws the guest's guards, cars and bikes from them (1 to 6 depending on who passes by; `log-copies 1` shows each object, drawn or not, and whether its skeleton and art group are loaded here). Every object the guest draws is drawn here, the parked traffic the guest hides is hidden here too: the boats (`ctyport`) and citizens (`ctypepa`), whose levels do not fit, from their art groups loaded alone (`far art loaded 2, failed 0`) with the renderer keeping `ctyport` and `ctypepa`. Back in Spargus, the four levels unload cleanly. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
-| `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
+| `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within one frame (16 ms; 39 ms in the last run, where one guest frame came 273 ms late). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1", "sent 0"); the guest then jumps beside the host on the elevator its own machine moves and rides up with it (screenshots: the guest in the street, then in the shaft). |
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
 | `float` | Physics objects | The volcano's lava platforms, 270 m from both players: at the same stamp, the guest's are within 7 cm in height and 0.002 in tilt of the host's (they were 2.25 s out of phase before). |
 | `float-weight` | A player standing on a remote-driven platform | The guest stands on a lava platform its machine moves where the host's is: carried 18 m in 2 s with it; each machine sends the other player's weight to its platform (counters); both slide into the lava as the platform sinks, as in the stock game. |
@@ -438,6 +442,7 @@ Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcan
 | ![A guest far from the host, in its own world](multiplayer-screenshots/far-own-world.jpg) | ![The host's view of the guest, blue marker, model not tinted](multiplayer-screenshots/pvp-host-view.jpg) |
 | ![The host firing, as the guest sees it](multiplayer-screenshots/remote-firing.jpg) | ![Both players at the volcano](multiplayer-screenshots/volcano-together.jpg) |
 | ![A cutscene on the host](multiplayer-screenshots/scene-host.jpg) | ![The same cutscene on the guest](multiplayer-screenshots/scene-guest.jpg) |
+| ![The guest in the street before the host starts the elevator](multiplayer-screenshots/elevator-guest-before.jpg) | ![The guest carried up the shaft by the elevator the host started](multiplayer-screenshots/elevator-guest-riding.jpg) |
 
 The screenshots above come from the last round of scenarios (`out/mp-test/<scenario>/screenshots`),
 except `far-own-world`, `npc-*`, `remote-*` (aiming, gun and Daxter) and `vehicle-*`.
@@ -462,6 +467,11 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-14:** every kind of object of a place checked, not only those passing by: test
+  commands `announce-all-kinds` and `log-kinds-coverage` (`pc-mp-art-file-exists`), art and
+  skeleton tables raised to 160 kinds (24 of 24 in Haven, 65 of 65 in Spargus). Test command
+  `ride-shown-elevator`: the guest rides the elevator the host started, with screenshots. The
+  cycles check allows a late frame's lateness.
 - **2026-10-14:** skeleton-groups described by their sender (`skel-def` event) and rebuilt when
   their code is in no level here: a copy needs no code. Scenario `far-city-synth`, test commands
   `synth-skels`, `log-art-kinds`; every kind a distant player announced is checked drawable.

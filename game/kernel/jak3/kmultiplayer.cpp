@@ -1741,6 +1741,14 @@ void pc_mp_sandbox_end() {
   sb.types = {};
 }
 
+// (pc-mp-art-file-exists name) -> #t when the art group file out/jak3/obj/<name>-ag.go is there
+// (what loado reads for an art group loaded alone).
+u64 pc_mp_art_file_exists(u32 name) {
+  auto path =
+      file_util::get_jak_project_dir() / "out" / "jak3" / "obj" / (goal_string(name) + "-ag.go");
+  return to_symbol(fs::exists(path));
+}
+
 // (pc-mp-render-level name add?): add or remove a level whose renderer data is kept for the
 // models of a distant player's objects (mp::extra_render_levels); "" with #f clears the list.
 void pc_mp_render_level(u32 name, u32 add) {
@@ -1826,6 +1834,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-sandbox-restore", (void*)pc_mp_sandbox_restore);
   make_function_symbol_from_c("pc-mp-sandbox-end", (void*)pc_mp_sandbox_end);
   make_function_symbol_from_c("pc-mp-render-level", (void*)pc_mp_render_level);
+  make_function_symbol_from_c("pc-mp-art-file-exists", (void*)pc_mp_art_file_exists);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);
