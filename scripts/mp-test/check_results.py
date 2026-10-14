@@ -344,20 +344,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         # what the guest sends depends on who walks by in Haven: every object whose art is loaded
         # here (the far levels included) must be drawn; the others are counted
         # per object, its last listing (an object listed once may have just arrived, its copy is made
-        # within a few frames)
+        # within a few frames); every object the guest draws must be drawn here, its art loaded with
+        # the far levels or alone
         last: dict[str, tuple] = {}
         seen: dict[str, int] = {}
         for sk, oid, hides, drawn, art in grab(host, r"\] copy 1 (skel-\S+) id (\d+) owner-hides (\S+) drawn (\S+) art (\S+)"):
             last[oid] = (sk, drawn, art, hides)
             seen[oid] = seen.get(oid, 0) + 1
         steady = {k: v for k, v in last.items() if seen[k] >= 2}
-        drawable = {k: v for k, v in steady.items() if v[2] == "#t" and v[3] != "#t"}
-        hidden = sum(v[3] == "#t" for v in steady.values())
-        missing = sorted(set(v[0] for v in steady.values() if v[2] != "#t"))
-        c.check(scenario, "every guest object it draws, with its art loaded here, is drawn",
-                bool(steady) and all(v[1] == "#t" for v in drawable.values()),
-                f"{sum(v[1] == '#t' for v in drawable.values())} of {len(drawable)} drawn; hidden by the guest {hidden}; "
-                f"without their art here {sum(v[2] != '#t' for v in steady.values())} {missing}")
+        shown = {k: v for k, v in steady.items() if v[3] != "#t"}
+        missing = sorted(set(v[0] for v in shown.values() if v[1] != "#t"))
+        c.check(scenario, "every guest object it draws is drawn here", bool(shown) and not missing,
+                f"{sum(v[1] == '#t' for v in shown.values())} of {len(shown)} drawn "
+                f"({sorted(set(v[0] for v in shown.values()))}); hidden by the guest "
+                f"{len(steady) - len(shown)}; not drawn {missing}")
+        art = grab(host, r"far art loaded (\d+) failed (\d+)")
+        c.check(scenario, "art groups loaded alone without failure", bool(art) and art[-1][1] == "0",
+                f"loaded {art[-1][0] if art else None}, failed {art[-1][1] if art else None}")
         haven = grab(host, r"replica pos \S+ \S+ \S+ draw \S+ level (cty\w+)")
         c.check(scenario, "Haven objects drawn from the far levels", len(haven) >= 1, f"{len(haven)} drawn from {sorted(set(x for (x,) in haven))}")
         last = grab(host, r"far level (\S+) loads")

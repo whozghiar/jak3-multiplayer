@@ -1108,6 +1108,13 @@
            )
          (format
            0
+           "[mp-test] far art loaded ~D failed ~D, art levels known ~D~%"
+           (-> *mp-art-in* loaded)
+           (-> *mp-art-in* failed)
+           (-> *mp-art-in* count)
+           )
+         (format
+           0
            "[mp-test] far borrows ~A ~A ~A ~A ~A~%"
            (-> *mp-far* borrows 0)
            (-> *mp-far* borrows 1)

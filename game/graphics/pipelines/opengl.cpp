@@ -47,9 +47,11 @@
 
 constexpr bool run_dma_copy = false;
 
+// MOD multiplayer -- Jak 3 keeps 8 more: renderer data of a distant player's models
+// (mp::extra_render_levels, game/kernel/jak3/kmultiplayer.h)
 constexpr PerGameVersion<int> fr3_level_count(jak1::LEVEL_TOTAL,
                                               jak2::LEVEL_TOTAL,
-                                              jak3::LEVEL_TOTAL,
+                                              jak3::LEVEL_TOTAL + 8,
                                               jakx::LEVEL_TOTAL);
 
 struct GraphicsData {

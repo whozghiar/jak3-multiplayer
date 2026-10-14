@@ -199,6 +199,16 @@ the union. Host setting **Share story progress** (on by default).
     loads like any of ours), or no player stands in that place any more. Leaving, the texture
     lists keep none of its shaders: a page it used without loading it would keep a list in its
     memory, which the next level there would corrupt (a list looping forever in testing).
+  - *Art loaded alone:* the levels of another place that hold its objects' art do not all fit in
+    the 10 level slots next to our own place's (Haven's cars, guards, citizens and boats each come
+    from a level of their own), nor in the renderer's 11. For an object whose skeleton is known
+    here (its code is in the far level) but whose art is not, its art group alone is loaded by
+    name (`loado`, `out/jak3/obj/<name>-ag.go`) into the far level's memory, inside the sandbox,
+    and listed with that level's art; the renderer keeps the data of the level its model comes
+    from (`pc-mp-render-level`, `fr3`, its cap raised by 8 for Jak 3), which the sender names
+    (`art-level` event: for each skeleton it sends, the level whose art array holds it). It all
+    goes with the far level. In `far-city`, Haven's boats (`ctyport`) and citizens (`ctypepa`)
+    are drawn in Spargus this way.
   - The player's own model is resident and drawn wherever it stands.
 - **Level heap below 256 MB.** The texture page dir links the shaders of each texture by address
   divided by 16 in 24 bits (`shader-ptr`): a level above 256 MB breaks the lists, and the next
@@ -240,6 +250,8 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/game.gd` | The four mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o` and `jak-indax+0-ag.go`. |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514` and `#x1520`-`#x1529` for the start menu labels. |
+| `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
+| `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`). |
 | `goal_src/jak3/engine/level/level.gc` | `*mp-far-level-hook*`, called by `load-begin` before its bank search (a distant player's level takes no bank); `DEBUG_LEVEL_HEAP_MULT` 15 to 12 (level heap below 256 MB, 1.6). |
 | `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
 
@@ -384,7 +396,7 @@ A script line is `<seconds> <command>`:
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load distant players' levels (default 1); 0 for a counter-test. |
 
-Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 141 checks passed, 0 failed):
+Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 142 checks passed, 0 failed):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -401,7 +413,7 @@ Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcan
 | `pose-all` | Every object type at the same moment: the player's model, NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each (122 for the player, on foot then driving), three runs: the player's model median 0.7 to 0.8 mm, largest 1.6 to 1.8 mm; a running NPC whose bones move 37 to 54 mm per frame, median 0.8 to 1.2 mm, largest 1.2 to 2.7 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). Two joints of the driver once read 1.5 m off: their matrix had `w` 0.9992 and the log read the translation alone, at 9.2 million units from the origin; the pose sent was right (traced in the runtime), the log now takes `w` in. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority, distant players and their levels | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there. The host loads the guest's `wascityb` in the free top of `wascitya`'s heap, not displayed (`far #t`, 2 entries put back by the sandbox); the guest loads the host's `wascitya` in `waswide`'s heap (10 put back) and, back next to the host, unloads that copy and loads `wascitya` as its own. No crash at any of these unloads; `log-shaders`: 0 broken links. The error "object #x147d21 is not a valid object" printed when the guest's `wascityb` unloads is the stock game's: it appears with `far-levels 0` too. |
-| `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps, and draws the guest's guards, cars and bikes from them (1 to 6 depending on who passes by; `log-copies 1` shows each object, drawn or not, and whether its skeleton and art group are loaded here). Every object the guest draws whose art is loaded here is drawn, the parked traffic the guest hides is hidden here too; the barges (`ctyport`) and citizens (`ctypepa`, `ctypepb`) are not: those levels are not loaded, the host keeps a level slot for its own place. Back in Spargus, the four levels unload cleanly. |
+| `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps, and draws the guest's guards, cars and bikes from them (1 to 6 depending on who passes by; `log-copies 1` shows each object, drawn or not, and whether its skeleton and art group are loaded here). Every object the guest draws is drawn here, the parked traffic the guest hides is hidden here too: the boats (`ctyport`) and citizens (`ctypepa`), whose levels do not fit, from their art groups loaded alone (`far art loaded 2, failed 0`) with the renderer keeping `ctyport` and `ctypepa`. Back in Spargus, the four levels unload cleanly. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
 | `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
@@ -414,18 +426,24 @@ Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcan
 | ![Remote player with gun and Daxter](multiplayer-screenshots/remote-gun-daxter.jpg) | ![A guest's punch on a host NPC](multiplayer-screenshots/npc-hit.jpg) |
 | ![Steal prompt next to the host's buggy](multiplayer-screenshots/vehicle-prompt.jpg) | ![The host after the steal](multiplayer-screenshots/vehicle-stolen.jpg) |
 | ![Riding as passenger](multiplayer-screenshots/passenger.jpg) | ![The host aiming its gun, as the guest sees it](multiplayer-screenshots/remote-aiming.jpg) |
-| ![A guest far from the host, in its own world](multiplayer-screenshots/far-own-world.jpg) | |
+| ![A guest far from the host, in its own world](multiplayer-screenshots/far-own-world.jpg) | ![The host's view of the guest, blue marker, model not tinted](multiplayer-screenshots/pvp-host-view.jpg) |
+| ![The host firing, as the guest sees it](multiplayer-screenshots/remote-firing.jpg) | ![Both players at the volcano](multiplayer-screenshots/volcano-together.jpg) |
+| ![A cutscene on the host](multiplayer-screenshots/scene-host.jpg) | ![The same cutscene on the guest](multiplayer-screenshots/scene-guest.jpg) |
+
+The screenshots above come from the last round of scenarios (`out/mp-test/<scenario>/screenshots`),
+except `far-own-world`, `npc-*`, `remote-*` (aiming, gun and Daxter) and `vehicle-*`.
 
 Over the Internet, the host forwards TCP port 7777 (or the port chosen) and guests use the host's
 public IP.
 
 ## 6. Known limits
 
-- A distant player's place (1.6): one level and its borrow levels at a time, from the player
-  nearest in the player list; another sub-level of that place (Haven's `ctyport`) is not loaded,
-  so the objects whose art only lives there are not drawn. Our own place keeps a level slot, and
-  any load of ours lets the distant levels go first. Their sounds stay silent (sound banks follow
-  our place).
+- A distant player's place (1.6): one place at a time (one far level, its borrow levels, art
+  groups loaded alone). An object whose skeleton is defined by code that is in none of the levels
+  loaded here cannot be drawn (art is loaded alone, code is not); none was met in testing. Our own
+  place keeps a level slot, and any load of ours lets the distant levels go first. Their sounds
+  stay silent (sound banks follow our place). Art groups are read from `out/jak3/obj`, which a
+  compiled install has.
 - Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
   128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
@@ -437,6 +455,10 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-14:** art groups loaded alone for a distant player's objects whose levels do not fit
+  (`art-level` event, `loado` into the far level's memory inside the sandbox, the renderer keeping
+  their levels' data, `pc-mp-render-level`, 8 more renderer levels for Jak 3): every object a
+  distant player draws is drawn. Test runner: vsync off, real controllers left out.
 - **2026-10-14:** every scenario checked by `scripts/mp-test/check_results.py` (one PASS or FAIL
   per feature). Test commands `log-look` (the color marker, model not tinted), `log-copies`
   (every object received, drawn, art loaded here), `log` counts the hits taken from players and

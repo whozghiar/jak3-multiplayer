@@ -1353,6 +1353,11 @@ TestPad g_test_pad;
 // scripts/mp-test/run_mp_test.py.
 // ---------------------------------------------------------------------------------------------
 
+std::vector<std::string>& extra_render_levels() {
+  static std::vector<std::string> levels;
+  return levels;
+}
+
 namespace test {
 struct Step {
   double at_ms;
@@ -1736,6 +1741,27 @@ void pc_mp_sandbox_end() {
   sb.types = {};
 }
 
+// (pc-mp-render-level name add?): add or remove a level whose renderer data is kept for the
+// models of a distant player's objects (mp::extra_render_levels); "" with #f clears the list.
+void pc_mp_render_level(u32 name, u32 add) {
+  auto level = goal_string(name);
+  auto& levels = mp::extra_render_levels();
+  bool on = add != s7.offset;
+  if (level.empty()) {
+    if (!on) {
+      levels.clear();
+    }
+    return;
+  }
+  auto it = std::find(levels.begin(), levels.end(), level);
+  if (on && it == levels.end() && levels.size() < 8) {
+    levels.push_back(level);
+    lg::info("[multiplayer] the renderer keeps {} for a distant player's models", level);
+  } else if (!on && it != levels.end()) {
+    levels.erase(it);
+  }
+}
+
 // (pc-mp-test-active?) -> #t when a test script drives this instance.
 u64 pc_mp_test_active() {
   return to_symbol(mp::test::script().loaded);
@@ -1799,6 +1825,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-sandbox-watch", (void*)pc_mp_sandbox_watch);
   make_function_symbol_from_c("pc-mp-sandbox-restore", (void*)pc_mp_sandbox_restore);
   make_function_symbol_from_c("pc-mp-sandbox-end", (void*)pc_mp_sandbox_end);
+  make_function_symbol_from_c("pc-mp-render-level", (void*)pc_mp_render_level);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);

@@ -303,6 +303,11 @@ extern TestPad g_test_pad;
 // Splits "ip:port". Returns false on a malformed address.
 bool parse_address(const std::string& address, std::string* ip, int* port);
 
+// Levels whose renderer data (fr3) is loaded although no level slot holds them: the models of a
+// distant player's objects whose art was loaded alone (pc-mp-render-level). pc_set_levels adds
+// them to the levels the renderer keeps.
+std::vector<std::string>& extra_render_levels();
+
 }  // namespace mp
 
 namespace jak3 {

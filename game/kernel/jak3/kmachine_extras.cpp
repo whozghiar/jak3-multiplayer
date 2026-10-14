@@ -14,6 +14,8 @@
 #include "game/kernel/common/kscheme.h"
 #include "game/overlord/jak3/iso_cd.h"
 
+#include "kmultiplayer.h"  // MOD multiplayer
+
 namespace jak3 {
 namespace kmachine_extras {
 AutoSplitterBlock g_auto_splitter_block_jak3;
@@ -165,6 +167,12 @@ void pc_set_levels(u32 lev_list) {
     std::string ls = Ptr<String>(lev).c()->data();
     if (ls != "none" && ls != "#f" && ls != "") {
       levels.push_back(ls);
+    }
+  }
+  // MOD multiplayer -- renderer data for the models of a distant player's objects
+  for (const auto& extra : mp::extra_render_levels()) {
+    if (std::find(levels.begin(), levels.end(), extra) == levels.end()) {
+      levels.push_back(extra);
     }
   }
 

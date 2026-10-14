@@ -79,6 +79,8 @@
 (define-extern pc-mp-sandbox-watch (function pointer int int none))
 (define-extern pc-mp-sandbox-restore (function uint uint int))
 (define-extern pc-mp-sandbox-end (function none))
+(define-extern pc-mp-render-level (function string symbol none))
+(define-extern mp-note-art (function skeleton-group process-drawable none))
 (define-extern pc-mp-get-actors (function (inline-array mp-actor-state) int int))
 (define-extern mp-player-count (function int)) ;; multiplayer-menu.gc
 
@@ -495,6 +497,7 @@
               )
           (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
           (copyn-charp<-string (-> st skel) (-> sg name) 32)
+          (mp-note-art sg proc)
           (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
           (+! *mp-collect-count* 1)
           (return #t)
@@ -747,6 +750,9 @@
 (define-extern mp-send-poses (function none))
 (define-extern mp-send-near-poses (function none))
 (define-extern mp-send-levels (function none))
+(define-extern mp-send-art (function none))
+(define-extern mp-far-fetch-art (function none))
+(define-extern mp-far-art-reset (function none))
 (define-extern mp-poll-elevator (function process object))
 (define-extern mp-update-remote-riders (function none))
 
@@ -786,9 +792,10 @@
         (mp-send-near-poses)
         )
     ;; the levels of our place, for the far levels of the others
-    (if (> (mp-player-count) 0)
-        (mp-send-levels)
-        )
+    (when (> (mp-player-count) 0)
+      (mp-send-levels)
+      (mp-send-art)
+      )
     )
   (none)
   )
@@ -3114,6 +3121,25 @@
     )
   )
 
+(defun mp-far-sandbox-begin ()
+  "Note our names and global tables before code of another place links (pc-mp-sandbox-*)."
+  (pc-mp-sandbox-begin)
+  (pc-mp-sandbox-watch (the-as pointer (&-> *part-id-table* data 0)) (-> *part-id-table* length) 4)
+  (pc-mp-sandbox-watch (the-as pointer (&-> *part-group-id-table* data 0)) (-> *part-group-id-table* length) 4)
+  (pc-mp-sandbox-watch
+    (the-as pointer (&-> *lightning-spec-id-table* data 0))
+    (-> *lightning-spec-id-table* length)
+    4
+    )
+  (pc-mp-sandbox-watch
+    (the-as pointer (&-> *texture-page-dir* entries 0 page))
+    (-> *texture-page-dir* length)
+    (&- (the-as pointer (-> *texture-page-dir* entries 1)) (the-as uint (-> *texture-page-dir* entries 0)))
+    )
+  (set! (-> *mp-far* sandbox?) #t)
+  (none)
+  )
+
 (defun mp-far-level-heap! ((lev level))
   "load-begin hook (*mp-far-level-hook*): when `lev` is the level wanted for a distant player, its
    heap is carved from the top of a host's heap (mp-far-host) and it becomes a borrow level of that
@@ -3144,20 +3170,7 @@
           ;; its code may take names of our levels: noted now, put back while it links
           (set! (-> *mp-far* lo) (the-as uint (-> heap base)))
           (set! (-> *mp-far* hi) (the-as uint (-> heap top-base)))
-          (pc-mp-sandbox-begin)
-          (pc-mp-sandbox-watch (the-as pointer (&-> *part-id-table* data 0)) (-> *part-id-table* length) 4)
-          (pc-mp-sandbox-watch (the-as pointer (&-> *part-group-id-table* data 0)) (-> *part-group-id-table* length) 4)
-          (pc-mp-sandbox-watch
-            (the-as pointer (&-> *lightning-spec-id-table* data 0))
-            (-> *lightning-spec-id-table* length)
-            4
-            )
-          (pc-mp-sandbox-watch
-            (the-as pointer (&-> *texture-page-dir* entries 0 page))
-            (-> *texture-page-dir* length)
-            (&- (the-as pointer (-> *texture-page-dir* entries 1)) (the-as uint (-> *texture-page-dir* entries 0)))
-            )
-          (set! (-> *mp-far* sandbox?) #t)
+          (mp-far-sandbox-begin)
           (+! (-> *mp-far* loads) 1)
           (format
             0
@@ -3185,6 +3198,10 @@
       (let* ((e (-> dir entries i))
              (link (the-as uint (-> e link)))
              )
+        ;; a page loaded in its memory (an art group loaded alone logs its pages in there)
+        (if (and (-> e page) (>= (the-as uint (-> e page)) lo) (< (the-as uint (-> e page)) hi))
+            (set! (-> e page) #f)
+            )
         (cond
           ((or (not (-> e link)) (zero? link))
            )
@@ -3273,6 +3290,9 @@
       (set! (-> *mp-far* sandbox?) #f)
       )
     (mp-far-unlink-textures (-> *mp-far* lo) (-> *mp-far* hi))
+    ;; the art groups loaded alone were in its memory, the renderer data they used goes
+    (pc-mp-render-level "" #f)
+    (mp-far-art-reset)
     (let ((host (-> *mp-far* host)))
       (when (and host (= (-> lev borrow-from-level) host))
         (set! (-> host heap top-base) (-> *mp-far* host-base))
@@ -3637,6 +3657,240 @@
         (mp-far-target-add ls want)
         )
     (mp-far-update-borrows ls free-slots)
+    (mp-far-fetch-art)
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Art of a distant player's objects
+;; ------------------------------------------------------------------------------------------------
+
+;; The levels of another place that hold the art of a distant player's objects do not all fit in
+;; the 10 level slots next to our own place's (Haven's cars, guards, citizens and boats each come
+;; from a level of their own; the renderer keeps 11 levels too). For an object whose skeleton is
+;; known here but whose art is not, its art group alone is loaded by name (out/jak3/obj/<name>.go)
+;; into the far level's memory, inside the sandbox, and listed with that level's art; the renderer
+;; keeps the data of the level its model comes from (pc-mp-render-level), which the sender names
+;; (art-level event). All of it goes with the far level.
+
+(deftype mp-art-table (structure)
+  ((count       int32)
+   (skel        symbol 64)  ;; skeleton name, interned
+   (level       symbol 64)  ;; the level whose art array holds its art group
+   (sent        symbol 64)
+   (time        time-frame)
+   (tried       symbol 32)  ;; receiver: art groups loaded or tried with this far level
+   (tried-count int32)
+   (fetch-time  time-frame)
+   (loaded      int32)      ;; counters for the test log
+   (failed      int32)
+   )
+  )
+
+(define *mp-art-out* (new 'global 'mp-art-table))
+(define *mp-art-in* (new 'global 'mp-art-table))
+
+(defun mp-far-art-reset ()
+  "The far level left: the art groups loaded alone went with it, they may be tried again."
+  (set! (-> *mp-art-in* tried-count) 0)
+  (none)
+  )
+
+(defun mp-level-of-art ((ag art-group))
+  "The loaded level whose art array holds `ag`, or #f."
+  (dotimes (i (-> *level* length))
+    (let ((lev (-> *level* level i)))
+      (when (!= (-> lev status) 'inactive)
+        (let ((arr (-> lev art-group art-group-array)))
+          (dotimes (k (-> arr length))
+            (if (= (-> arr k) ag)
+                (return lev)
+                )
+            )
+          )
+        )
+      )
+    )
+  (the-as level #f)
+  )
+
+(defun mp-note-art ((sg skeleton-group) (proc process-drawable))
+  "Sender: note the level holding the art of skeleton `sg` (sent by mp-send-art), once per skeleton."
+  (let ((tbl *mp-art-out*)
+        (name (string->symbol (-> sg name)))
+        )
+    (dotimes (i (-> tbl count))
+      (if (= (-> tbl skel i) name)
+          (return 0)
+          )
+      )
+    (when (< (-> tbl count) 64)
+      (let ((lev (mp-level-of-art (-> proc draw art-group))))
+        (when lev
+          (set! (-> tbl skel (-> tbl count)) name)
+          (set! (-> tbl level (-> tbl count)) (-> lev name))
+          (set! (-> tbl sent (-> tbl count)) #f)
+          (+! (-> tbl count) 1)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-send-art ()
+  "Sender: the levels of the skeletons noted and not sent yet, and all of them every 10 seconds for
+   players who join (art-level event)."
+  (let ((tbl *mp-art-out*))
+    (when (time-elapsed? (-> tbl time) (seconds 10))
+      (set-time! (-> tbl time))
+      (dotimes (i (-> tbl count))
+        (set! (-> tbl sent i) #f)
+        )
+      )
+    (let ((ev (new 'stack 'mp-event))
+          (n 0)
+          )
+      (dotimes (i (-> tbl count))
+        (when (and (not (-> tbl sent i)) (< n 4))
+          (set! (-> tbl sent i) #t)
+          (+! n 1)
+          (set! (-> ev kind) (mp-event-kind art-level))
+          (set! (-> ev to) -1)
+          (copyn-charp<-string (-> ev text) (symbol->string (-> tbl skel i)) 32)
+          (dotimes (k 4)
+            (set! (-> ev iarg k) 0)
+            )
+          (copyn-charp<-string (the-as (pointer uint8) (&-> ev iarg 0)) (symbol->string (-> tbl level i)) 16)
+          (pc-mp-send-event ev)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-art-level ((ev mp-event))
+  "Receiver: skeleton (text) has its art in level (iarg bytes) on the sender's side."
+  (let ((tbl *mp-art-in*))
+    (string<-charp (-> *mp-far* text) (-> ev text))
+    (let ((skel (string->symbol (-> *mp-far* text))))
+      (string<-charp (-> *mp-far* text) (the-as (pointer uint8) (&-> ev iarg 0)))
+      (let ((lvl (string->symbol (-> *mp-far* text)))
+            (slot -1)
+            )
+        (dotimes (i (-> tbl count))
+          (if (= (-> tbl skel i) skel)
+              (set! slot i)
+              )
+          )
+        (when (and (< slot 0) (< (-> tbl count) 64))
+          (set! slot (-> tbl count))
+          (+! (-> tbl count) 1)
+          )
+        (when (>= slot 0)
+          (set! (-> tbl skel slot) skel)
+          (set! (-> tbl level slot) lvl)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-load-art ((name string))
+  "Load art group `name` into the far level's memory and list it with that level's art, inside the
+   sandbox (its pages and links in there too, loading-level pointing at it). #t when loaded."
+  (let* ((lev (-> *mp-far* level))
+         (dir (-> lev art-group))
+         (arr (-> dir art-group-array))
+         (old-heap loading-level)
+         (old-print *print-login*)
+         (ag (the-as object #f))
+         )
+    (when (and (< (-> arr length) (-> arr allocated-length)) (< (-> dir string-array length) (-> dir string-array allocated-length)))
+      (mp-far-sandbox-begin)
+      (set! loading-level (-> lev heap))
+      ;; an art group loaded outside a level load logs itself in (joint.gc), which needs this
+      (set! *print-login* #t)
+      ;; the file of art group "barge" is out/jak3/obj/barge-ag.go
+      (format (clear (-> *mp-far* text)) "~S-ag" name)
+      (set! ag (loado (-> *mp-far* text) (-> lev heap)))
+      (set! loading-level old-heap)
+      (set! *print-login* old-print)
+      (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
+      (pc-mp-sandbox-end)
+      (set! (-> *mp-far* sandbox?) #f)
+      (cond
+        ((and ag (type? ag art-group))
+         (set! (-> arr (-> arr length)) (the-as art-group ag))
+         (+! (-> arr length) 1)
+         (set! (-> dir string-array (-> dir string-array length)) (-> (the-as art-group ag) name))
+         (+! (-> dir string-array length) 1)
+         (+! (-> *mp-art-in* loaded) 1)
+         (format 0 "[multiplayer] art group ~S loaded alone for a distant player~%" name)
+         #t
+         )
+        (else
+          (+! (-> *mp-art-in* failed) 1)
+          (format 0 "[multiplayer] art group ~S could not be loaded~%" name)
+          #f
+          )
+        )
+      )
+    )
+  )
+
+(defun mp-far-fetch-art ()
+  "While the far level is loaded and quiet: for one object of another player whose skeleton is known
+   here but not its art group, load that art group alone (mp-far-load-art) and keep the renderer
+   data of the level its sender names. One every half second."
+  (let ((lev (-> *mp-far* level))
+        (tbl *mp-art-in*)
+        )
+    (when (and lev
+               (= (-> lev status) 'loaded)
+               (not (-> *mp-far* sandbox?))
+               (not (load-in-progress? *level*))
+               (time-elapsed? (-> tbl fetch-time) (seconds 0.5))
+               )
+      (set-time! (-> tbl fetch-time))
+      (dotimes (i (-> *mp-actors-in* count))
+        (let ((st (-> *mp-actors-in* state i)))
+          (when (and (nonzero? (-> st id)) (< (mp-replica-index (-> st id)) 0))
+            (string<-charp *mp-temp-string* (-> st skel))
+            (let ((skel (string->symbol *mp-temp-string*))
+                  (sg (the-as skeleton-group (mp-art-group-get *mp-temp-string* (the-as (pointer level) #f))))
+                  )
+              (when (and sg (type? sg skeleton-group) (not (mp-art-group-get (-> sg art-group-name) (the-as (pointer level) #f))))
+                (let ((ag-name (string->symbol (-> sg art-group-name)))
+                      (tried? #f)
+                      )
+                  (dotimes (k (-> tbl tried-count))
+                    (if (= (-> tbl tried k) ag-name)
+                        (set! tried? #t)
+                        )
+                    )
+                  (when (and (not tried?) (< (-> tbl tried-count) 32))
+                    (set! (-> tbl tried (-> tbl tried-count)) ag-name)
+                    (+! (-> tbl tried-count) 1)
+                    ;; the renderer data of the level the sender has this art in
+                    (dotimes (k (-> tbl count))
+                      (if (= (-> tbl skel k) skel)
+                          (pc-mp-render-level (symbol->string (-> tbl level k)) #t)
+                          )
+                      )
+                    (mp-far-load-art (-> sg art-group-name))
+                    (return 0)
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
     )
   (none)
   )
