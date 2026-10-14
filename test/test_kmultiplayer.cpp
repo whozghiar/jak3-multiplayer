@@ -70,6 +70,23 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   EXPECT_EQ(got.kind, 42);
   EXPECT_EQ(got.from, 1);
 
+  // Objects go both ways, their id prefixed with the owner's slot.
+  mp::ActorState npc{}, prop{};
+  npc.id = 5;
+  npc.quat[3] = 1.f;
+  strcpy(npc.skel, "skel-citizen-norm");
+  prop.id = 7;
+  prop.quat[3] = 1.f;
+  host.send_actors(&npc, 1, now());
+  client.send_actors(&prop, 1, now());
+  pump(10);
+  mp::ActorState got_actors[4];
+  ASSERT_EQ(client.get_actors(now(), got_actors, 4), 1);
+  EXPECT_EQ(got_actors[0].id, 5u);
+  EXPECT_STREQ(got_actors[0].skel, "skel-citizen-norm");
+  ASSERT_EQ(host.get_actors(now(), got_actors, 4), 1);
+  EXPECT_EQ(got_actors[0].id, (1u << 24) | 7u);
+
   // A banned client is disconnected with a reason and cannot come back.
   host.kick(1, true);
   pump(10);
