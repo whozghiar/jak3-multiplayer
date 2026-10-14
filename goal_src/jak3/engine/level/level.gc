@@ -9,13 +9,22 @@
 (define-extern *level-type-list* type)
 (define-extern city-sound-expand-want-list (function none))
 
+;; og:preserve-this MOD multiplayer: gives a level loaded for a distant player a heap carved from the
+;; free top of another level's heap (pc/features/multiplayer/multiplayer-world.gc). #t when it did:
+;; load-begin then takes no bank of the level heap.
+(define *mp-far-level-hook* (the-as (function level symbol) #f))
+
 (defglobalconstant NUM_LEVEL_PAGES 146)
 (defglobalconstant LEVEL_PAGE_SIZE_KB 126) ;; original value
 (defglobalconstant LEVEL_PAGE_SIZE (* LEVEL_PAGE_SIZE_KB 1024)) ;; original value
 
 (defglobalconstant LEVEL_HEAP_SIZE (* NUM_LEVEL_PAGES LEVEL_PAGE_SIZE))
 ;(defglobalconstant DEBUG_LEVEL_HEAP_MULT 1.5) ;; level heap in debug mode is 1.5x larger
-(defglobalconstant DEBUG_LEVEL_HEAP_MULT 15.0) ;; og:preserve-this PC port: ~262 MB total level heap for custom actors/entities
+;; The level heap ends below 256 MB: adgif shader links keep an address in 24 bits of address/16
+;; (shader-ptr, texture-h.gc), so the textures of a level loaded above it corrupt the shader lists
+;; and the next level unload crashes in unlink-shaders-in-heap. 15.0 put the top banks past
+;; #x10000000 (Spargus wasstadb at #x109a00f0); 12.0 ends the heap near #xf400000.
+(defglobalconstant DEBUG_LEVEL_HEAP_MULT 12.0) ;; og:preserve-this PC port: ~216 MB level heap for custom actors/entities
 (defglobalconstant DEBUG_LEVEL_PAGE_SIZE (* 1024 (* DEBUG_LEVEL_HEAP_MULT LEVEL_PAGE_SIZE_KB)))
 (defglobalconstant DEBUG_LEVEL_HEAP_SIZE (* NUM_LEVEL_PAGES DEBUG_LEVEL_PAGE_SIZE))
 
@@ -1032,6 +1041,8 @@
         )
       )
     (label cfg-28)
+    ;; og:preserve-this MOD multiplayer: a level loaded for a distant player takes no bank
+    (if (not (and *mp-far-level-hook* (*mp-far-level-hook* this)))
     (case mem-mode
       (((level-memory-mode borrow)
         (level-memory-mode borrow0)
@@ -1655,6 +1666,7 @@
           )
         )
       )
+    ) ;; og:preserve-this MOD multiplayer
     )
   (set! loading-level (-> this heap))
   (set! (-> *level* loading-level) this)

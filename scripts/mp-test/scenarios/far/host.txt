@@ -1,11 +1,18 @@
-# Authority test, host side: stays in Spargus while the guest goes far away and comes back.
+# Authority test, host side: stays in Spargus while the guest goes far away and comes back. The
+# level the guest stands in there (wascityb) is loaded here, not displayed, in the free top of a
+# Spargus level's heap (log-levels: far), and the guest loads the host's (wascitya) the same way.
 1 enable
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
 52 log
 52 log-levels
+52 log-shaders
+62 log-levels
+62 log-shaders
 70 log
 70 log-levels
+70 log-shaders
 88 log
 88 log-levels
+88 log-shaders

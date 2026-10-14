@@ -26,14 +26,16 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   7777); guests get slots 1 to 7. Every message from a guest goes to the host, which relays it.
 - **Transport:** TCP with `TCP_NODELAY`, non-blocking sockets pumped once per frame from GOAL
   (`pc-mp-update`), no thread. A frame is `[u16 length][u8 type][payload]`; malformed or
-  oversized frames drop the peer. Message types: `HELLO` (protocol version, now 3), `WELCOME`
+  oversized frames drop the peer. Message types: `HELLO` (protocol version, now 4), `WELCOME`
   (slot), `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`.
 - **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
   health, flags, character and outfit, body segments, driven vehicle, passenger seat, name, color,
   level, continue point) at 30 Hz.
 - **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
   player: `[u8 source][u32 source time][u16 count][states]`. Ids carry the owner's slot in the
-  top byte and the owner's process pid below.
+  top byte and the owner's process pid below. The source time of object batches and poses is in
+  tenths of a millisecond: the receiver's clock estimate and the blend between poses one frame
+  apart lose up to a millisecond otherwise (about 3.5 mm on a running citizen).
 - **Poses:** `[u8 source][u32 source time][u16 count]` then one entry per object:
   `[u32 id][u16 bones, bit 15 = effects][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
   translation to 1 mm, per-axis scale, relative to the object's frame), each emitter 20 bytes,
@@ -66,7 +68,7 @@ near it, and a guest far from every authority for itself and the guests near it 
 | Time of day | the host | followed by the guests |
 | World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player (a lift must answer the player standing on it) | kept alike (1.6): cycles follow the host's clocks, doors open for any player in front of them, an elevator trip started on one machine runs on all |
 | Physics objects of the level (floating platforms, objects on physics) | the region's authority, with the weight of every player on them | each machine's own object of that entity, moved every frame where the authority has it, still carrying its player (1.6) |
-| Levels | every machine, around its own player | players in one place load the same levels; a player elsewhere is still drawn where it stands (1.6) |
+| Levels | every machine, around its own player | players in one place load the same levels; the place of a distant player is loaded here too, not displayed, so its objects are drawn (1.6) |
 | Cutscenes | where they start | the same cutscene, for the players of that region (1.6) |
 
 A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
@@ -164,15 +166,45 @@ the union. Host setting **Share story progress** (on by default).
   by its own physics for a frame, and it still carries the player standing on it. Floating
   platforms take a player's weight from a `'ridden` message; on the authority, a remote player's
   puppet standing on one sends it (with the target mask the handler checks set for the call).
-- **Levels.** Level loading follows each player's position: players in one place load the same
-  levels (`log-levels` lists the same five levels on both machines in `smoke` and `far`), a
-  player elsewhere loads those of its place. The level heap holds one place: 18 chunks, a large
-  level takes 12 of them, a city center the two middle ones (`load-begin`); loading the levels of
-  another place on top stops the game on purpose (`break!` after "could not find free small-edge
-  bank in the level-group heap", seen in a test). What a player sees of another place is drawn
-  anyway: the other player's model is resident and drawn wherever it stands (the guest 570 m away
-  in a level the host has not loaded is drawn on the host in `far`), the copies of its objects
-  whose art is loaded here too, over the low-detail view the game keeps of distant places.
+- **Levels.** Each machine loads the levels its own player's position calls for: players in one
+  place load the same levels (`log-levels` lists the same five on both machines in `smoke`). The
+  level heap holds one place: 18 banks, a large level takes 12 of them, and asking for one more
+  level without a free bank stops the game on purpose (`break!` after "could not find free
+  small-edge bank in the level-group heap", seen in a test). The place of a distant player is
+  loaded another way ("Distant players' levels" in `multiplayer-world.gc`):
+  - *Which levels:* the level the distant player stands in or, when its master level is not loaded
+    here, the topmost master level not loaded here (Haven's `ctyport` gives `ctywide`, which
+    holds the city's shared code and art); then the borrow levels of that level the distant
+    player has (cars, guards), from the list of levels each player sends when it changes
+    (`levels` event).
+  - *Where:* the banks of the PC level heap are 12 times the PS2 page and mostly empty. The level
+    gets a heap carved from the free top of one of our active levels (its host), below 256 MB,
+    sized for its pages and the borrow heaps it carves at login; it is registered in a borrow slot
+    of the host that none of the host's own borrow levels can claim, so the host unloads it first
+    when it goes. A hook in `load-begin` (`*mp-far-level-hook*`) gives it that heap instead of a
+    bank. Its borrow levels load in its borrow heaps through the stock path.
+  - *How:* loaded, never displayed: its entities never start and its callbacks never run, so
+    nothing changes for our place. The copies of the distant player's objects are drawn from its
+    art, in the default level's draw slot and lighting (a level only loaded has neither).
+  - *Its code:* a level's code is global. Its `defun`, `define` and `deftype` of names our levels
+    use would point those names at its copy, and a `deftype` of an existing type resets that
+    type's methods: two halves of Spargus (`wascitya`, `wascityb`) share their code and the game
+    never loads them together. A sandbox in the runtime (`pc-mp-sandbox-*`) notes every symbol,
+    the methods of every type and the particle, lightning and texture tables before the load, and
+    puts back, every frame while it links, each entry that held a value and now points into its
+    memory; names only it defines stay (2226 entries put back for `ctywide` in Spargus). It
+    leaves before our place loads any level, so no level of ours links next to it.
+  - *When:* only when our place waits for no load and two level slots are free (one for its
+    borrow levels); it leaves when our place loads a level, wants that level itself (it then
+    loads like any of ours), or no player stands in that place any more. Leaving, the texture
+    lists keep none of its shaders: a page it used without loading it would keep a list in its
+    memory, which the next level there would corrupt (a list looping forever in testing).
+  - The player's own model is resident and drawn wherever it stands.
+- **Level heap below 256 MB.** The texture page dir links the shaders of each texture by address
+  divided by 16 in 24 bits (`shader-ptr`): a level above 256 MB breaks the lists, and the next
+  level unload crashes or hangs (`log-shaders`: 44 broken links in Spargus with the master-dev
+  multiplier of 15). `DEBUG_LEVEL_HEAP_MULT` is 12 here: the heap ends near `#xf400000`, 0 broken
+  links. This was likely the cause of the earlier crashes at a level unload.
 - **Levels leaving.** A level that leaves kills its entities and their effects, then its memory is
   reused. Before that (`level` `deactivate`, wrapped; `unload!` calls it, also for a level only
   loaded), the copies drawn with its art, the part-trackers on copies playing its particle groups
@@ -208,6 +240,7 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/game.gd` | The four mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o` and `jak-indax+0-ag.go`. |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514` and `#x1520`-`#x1529` for the start menu labels. |
+| `goal_src/jak3/engine/level/level.gc` | `*mp-far-level-hook*`, called by `load-begin` before its bank search (a distant player's level takes no bank); `DEBUG_LEVEL_HEAP_MULT` 15 to 12 (level heap below 256 MB, 1.6). |
 | `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
 
 Wrapped at load time, each calling the stock version kept by `define-perm`:
@@ -226,7 +259,8 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `sync-linear`, `sync-eased`, `sync-paused` `get-norm!`; `sync-info` `get-current-phase-no-mod`, `get-timeframe-offset!`, `sync-now!` | `engine/util/sync-info.gc` | The phase of every cycle (shifted to the host's on a guest). |
 | `com-airlock` `want-cross-airlock?` | `engine/common-obs/airlock.gc` | Doors open for remote players too. |
 | `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there. |
-| `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first. |
+| `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first; a distant player's level gives its host's memory back. |
+| `load-state` `update!` | `engine/level/level.gc` | A distant player's level and its borrow levels among the levels to load, not displayed; the sandbox while they link. |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -330,14 +364,16 @@ A script line is `<seconds> <command>`:
 | `log-pose [slot]` | Four bones of player `slot`'s puppet relative to its root, or of the own model without a slot: the owner's line and the other machine's line compare the pose with its copy. |
 | `log-part <index>` | Where entry `index` of `*part-id-table*` lives (which level heap). |
 | `log-me` | One line: own position, speed and state (fine-grained probes). |
-| `log-pose-own <npc\|daxter\|gun\|vehicle\|wheel>`, `log-pose-copy <slot> <skeleton name\|*>` | Four bones of one of our objects (the NPC nearest to player 1, Daxter, the gun, the vehicle driven, its first wheel), and of the copies of player `slot`'s objects with that skeleton (`*`: its NPC nearest to us), with the poses laid on each copy. |
+| `log-pose-own <npc\|daxter\|gun\|vehicle\|wheel> [frames]`, `log-pose-copy <slot> <skeleton name\|*>` | Four bones of one of our objects (the NPC nearest to player 1, Daxter, the gun, the vehicle driven, its first wheel), printed by the manager on every frame for `frames` frames, and of the copies of player `slot`'s objects with that skeleton (`*`: its NPC nearest to us), with the poses laid on each copy. Stamps in ms with a tenth. |
 | `log-tasks`, `close-task [n]` | Story progress: closed nodes, nodes closed after another player, the open ones; close the first open node, n times. |
 | `log-sync` | Phase of a 4-second test cycle computed in the manager's context, stamped with the host's clock: a guest's must follow the host's. |
 | `goto-float`, `log-float` | Stand on the nearest floating platform (`rigid-body-platform`, volcano); print the one nearest to player 0 (guest) or to us (host): height, tilt, weight messages sent, states followed, stamped with the host's clock. |
 | `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, and the elevator trips sent and shown. |
-| `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded and the cutscenes sent, shown and playing. |
+| `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded (`far #t`: loaded for a distant player), the distant player's level, its borrow levels, its host, the sandbox entries put back, and the cutscenes sent, shown and playing. |
+| `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
+| `far-levels <0\|1>` | Load distant players' levels (default 1); 0 for a counter-test. |
 
-Scenarios and what they verified (2026-10-14, Spargus and the volcano, every one run again after the last change, 19 of 19 passed):
+Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change, 20 of 20 ended normally, no crash, `log-shaders` 0 broken links wherever it ran):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -351,9 +387,10 @@ Scenarios and what they verified (2026-10-14, Spargus and the volcano, every one
 | `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
 | `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
-| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each, two runs: a running NPC whose bones move 37 to 48 mm per frame, median 1.7 and 2.2 mm, largest 3.8 and 18.9 mm; Daxter 0.6 mm (largest 2.0 mm); gun 0.2 mm; buggy 0.5 to 0.6 mm (1.2 mm); wheel 0.0 mm; no pose skipped. |
+| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each, two runs: a running NPC whose bones move 40 to 51 mm per frame, median 0.8 and 0.9 mm, largest 1.4 and 1.6 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
-| `far` | Authority, distant players | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there, in a level the host has not loaded; back next to the host, asleep again. Same five levels on both machines when together. |
+| `far` | Authority, distant players and their levels | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there. The host loads the guest's `wascityb` in the free top of `wascitya`'s heap, not displayed (`far #t`, 2 entries put back by the sandbox); the guest loads the host's `wascitya` in `waswide`'s heap (10 put back) and, back next to the host, unloads that copy and loads `wascitya` as its own. No crash at any of these unloads; `log-shaders`: 0 broken links. The error "object #x147d21 is not a valid object" printed when the guest's `wascityb` unloads is the stock game's: it appears with `far-levels 0` too. |
+| `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps: it draws 4 Crimson Guards and a Haven car of the guest, 6 of the 9 objects received (the barge is in `ctyport`, not a borrow level; a citizen's level waited for a level slot kept for our place). Back in Spargus, the four levels unload cleanly. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
 | `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
@@ -373,8 +410,11 @@ public IP.
 
 ## 6. Known limits
 
-- The level heap holds one place (1.6): a machine loads the levels around its own player only,
-  and shows another place through the game's own low-detail view of it.
+- A distant player's place (1.6): one level and its borrow levels at a time, from the player
+  nearest in the player list; another sub-level of that place (Haven's `ctyport`) is not loaded,
+  so the objects whose art only lives there are not drawn. Our own place keeps a level slot, and
+  any load of ours lets the distant levels go first. Their sounds stay silent (sound banks follow
+  our place).
 - Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
   128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
@@ -386,6 +426,13 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-14:** a distant player's place is loaded, not displayed: its level (or the master level
+  of it) in the free top of one of our levels' heap, then its borrow levels, with a sandbox that
+  keeps its code from taking the names of ours (`pc-mp-sandbox-*`), `levels` event, hook in
+  `load-begin`. Level heap kept below 256 MB (`DEBUG_LEVEL_HEAP_MULT` 12): at 15 the top banks broke
+  the texture shader lists. Batch clocks in tenths of a millisecond (protocol 4) and the owner's
+  bones logged on every frame: a running NPC's copy within 1.6 mm. Test commands `log-shaders`,
+  `far-levels`, `log-pose-own ... frames`; scenario `far-city`.
 - **2026-10-14:** first version. Network session in the runtime with its tests; START > Options >
   Multiplayer and the administration page; Mods menu entries (toggle, cheats, teleports);
   puppets with name, health bar and minimap icon, focusable by enemies with hit forwarding;

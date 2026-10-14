@@ -71,6 +71,7 @@
   (elevator 12)   ;; an elevator of entity iarg 0 started a trip here, to path position fvec x
   (scene 13)      ;; a cutscene started here: iarg 0 = scene index (text = its name) or -1 for the
                   ;; last part (text = continue point, iarg 1 = scene count), iarg 2 = wait flag
+  (levels 14)     ;; the levels of the sender's place: iarg 0 = index, iarg 1 = count, text = name
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -1337,6 +1338,7 @@
 (define-extern mp-replay-effect (function mp-event none))
 (define-extern mp-apply-elevator (function mp-event none))
 (define-extern mp-apply-scene (function mp-event none :behavior mp-manager))
+(define-extern mp-apply-levels (function mp-event none))
 (define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
 (define-extern mp-replay-projectile (function mp-event none))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
@@ -1630,6 +1632,9 @@
          )
         (((mp-event-kind scene))
          (mp-apply-scene ev)
+         )
+        (((mp-event-kind levels))
+         (mp-apply-levels ev)
          )
         (((mp-event-kind steal))
          (if *target*

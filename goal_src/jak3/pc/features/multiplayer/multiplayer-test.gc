@@ -24,6 +24,8 @@
 ;;   log-sync                                                phase of a test cycle (host clock sync)
 ;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
+;;   far-levels <0|1>                                        load distant players' levels (default 1)
+;;   log-shaders                                             texture shader lists intact, level heaps
 ;;   goto-float | log-float                                  floating platforms (volcano)
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
@@ -202,6 +204,56 @@
         )
       )
     (set! (-> rq count) kept)
+    )
+  (none)
+  )
+
+;; The texture page dir keeps, for each texture, a list of the adgif shaders using it, linked by
+;; address/16 in 24 bits (shader-ptr): a shader above 256 MB cannot be linked (texture-h.gc).
+(defun mp-test-log-shaders ()
+  "Walk the shader lists of the texture page dir like unlink-shaders-in-heap, with bounds: count the
+   links that leave memory or reach a shader of another texture page (a broken list), and print the
+   heap of each level (all of them below #x10000000 when the lists can hold their shaders)."
+  (let ((dir *texture-page-dir*)
+        (bad 0)
+        (nodes 0)
+        )
+    (dotimes (i (-> dir length))
+      (let ((e (-> dir entries i)))
+        (when (and (-> e page) (-> e link))
+          (dotimes (k (min (-> e page length) (-> e length)))
+            (let ((addr (the-as int (* (-> e link next k shader) 16)))
+                  (steps 0)
+                  )
+              (while (and (nonzero? addr) (< steps 10000))
+                (+! nodes 1)
+                (+! steps 1)
+                (cond
+                  ((or (< addr #x13fd20) (>= addr #x1ff00000) (!= (-> (the-as adgif-shader addr) texture-id page) i))
+                   (+! bad 1)
+                   (if (< bad 8)
+                       (format 0 "[mp-test] shader link broken: tpage ~D texture ~D -> #x~X~%" i k addr)
+                       )
+                   (set! addr 0)
+                   )
+                  (else
+                    (set! addr (the-as int (* (-> (the-as adgif-shader addr) next shader) 16)))
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    (format 0 "[mp-test] shader links ~D broken ~D~%" nodes bad)
+    )
+  (dotimes (i (-> *level* length))
+    (let ((lev (-> *level* level i)))
+      (if (!= (-> lev status) 'inactive)
+          (format 0 "[mp-test] level ~A heap #x~X-#x~X~%" (-> lev name) (-> lev heap base) (-> lev heap top-base))
+          )
+      )
     )
   (none)
   )
@@ -892,13 +944,45 @@
            (process-spawn scene-player :init scene-player-init name #t (the-as string #f) :name "scene-player")
            )
          )
+        ((string= cmd "far-levels")
+         (set! *mp-far-enabled* (!= (mp-test-int) 0))
+         )
+        ((string= cmd "log-shaders")
+         (mp-test-log-shaders)
+         )
         ((string= cmd "log-levels")
          (dotimes (i (-> *level* length))
            (let ((lev (-> *level* level i)))
              (if (-> lev name)
-                 (format 0 "[mp-test] level ~A ~A display ~A~%" (-> lev name) (-> lev status) (-> lev display?))
+                 (format
+                   0
+                   "[mp-test] level ~A ~A display ~A far ~A~%"
+                   (-> lev name)
+                   (-> lev status)
+                   (-> lev display?)
+                   (= lev (-> *mp-far* level))
+                   )
                  )
              )
+           )
+         (format
+           0
+           "[mp-test] far level ~A loads ~D drops ~D restored ~D in ~A host ~A~%"
+           (-> *mp-far* name)
+           (-> *mp-far* loads)
+           (-> *mp-far* drops)
+           (-> *mp-far* restored)
+           (-> *mp-far* level)
+           (-> *mp-far* host)
+           )
+         (format
+           0
+           "[mp-test] far borrows ~A ~A ~A ~A ~A~%"
+           (-> *mp-far* borrows 0)
+           (-> *mp-far* borrows 1)
+           (-> *mp-far* borrows 2)
+           (-> *mp-far* borrows 3)
+           (-> *mp-far* borrows 4)
            )
          (format
            0

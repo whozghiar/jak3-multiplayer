@@ -28,8 +28,9 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
   and sounds.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
   with their movements, effects and sounds. A player who goes far from the others keeps a living
-  world around them, which the players near them share. Enemies killed, crates broken and pickups
-  taken disappear for everybody.
+  world around them, which the players near them share; your game loads that faraway place in the
+  background, so its people and vehicles show up even across the map. Enemies killed, crates
+  broken and pickups taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
   triangle to ride next to them when it has two seats. Guests can also take the host's traffic
   vehicles.

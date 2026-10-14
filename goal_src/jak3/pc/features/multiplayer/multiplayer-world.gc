@@ -75,6 +75,10 @@
 (define-extern pc-mp-send-poses (function none))
 (define-extern pc-mp-get-pose (function uint matrix (inline-array matrix) int int))
 (define-extern pc-mp-clock (function int int))
+(define-extern pc-mp-sandbox-begin (function none))
+(define-extern pc-mp-sandbox-watch (function pointer int int none))
+(define-extern pc-mp-sandbox-restore (function uint uint int))
+(define-extern pc-mp-sandbox-end (function none))
 (define-extern pc-mp-get-actors (function (inline-array mp-actor-state) int int))
 (define-extern mp-player-count (function int)) ;; multiplayer-menu.gc
 
@@ -742,6 +746,7 @@
 
 (define-extern mp-send-poses (function none))
 (define-extern mp-send-near-poses (function none))
+(define-extern mp-send-levels (function none))
 (define-extern mp-poll-elevator (function process object))
 (define-extern mp-update-remote-riders (function none))
 
@@ -779,6 +784,10 @@
     ;; between batches, the bones of what another player sees up close, every frame
     (if (and (> (mp-player-count) 0) (!= (-> ws last-send) (mp-now)))
         (mp-send-near-poses)
+        )
+    ;; the levels of our place, for the far levels of the others
+    (if (> (mp-player-count) 0)
+        (mp-send-levels)
         )
     )
   (none)
@@ -1032,6 +1041,11 @@
   (vector-copy! (-> self root trans) (-> st trans))
   (quaternion-copy! (-> self root quat) (-> st quat))
   (initialize-skeleton self sg (the-as pair 0))
+  ;; art of a level only loaded: that level has no draw slot nor lighting of its own, the default
+  ;; level's are used (draw-index-map, mood-context in engine/draw/drawable.gc)
+  (if (!= (-> lev status) 'active)
+      (set! (-> self draw level-index) (the-as uint 10))
+      )
   (ja-channel-set! 1)
   ;; the bones take the owner's pose once computed (mp-pose-postbind)
   (set! (-> self skel postbind-function) mp-pose-postbind)
@@ -1078,19 +1092,43 @@
   (none)
   )
 
+(defun mp-art-group-get ((name string) (box (pointer level)))
+  "art-group-get-by-name, also in the levels only loaded (a distant player's level, a level our own
+   place keeps ready): a copy can be drawn from their art. The level holding it goes in `box`."
+  (let ((found (art-group-get-by-name *level* name box)))
+    (when (not found)
+      (countdown (i 11)
+        (let ((lev (-> *level* level i)))
+          (when (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive))
+            (countdown (j (-> lev art-group art-group-array length))
+              (when (name= (-> lev art-group art-group-array j name) name)
+                (if box
+                    (set! (-> box 0) lev)
+                    )
+                (return (-> lev art-group art-group-array j))
+                )
+              )
+            )
+          )
+        )
+      )
+    found
+    )
+  )
+
 (defbehavior mp-replica-spawn mp-manager ((st mp-actor-state))
   "Spawn a replica of `st` if its skeleton is loaded here. #t when spawned."
   (let ((ws *mp-world-state*))
     (when (< (-> ws replica-count) MP_MAX_REPLICAS)
       (string<-charp *mp-temp-string* (-> st skel))
       (set! (-> ws level-box 0) #f)
-      (let ((sg (the-as skeleton-group (art-group-get-by-name *level* *mp-temp-string* (the-as (pointer level) #f))))
+      (let ((sg (the-as skeleton-group (mp-art-group-get *mp-temp-string* (the-as (pointer level) #f))))
             (lev (the-as level #f))
             )
         ;; the level that registered the skeleton is not always the one that holds its art
         ;; (dogat: skeleton in WASALL code, art elsewhere): initialize-skeleton needs the latter
         (when (and sg (type? sg skeleton-group))
-          (art-group-get-by-name *level* (-> sg art-group-name) (the-as (pointer level) (-> ws level-box)))
+          (mp-art-group-get (-> sg art-group-name) (the-as (pointer level) (-> ws level-box)))
           (set! lev (-> ws level-box 0))
           )
         (when (and sg lev (type? sg skeleton-group))
@@ -1331,7 +1369,12 @@
             (if (or (not proc)
                     (not seen?)
                     (not (-> proc level))
-                    (not (or (= (-> proc level status) 'active) (= (-> proc level status) 'reserved)))
+                    (not (or (= (-> proc level status) 'active)
+                             (= (-> proc level status) 'reserved)
+                             (= (-> proc level status) 'loaded)
+                             (= (-> proc level status) 'alive)
+                             )
+                         )
                     )
                 (mp-replica-remove i)
                 (+! i 1)
@@ -2904,6 +2947,8 @@
   (none)
   )
 
+(define-extern mp-far-leaving (function level none)) ;; Distant players' levels, below
+
 ;; MOD multiplayer -- clean up before a level goes away (engine/level/level.gc)
 (define-perm *mp-stock-level-deactivate* (function level level)
   (the-as (function level level) (method-of-type level deactivate))
@@ -2913,10 +2958,703 @@
   "What this mod made from the level goes first (always: copies can remain after a session), then
    the stock deactivation. unload! calls it too, also for a level only loaded (not active), whose
    art and particle groups copies may use as well."
-  (if (!= (-> this status) 'inactive)
-      (mp-on-level-leaving this)
-      )
+  (when (!= (-> this status) 'inactive)
+    (mp-on-level-leaving this)
+    (mp-far-leaving this)
+    )
   (*mp-stock-level-deactivate* this)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Distant players' levels
+;; ------------------------------------------------------------------------------------------------
+
+;; The level heap holds the levels of one place: 18 banks, a large level takes 12 of them, and
+;; load-begin stops the game when none is free (engine/level/level.gc). The level a distant player
+;; stands in takes no bank: like the game's borrow levels, it is loaded in the free top of the heap
+;; of one of our active levels (its host), registered in a borrow slot of that host that none of its
+;; own borrow levels can claim, so the host unloads it first when it goes. That memory stays below
+;; 256 MB: adgif shader links keep an address in 24 bits of address/16 (shader-ptr,
+;; engine/gfx/texture/texture-h.gc), a texture of a level above it breaks the links (a crash when
+;; the level unloads, seen in testing). The level is loaded, never displayed: its art and particle
+;; groups are linked, so the copies of that player's objects are drawn from it, while its entities
+;; never start, its callbacks never run and our place is unchanged. One such level at a time, started
+;; only when our own place waits for no load, and let go as soon as our place loads a level.
+;;
+;; Its code links into the running game like any level's: a defun, define or deftype of a name our
+;; own levels use points that name at its copy, and a deftype of an existing type resets that type's
+;; methods (kscheme.cpp new_type). Two halves of a place the game never loads together share their
+;; code (Spargus wascitya and wascityb): a crash in testing. While it loads, the sandbox
+;; (pc-mp-sandbox-*, kmultiplayer.cpp) puts back every symbol, method and particle or texture table
+;; entry it took; the names only it defines stay.
+
+(defconstant MP_FAR_LIMIT #x10000000)          ;; shader links reach 256 MB
+(defconstant MP_FAR_MARGIN (* 4 1024 1024))    ;; left free above what the host uses
+
+(deftype mp-far-state (structure)
+  ((name      symbol)   ;; level wanted for a distant player, or #f
+   (level     level)    ;; the level slot holding it while it loads or is loaded, or #f
+   (host      level)    ;; the level whose heap holds it
+   (host-top  pointer)  ;; top and top-base of the host heap before
+   (host-base pointer)
+   (text      string)   ;; a level name read from a player state
+   (lo        uint32)   ;; its memory, while the sandbox watches it link
+   (hi        uint32)
+   (sandbox?  symbol)
+   (slot      int32)    ;; the distant player it is loaded for
+   (borrows   symbol 5) ;; that player's borrow levels of it, loaded in its borrow heaps
+   (loads     int32)    ;; counters for the test log
+   (drops     int32)
+   (restored  int32)    ;; entries the sandbox put back
+   )
+  )
+
+;; The levels of each other player's place (levels event), and what we last sent of ours.
+(deftype mp-levels-state (structure)
+  ((names      symbol 80)  ;; MP_MAX_PLAYERS (8) lists of 10
+   (count      int32 8)
+   (sent-hash  int32)
+   (sent-time  time-frame)
+   (check-time time-frame)
+   )
+  )
+
+(define *mp-levels* (new 'global 'mp-levels-state))
+
+(define *mp-far-enabled* #t) ;; test switch (far-levels): load distant players' levels
+
+(define *mp-far* (new 'global 'mp-far-state))
+(set! (-> *mp-far* text) (new 'global 'string 32 (the-as string #f)))
+(set! (-> *mp-far* name) #f)
+(set! (-> *mp-far* level) #f)
+(set! (-> *mp-far* host) #f)
+(set! (-> *mp-far* sandbox?) #f)
+(dotimes (i 5)
+  (set! (-> *mp-far* borrows i) #f)
+  )
+
+(defun mp-far-size ((info level-load-info))
+  "Heap bytes for a level: the PS2 level heap pages of its memory mode (load-begin) at twice the PS2
+   page, the margin the PC port gives its levels and more, plus the borrow heaps it carves from the
+   top of its heap at login (level-update-after-load: BORROW_MULT times each borrow size, in KB)."
+  (+ (let ((carved 0))
+       (when (-> info borrow)
+         (dotimes (i 5)
+           (+! carved (shl (the int (* BORROW_MULT (-> info borrow borrow-size i))) 10))
+           )
+         )
+       carved
+       )
+  (* LEVEL_PAGE_SIZE
+     2
+     (case (-> info memory-mode)
+       (((level-memory-mode large)) 96)
+       (((level-memory-mode medium)) 73)
+       (((level-memory-mode small-center) (level-memory-mode city-center)) 50)
+       (((level-memory-mode city-tiny-edge) (level-memory-mode tiny-center) (level-memory-mode tiny-edge) (level-memory-mode tiny))
+        32
+        )
+       (((level-memory-mode micro)) 16)
+       (((level-memory-mode tiny-center-micro)) 24)
+       (((level-memory-mode tiny-center-small)) 40)
+       (else 48)
+       )
+     )
+     )
+  )
+
+(defun mp-far-free-slot ((host level))
+  "A borrow slot of `host` that is empty and that none of its borrow levels can claim, or -1:
+   level-find-borrow-slot gives slots 0 to 2 to city borrow levels and slot i to the borrow levels
+   its borrow info names at i, so slot 4 or 3 when its info leaves it unused."
+  (let ((info (-> host info borrow))
+        (found -1)
+        )
+    (dotimes (n 2)
+      (let ((k (- 4 n)))
+        (when (and (= found -1)
+                   (not (-> host borrow-level k))
+                   (or (not info) (and (not (-> info borrow-info k)) (zero? (-> info borrow-size k))))
+                   )
+          (set! found k)
+          )
+        )
+      )
+    found
+    )
+  )
+
+(defun mp-far-room ((host level))
+  "Free bytes at the top of the heap of `host` below 256 MB."
+  (- (min (the-as int (-> host heap top)) MP_FAR_LIMIT) (the-as int (-> host heap current)))
+  )
+
+(defun mp-far-host ((except level) (size int))
+  "Our active level (not a borrow level) with the most free memory below 256 MB, when that holds
+   `size` bytes and a margin and it has a free borrow slot (mp-far-free-slot); or #f."
+  (let ((best (the-as level #f))
+        (best-room 0)
+        )
+    (dotimes (i (-> *level* length))
+      (let ((lev (-> *level* level i)))
+        (when (and (!= lev except) (= (-> lev status) 'active) (not (-> lev borrow-from-level)))
+          (let ((room (mp-far-room lev)))
+            (when (and (> room best-room) (>= room (+ size MP_FAR_MARGIN)) (>= (mp-far-free-slot lev) 0))
+              (set! best lev)
+              (set! best-room room)
+              )
+            )
+          )
+        )
+      )
+    best
+    )
+  )
+
+(defun mp-far-level-heap! ((lev level))
+  "load-begin hook (*mp-far-level-hook*): when `lev` is the level wanted for a distant player, its
+   heap is carved from the top of a host's heap (mp-far-host) and it becomes a borrow level of that
+   host; it takes no bank of the level heap. #t then; #f leaves the stock bank search."
+  (when (and (-> *mp-far* name) (= (-> lev name) (-> *mp-far* name)) (not (-> *mp-far* level)))
+    (let* ((size (mp-far-size (-> lev info)))
+           (host (mp-far-host lev size))
+           )
+      (when host
+        (let ((top (min (the-as int (-> host heap top)) MP_FAR_LIMIT))
+              (heap (-> lev heap))
+              )
+          (set! (-> heap base) (the-as pointer (logand (- top size) -64)))
+          (set! (-> heap current) (-> heap base))
+          (set! (-> heap top-base) (the-as pointer (logand top -64)))
+          (set! (-> heap top) (-> heap top-base))
+          (set! (-> *mp-far* level) lev)
+          (set! (-> *mp-far* host) host)
+          ;; the host heap ends below it, as for the game's borrow heaps (level-update-after-load):
+          ;; an address is found in one level only (get-level-by-heap-ptr-and-status, art login)
+          (set! (-> *mp-far* host-top) (-> host heap top))
+          (set! (-> *mp-far* host-base) (-> host heap top-base))
+          (set! (-> host heap top-base) (-> heap base))
+          (set! (-> host heap top) (-> heap base))
+          (set! (-> host borrow-level (mp-far-free-slot host)) lev)
+          (set! (-> lev borrow-from-level) host)
+          (set! (-> lev memory-mask) (the-as uint 0))
+          ;; its code may take names of our levels: noted now, put back while it links
+          (set! (-> *mp-far* lo) (the-as uint (-> heap base)))
+          (set! (-> *mp-far* hi) (the-as uint (-> heap top-base)))
+          (pc-mp-sandbox-begin)
+          (pc-mp-sandbox-watch (the-as pointer (&-> *part-id-table* data 0)) (-> *part-id-table* length) 4)
+          (pc-mp-sandbox-watch (the-as pointer (&-> *part-group-id-table* data 0)) (-> *part-group-id-table* length) 4)
+          (pc-mp-sandbox-watch
+            (the-as pointer (&-> *lightning-spec-id-table* data 0))
+            (-> *lightning-spec-id-table* length)
+            4
+            )
+          (pc-mp-sandbox-watch
+            (the-as pointer (&-> *texture-page-dir* entries 0 page))
+            (-> *texture-page-dir* length)
+            (&- (the-as pointer (-> *texture-page-dir* entries 1)) (the-as uint (-> *texture-page-dir* entries 0)))
+            )
+          (set! (-> *mp-far* sandbox?) #t)
+          (+! (-> *mp-far* loads) 1)
+          (format
+            0
+            "[multiplayer] level ~A loads for a distant player in the heap of ~A (#x~X-#x~X)~%"
+            (-> lev name)
+            (-> host name)
+            (-> heap base)
+            (-> heap top-base)
+            )
+          #t
+          )
+        )
+      )
+    )
+  )
+
+(defun mp-far-unlink-textures ((lo uint) (hi uint))
+  "The far level leaves (its memory is [lo, hi)): no list of the texture page dir may keep one of its
+   shaders or a link array in its memory. Link arrays are allocated in the loading level's heap
+   (link-texture-by-id), and unlink-shaders-in-heap walks the pages loaded only: the list of a page
+   it used without loading it would keep pointing at its memory, which the next level loaded there
+   overwrites (a shader list looping forever in testing)."
+  (let ((dir *texture-page-dir*))
+    (dotimes (i (-> dir length))
+      (let* ((e (-> dir entries i))
+             (link (the-as uint (-> e link)))
+             )
+        (cond
+          ((or (not (-> e link)) (zero? link))
+           )
+          ((and (>= link lo) (< link hi))
+           (set! (-> e link) #f)
+           )
+          (else
+            (dotimes (k (-> e length))
+              (let ((prev (the-as adgif-shader #f))
+                    (node (* (-> e link next k shader) 16))
+                    (steps 0)
+                    )
+                ;; bounded: a broken list must not hang nor read the protected low memory
+                (while (and (>= node (the-as uint #x84000)) (< steps 4096))
+                  (+! steps 1)
+                  (let ((next (* (-> (the-as adgif-shader node) next shader) 16)))
+                    (cond
+                      ((and (>= node lo) (< node hi))
+                       (if prev
+                           (set! (-> prev next shader) (shr next 4))
+                           (set! (-> e link next k shader) (shr next 4))
+                           )
+                       )
+                      (else
+                        (set! prev (the-as adgif-shader node))
+                        )
+                      )
+                    (set! node next)
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-sandbox ()
+  "While the far level or one of its borrow levels links its code, put back what it took from our
+   levels (pc-mp-sandbox-restore; the borrow heaps are in the far level's memory); once none loads,
+   the code is in and the notes go."
+  (let ((lev (-> *mp-far* level)))
+    (when (and lev (-> *mp-far* sandbox?))
+      (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
+      (let ((loading? (not (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active)))))
+        (dotimes (i 5)
+          (let ((b (-> lev borrow-level i)))
+            (if (and b (!= (-> b status) 'loaded) (!= (-> b status) 'alive) (!= (-> b status) 'active))
+                (set! loading? #t)
+                )
+            )
+          )
+        ;; a borrow level wanted but not started yet keeps the notes too
+        (dotimes (i 5)
+          (if (and (-> *mp-far* borrows i) (not (level-get *level* (-> *mp-far* borrows i))))
+              (set! loading? #t)
+              )
+          )
+        (when (not loading?)
+          (pc-mp-sandbox-end)
+          (set! (-> *mp-far* sandbox?) #f)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-leaving ((lev level))
+  "Level `lev` unloads (deactivate, called first by unload!): when it is the far level, what its
+   code took is put back (it may leave while loading) and its host gets its memory back; a borrow
+   level of it leaves no texture list pointing at its memory either."
+  (when (and (-> *mp-far* level) (!= lev (-> *mp-far* level)) (= (-> lev borrow-from-level) (-> *mp-far* level)))
+    (if (-> *mp-far* sandbox?)
+        (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
+        )
+    (mp-far-unlink-textures (the-as uint (-> lev heap base)) (the-as uint (-> lev heap top-base)))
+    )
+  (when (= lev (-> *mp-far* level))
+    (when (-> *mp-far* sandbox?)
+      (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
+      (pc-mp-sandbox-end)
+      (set! (-> *mp-far* sandbox?) #f)
+      )
+    (mp-far-unlink-textures (-> *mp-far* lo) (-> *mp-far* hi))
+    (let ((host (-> *mp-far* host)))
+      (when (and host (= (-> lev borrow-from-level) host))
+        (set! (-> host heap top-base) (-> *mp-far* host-base))
+        (set! (-> host heap top) (-> *mp-far* host-top))
+        )
+      )
+    (set! (-> *mp-far* level) #f)
+    (set! (-> *mp-far* host) #f)
+    )
+  (none)
+  )
+
+(set! *mp-far-level-hook* mp-far-level-heap!)
+
+(defun mp-level-ready? ((name symbol))
+  "#t when level `name` is loaded here (loaded, alive or active)."
+  (let ((lev (level-get *level* name)))
+    (and lev (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active)))
+    )
+  )
+
+(defun mp-far-candidate ()
+  "The level a remote player stands in that is not loaded here, or #f. A level whose master level is
+   not loaded here cannot load alone (level-get-for-use stops the game): the topmost master level
+   not loaded here is taken instead (Haven's ctyslumb gives ctywide, which holds the city's shared
+   art). The current far level wins while a player is in its place."
+  (let ((found (the-as symbol #f)))
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (when (and st (nonzero? (-> st level 0)))
+          (string<-charp (-> *mp-far* text) (-> st level))
+          (let* ((name (string->symbol (-> *mp-far* text)))
+                 (info (lookup-level-info name))
+                 )
+            ;; up the master levels not loaded here by our own place (at most 4; the far level loaded
+            ;; as a master stays the one wanted)
+            (dotimes (k 4)
+              (when (and (!= info default-level)
+                         (-> info master-level)
+                         (or (not (mp-level-ready? (-> info master-level))) (= (-> info master-level) (-> *mp-far* name)))
+                         )
+                (set! name (-> info master-level))
+                (set! info (lookup-level-info name))
+                )
+              )
+            (when (and (!= info default-level)
+                       (= (-> info name) name)
+                       (or (= name (-> *mp-far* name)) (not (level-get *level* name)))
+                       (or (not (-> info master-level)) (mp-level-ready? (-> info master-level)))
+                       (or (not found) (= name (-> *mp-far* name)))
+                       )
+              (set! found name)
+              (set! (-> *mp-far* slot) i)
+              )
+            )
+          )
+        )
+      )
+    found
+    )
+  )
+
+(defun mp-borrow-mode? ((mode level-memory-mode))
+  "#t for the memory modes of levels loaded in a borrow heap of their host (level-find-borrow-slot)."
+  (case mode
+    (((level-memory-mode borrow)
+      (level-memory-mode borrow0)
+      (level-memory-mode borrow1)
+      (level-memory-mode borrow2)
+      (level-memory-mode borrow3)
+      (level-memory-mode borrow4)
+      (level-memory-mode borrow-city-small)
+      )
+     #t
+     )
+    (else
+      #f
+      )
+    )
+  )
+
+(defun mp-far-name? ((name symbol))
+  "#t when `name` is the far level or one of its borrow levels."
+  (or (= name (-> *mp-far* name))
+      (let ((found #f))
+        (dotimes (i 5)
+          (if (and name (= name (-> *mp-far* borrows i)))
+              (set! found #t)
+              )
+          )
+        found
+        )
+      )
+  )
+
+(defun mp-far-target-add ((ls load-state) (name symbol))
+  "Put level `name` among the levels to load, not displayed (nothing when it is there)."
+  (let ((slot -1))
+    (dotimes (i 10)
+      (cond
+        ((= (-> ls target i name) name)
+         (set! slot -2)
+         )
+        ((and (= slot -1) (not (-> ls target i name)))
+         (set! slot i)
+         )
+        )
+      )
+    (when (>= slot 0)
+      (set! (-> ls target slot name) name)
+      (set! (-> ls target slot display?) #f)
+      (set! (-> ls target slot force-vis?) #f)
+      (set! (-> ls target slot force-inside?) #f)
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-target-remove ((ls load-state) (name symbol))
+  "Take level `name` out of the levels to load, unless our own place wants it (want-exp)."
+  (let ((own? #f))
+    (dotimes (k 10)
+      (if (= (-> ls want-exp k name) name)
+          (set! own? #t)
+          )
+      )
+    (when (not own?)
+      (dotimes (i 10)
+        (if (= (-> ls target i name) name)
+            (set! (-> ls target i name) #f)
+            )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-update-borrows ((ls load-state) (free-slots int))
+  "The borrow levels of the far level that its player has (levels event: the cars and citizens of a
+   city): once the far level is loaded, they load in its borrow heaps like the game's own (stock
+   level-find-borrow-slot), one at a time with a level slot left for our place. Without the far level
+   loaded they must not be wanted: a level loading before its master level stops the game."
+  (let ((far-lev (-> *mp-far* level))
+        (want (new 'stack-no-clear 'array 'symbol 5))
+        (n 0)
+        )
+    (dotimes (i 5)
+      (set! (-> want i) #f)
+      )
+    (when (and far-lev (-> *mp-far* name) (= (-> far-lev name) (-> *mp-far* name)) (= (-> far-lev status) 'loaded))
+      (let ((slot (-> *mp-far* slot))
+            (adding? #f)
+            )
+        (when (and (>= slot 0) (< slot MP_MAX_PLAYERS))
+          (dotimes (k (-> *mp-levels* count slot))
+            (let* ((name (-> *mp-levels* names (+ (* slot 10) k)))
+                   (info (lookup-level-info name))
+                   )
+              (when (and name
+                         (< n 5)
+                         (!= info default-level)
+                         (= (-> info master-level) (-> *mp-far* name))
+                         (mp-borrow-mode? (-> info memory-mode))
+                         )
+                (let ((lev (level-get *level* name)))
+                  (cond
+                    ;; already loaded in the far level's borrow heaps
+                    ((and lev (= (-> lev borrow-from-level) far-lev))
+                     (set! (-> want n) name)
+                     (+! n 1)
+                     )
+                    ;; one new at a time, a level slot left for our place
+                    ((and (not lev) (not adding?) (>= free-slots 2) (not (load-in-progress? *level*)))
+                     (set! (-> want n) name)
+                     (+! n 1)
+                     (set! adding? #t)
+                     )
+                    )
+                  )
+                )
+              )
+            )
+          ;; its code links like the far level's: the sandbox notes our names first
+          (when (and adding? (not (-> *mp-far* sandbox?)))
+            (pc-mp-sandbox-begin)
+            (set! (-> *mp-far* sandbox?) #t)
+            )
+          )
+        )
+      )
+    ;; the previous ones not wanted any more leave, the wanted ones are in
+    (dotimes (i 5)
+      (let ((old (-> *mp-far* borrows i))
+            (keep? #f)
+            )
+        (when old
+          (dotimes (k n)
+            (if (= (-> want k) old)
+                (set! keep? #t)
+                )
+            )
+          (if (not keep?)
+              (mp-far-target-remove ls old)
+              )
+          )
+        )
+      )
+    (dotimes (i 5)
+      (set! (-> *mp-far* borrows i) (-> want i))
+      (if (-> want i)
+          (mp-far-target-add ls (-> want i))
+          )
+      )
+    )
+  (none)
+  )
+
+(defun mp-send-levels ()
+  "Send the levels of our own place (not the far ones) to the others when they change, and every
+   10 seconds for players who join (levels event)."
+  (let ((st *mp-levels*))
+    (when (time-elapsed? (-> st check-time) (seconds 1))
+      (set-time! (-> st check-time))
+      (let ((hash 0)
+            (count 0)
+            )
+        (dotimes (i (-> *level* length))
+          (let ((lev (-> *level* level i)))
+            (when (and (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
+                       (not (mp-far-name? (-> lev name)))
+                       )
+              (set! hash (logxor hash (* (the-as int (-> lev name)) (+ count 7))))
+              (+! count 1)
+              )
+            )
+          )
+        (when (or (!= hash (-> st sent-hash)) (time-elapsed? (-> st sent-time) (seconds 10)))
+          (set! (-> st sent-hash) hash)
+          (set-time! (-> st sent-time))
+          (let ((ev (new 'stack 'mp-event))
+                (index 0)
+                )
+            (dotimes (i (-> *level* length))
+              (let ((lev (-> *level* level i)))
+                (when (and (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
+                           (not (mp-far-name? (-> lev name)))
+                           )
+                  (set! (-> ev kind) (mp-event-kind levels))
+                  (set! (-> ev to) -1)
+                  (set! (-> ev iarg 0) index)
+                  (set! (-> ev iarg 1) count)
+                  (copyn-charp<-string (-> ev text) (symbol->string (-> lev name)) 32)
+                  (pc-mp-send-event ev)
+                  (+! index 1)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-levels ((ev mp-event))
+  "A player's list of levels (levels event): kept for the borrow levels of its far level."
+  (let ((slot (-> ev from))
+        (index (-> ev iarg 0))
+        )
+    (when (and (>= slot 0) (< slot MP_MAX_PLAYERS) (>= index 0) (< index 10))
+      (if (zero? index)
+          (set! (-> *mp-levels* count slot) 0)
+          )
+      (string<-charp (-> *mp-far* text) (-> ev text))
+      (set! (-> *mp-levels* names (+ (* slot 10) index)) (string->symbol (-> *mp-far* text)))
+      (set! (-> *mp-levels* count slot) (max (-> *mp-levels* count slot) (+ index 1)))
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-update ((ls load-state))
+  "Before the level loads of a frame (load-state update!): keep the far level among the levels to
+   load (target), not displayed; start one for a distant player only when our own place waits for
+   no load and two level slots are free; let it go when our place needs its slot, wants that level
+   itself, or no player stands in it any more."
+  (let ((far (-> *mp-far* name))
+        (want (if (and *mp-far-enabled* (> (mp-player-count) 0) (not (and *scene-player* (-> *scene-player* 0))))
+                  (mp-far-candidate)
+                  )
+              )
+        (pending? #f)
+        (free-slots 0)
+        )
+    ;; our own place: the levels it wants (want-exp, never written here) and those still loading
+    (dotimes (i 10)
+      (let ((name (-> ls want-exp i name)))
+        (when name
+          (if (= name want)
+              (set! want #f)
+              )
+          ;; it wants the far level itself: that copy goes, ours loads like any level of our place
+          ;; (the far copy took no bank and its code was kept from our names)
+          (when (and (-> *mp-far* level) (= name (-> *mp-far* level name)))
+            (format 0 "[multiplayer] level ~A now wanted here: its distant copy unloads first~%" name)
+            (level-status-update! (-> *mp-far* level) 'inactive)
+            (set! far #f)
+            )
+          )
+        )
+      (let ((name (-> ls target i name)))
+        (if (and name (!= name far) (!= name want) (not (mp-far-name? name)) (not (mp-level-ready? name)))
+            (set! pending? #t)
+            )
+        )
+      )
+    (dotimes (i (-> *level* length))
+      (if (= (-> *level* level i status) 'inactive)
+          (+! free-slots 1)
+          )
+      )
+    (cond
+      ((and want (= want far))
+       ;; our place loads a level: the far one goes first, so no level of ours links next to it
+       (when pending?
+         (set! want #f)
+         (+! (-> *mp-far* drops) 1)
+         )
+       )
+      (want
+       ;; a new one: the previous one gone, and a host with room for it
+       (if (or pending?
+               (< free-slots 2)
+               (load-in-progress? *level*)
+               (-> *mp-far* level)
+               (not (mp-far-host (the-as level #f) (mp-far-size (lookup-level-info want))))
+               )
+           (set! want #f)
+           )
+       )
+      )
+    ;; the previous far level leaves the levels to load (our place keeps it if it wants it)
+    (when (and far (!= far want))
+      (dotimes (i 10)
+        (when (= (-> ls target i name) far)
+          (let ((own? #f))
+            (dotimes (k 10)
+              (if (= (-> ls want-exp k name) far)
+                  (set! own? #t)
+                  )
+              )
+            (if (not own?)
+                (set! (-> ls target i name) #f)
+                )
+            )
+          )
+        )
+      )
+    (set! (-> *mp-far* name) want)
+    (if want
+        (mp-far-target-add ls want)
+        )
+    (mp-far-update-borrows ls free-slots)
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- the far level among the levels to load (engine/level/level.gc)
+(define-perm *mp-stock-load-state-update* (function load-state int)
+  (the-as (function load-state int) (method-of-type load-state update!))
+  )
+
+(defmethod update! ((this load-state))
+  "The far level first (mp-far-update, its sandbox), then the stock loads and unloads of the frame."
+  (when (= this *load-state*)
+    (mp-far-sandbox)
+    (mp-far-update this)
+    )
+  (let ((ret (*mp-stock-load-state-update* this)))
+    (if (= this *load-state*)
+        (mp-far-sandbox)
+        )
+    ret
+    )
   )
 
 ;; ------------------------------------------------------------------------------------------------
@@ -2927,9 +3665,8 @@
 ;; share its region (same NPC authority), so they watch it together and get its commands (task
 ;; nodes, continue points). Gated by the host's "Share story progress".
 ;;
-;; Levels are not copied: a level loaded without a free bank of the level heap crashes the game
-;; ("could not find free ... bank in the level-group heap"), so each machine loads the levels its
-;; own player's position calls for. Players in one region stand in the same levels.
+;; Players in one region stand in the same levels; a distant player's level is loaded here without
+;; being displayed (Distant players' levels above).
 
 (deftype mp-scene-state (structure)
   ((replaying? symbol)      ;; starting another player's scene: do not send it back

@@ -1618,6 +1618,124 @@ u64 pc_mp_clock(u32 slot) {
   return (u64)(s64)(mp::session().clock_of(source, mp::now_ms()) * mp::kBatchTicksPerMs);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Level code sandbox
+// ---------------------------------------------------------------------------------------------
+// A level loaded for a distant player links its code into the running game: its defun, define
+// and deftype of names our own levels already use point those names at its copy, and a deftype of
+// an existing type resets that type's methods to its parent's (new_type in kscheme.cpp). The
+// sandbox notes every symbol, the methods of every type and some global tables before that level
+// loads, and puts back each entry that held a value and now points into the level's memory (or,
+// for methods, changed at all: only that level links code meanwhile). Names only that level
+// defines stay: its art and particle groups are what copies need from it.
+
+struct SandboxType {
+  u32 sym;   // symbol of the type
+  u32 type;  // type object when noted
+  std::vector<u32> methods;
+};
+
+struct Sandbox {
+  bool active = false;
+  std::vector<std::pair<u32, u32>> words;  // address, value: symbol values and table entries
+  std::vector<SandboxType> types;
+};
+
+Sandbox& sandbox() {
+  static Sandbox s;
+  return s;
+}
+
+bool is_type_object(u32 v) {
+  return v >= 0x84000 && v < (u32)EE_MAIN_MEM_SIZE && (v & 7) == 4 &&
+         *Ptr<u32>(v - 4).c() == u32_in_fixed_sym(jak3_symbols::FIX_SYM_TYPE_TYPE);
+}
+
+// Symbol values live 1 byte below the (odd) symbol address (Symbol4).
+u32& symbol_value(u32 sym) {
+  return Ptr<Symbol4<u32>>(sym)->value();
+}
+
+// (pc-mp-sandbox-begin) notes every symbol value and the methods of every type.
+void pc_mp_sandbox_begin() {
+  auto& sb = sandbox();
+  sb.words.clear();
+  sb.types.clear();
+  sb.active = true;
+  auto note = [&](u32 sym) {
+    u32 v = symbol_value(sym);
+    sb.words.emplace_back(sym - 1, v);
+    if (is_type_object(v)) {
+      auto type = Ptr<Type>(v);
+      SandboxType t{sym, v, std::vector<u32>(type->num_methods)};
+      for (u32 i = 0; i < type->num_methods; i++) {
+        t.methods[i] = type->get_method(i).offset;
+      }
+      sb.types.push_back(std::move(t));
+    }
+  };
+  for (u32 sym = s7.offset; sym < LastSymbol.offset; sym += 4) {
+    note(sym);
+  }
+  for (u32 sym = SymbolTable2.offset; sym < s7.offset; sym += 4) {
+    note(sym);
+  }
+}
+
+// (pc-mp-sandbox-watch addr count stride) notes `count` words, `stride` bytes apart (a table).
+void pc_mp_sandbox_watch(u32 addr, u32 count, u32 stride) {
+  auto& sb = sandbox();
+  if (!sb.active || addr < 0x84000 || stride < 4) {
+    return;
+  }
+  for (u32 i = 0; i < count; i++) {
+    u32 at = addr + i * stride;
+    if (at + 4 > (u32)EE_MAIN_MEM_SIZE) {
+      break;
+    }
+    sb.words.emplace_back(at, *Ptr<u32>(at).c());
+  }
+}
+
+// (pc-mp-sandbox-restore lo hi) -> entries put back: a noted word that held a value (not 0, not
+// #f) and now points into [lo, hi), and any changed method of a noted type.
+u64 pc_mp_sandbox_restore(u32 lo, u32 hi) {
+  auto& sb = sandbox();
+  if (!sb.active) {
+    return 0;
+  }
+  u64 n = 0;
+  for (auto& [at, old] : sb.words) {
+    u32& cur = *Ptr<u32>(at).c();
+    if (cur != old && cur >= lo && cur < hi && old != 0 && old != s7.offset) {
+      cur = old;
+      n++;
+    }
+  }
+  for (auto& t : sb.types) {
+    if (symbol_value(t.sym) != t.type) {
+      continue;
+    }
+    auto type = Ptr<Type>(t.type);
+    u32 count = std::min<u32>(type->num_methods, (u32)t.methods.size());
+    for (u32 i = 0; i < count; i++) {
+      if (type->get_method(i).offset != t.methods[i]) {
+        type->get_method(i).offset = t.methods[i];
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
+// (pc-mp-sandbox-end) forgets the notes.
+void pc_mp_sandbox_end() {
+  auto& sb = sandbox();
+  sb.active = false;
+  sb.words = {};
+  sb.types = {};
+}
+
 // (pc-mp-test-active?) -> #t when a test script drives this instance.
 u64 pc_mp_test_active() {
   return to_symbol(mp::test::script().loaded);
@@ -1677,6 +1795,10 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-get-pose", (void*)pc_mp_get_pose);
   make_function_symbol_from_c("pc-mp-get-emitters", (void*)pc_mp_get_emitters);
   make_function_symbol_from_c("pc-mp-clock", (void*)pc_mp_clock);
+  make_function_symbol_from_c("pc-mp-sandbox-begin", (void*)pc_mp_sandbox_begin);
+  make_function_symbol_from_c("pc-mp-sandbox-watch", (void*)pc_mp_sandbox_watch);
+  make_function_symbol_from_c("pc-mp-sandbox-restore", (void*)pc_mp_sandbox_restore);
+  make_function_symbol_from_c("pc-mp-sandbox-end", (void*)pc_mp_sandbox_end);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);
