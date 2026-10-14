@@ -15,7 +15,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, left stick). |
 | Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason). |
 | GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
-| GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, crates and pickups. |
+| GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
 | GAME | `.../multiplayer-menu.gc` | START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
 | Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/`, `compare_poses.py` | Runs several game instances on one PC with a script each, gathers logs and screenshots; compares an owner's bones with its copies'. |
@@ -62,7 +62,8 @@ near it, and a guest far from every authority for itself and the guests near it 
 | Enemy deaths, broken crates, taken pickups | where they happen | the same entity dying or removed |
 | Story progress: closed task nodes (missions done, with their rewards) | where they close | the same nodes closed; a player who joins gets the others' and gives its own (1.5) |
 | Time of day | the host | followed by the guests |
-| World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player | each player's own: a lift must answer the player standing on it, so it is not driven from another machine |
+| World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player (a lift must answer the player standing on it) | kept alike (1.6): cycles follow the host's clocks, doors open for any player in front of them, an elevator trip started on one machine runs on all |
+| Cutscenes | where they start | the same cutscene, for the players of that region (1.6) |
 
 A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
 process's art group and joint geometry, since a process does not keep it) and plays the owner's
@@ -94,8 +95,9 @@ sends their hits.
   longer sent), since another player may see it up close. An object its owner does not draw (a
   hidden prop, a player during a teleport) sends no pose: its copy is hidden too (`log`: `poses
   hidden`). A passenger's own model is hidden, so the seated model its machine draws is sent
-  instead. A drawn object whose bones are not all fresh would play the animation instead (`log`:
-  `poses skipped`, 0 in every scenario). The copy's `joint-control` has `mp-pose-postbind` as its
+  instead. A drawn object whose bones are not all fresh plays the animation instead (`log`:
+  `poses skipped`): 0 in every scenario but `scene` (2 to 9 out of thousands: citizens a cutscene
+  freezes, their bones no longer computed) and once 2 in `world-objects`. The copy's `joint-control` has `mp-pose-postbind` as its
   `postbind-function`: `do-joint-math` computes the copy's bones from its own animation, then this
   function lays the owner's bones, interpolated, on the copy's frame (same bone count only). Blends,
   streamed animations, look-at and aiming joint mods, joint scales and ragdolls all come through.
@@ -125,6 +127,36 @@ goes through the node's `open!` method (which also closes the parents the node n
 they close the same node with `open!`, rewards and on-close scripts included. When a player joins,
 every player already there sends it all its closed nodes, and it sends its own: everyone ends with
 the union. Host setting **Share story progress** (on by default).
+
+### 1.6 World objects and cutscenes
+
+- **Cycles.** Moving platforms, wheels, lights and every other object on a cycle compute their
+  phase from their process's clock (`sync-info`), and each machine's clocks started at its own
+  boot. The host sends its clocks with the world settings every 2 s (`*mp-synced-clocks*`); on a
+  guest, the `sync-info` methods (`get-norm!` of the three cycle types, `get-current-phase-no-mod`,
+  `get-timeframe-offset!`, `sync-now!`) see the object's offset shifted by the host's lead minus
+  100 ms, put back after the call. The cycles show the host's phase as its copies are drawn, and no
+  timer of the game moves.
+- **Doors.** `com-airlock` decides to open in `want-cross-airlock?`, for the local player only. The
+  wrapper also opens it for a remote player standing where the local one would (in front, within
+  its distances and heights, the door allowed to open by its script), so a door is open on every
+  machine when any player is at it.
+- **Elevators.** Each frame batch, an elevator near a player that started a trip here (`running`)
+  is announced (`elevator` event: entity, target stop); the others send their copy of it the
+  elevator's own `'move-to 'top` or `'bottom` when it waits at a stop. A trip started on another
+  player's word is not announced back.
+- **Cutscenes.** Every cutscene starts in `scene-player-init`, wrapped: its scenes and continue
+  point go to the others (`scene` events), and a player of the same region (same NPC authority)
+  with no cutscene playing starts the same one, with its commands. Gated by **Share story
+  progress**.
+- **Levels.** Levels are not copied from machine to machine: each machine loads the levels its own
+  player's position calls for, and players of one region stand in the same levels. Loading one
+  more level is not safe: with no free bank of the level heap, the game crashes (seen in a test:
+  "could not find free small-edge bank in the level-group heap", then a crash).
+- **Levels leaving.** A level that leaves kills its entities and their effects, then its memory is
+  reused. Before that (`level` `deactivate`, wrapped), the copies drawn with its art, the
+  part-trackers on copies playing its particle groups and the skeleton cache are dropped: they
+  would point into freed memory (two crashes at a level unload in testing before this).
 
 ## 2. Requirements and how they are met
 
@@ -170,6 +202,10 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `sp-launch-particles-var` | same file | Every particle launch; only the direct ones (no launch control) are noted. |
 | `sound-play-by-name`, `sound-play-by-spec`, `sound-stop` | `engine/sound/gsound.gc` | Every sound a process plays or stops. |
 | `game-task-node-info` `open!` | `engine/game/task/task-control.gc` | Every task node closure (story progress). |
+| `sync-linear`, `sync-eased`, `sync-paused` `get-norm!`; `sync-info` `get-current-phase-no-mod`, `get-timeframe-offset!`, `sync-now!` | `engine/util/sync-info.gc` | The phase of every cycle (shifted to the host's on a guest). |
+| `com-airlock` `want-cross-airlock?` | `engine/common-obs/airlock.gc` | Doors open for remote players too. |
+| `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there. |
+| `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first. |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -244,7 +280,11 @@ python scripts/mp-test/run_mp_test.py <scenario>
 ```
 
 `python scripts/mp-test/compare_poses.py` compares, after a `pose-all` run, the bones the host
-logged for its objects with those of their copies on the guest.
+logged for its objects with those of their copies on the guest at the same moment: both log every
+frame, stamped with the host's clock (`pc-mp-clock`), and each copy sample is compared with the
+host's bones interpolated at its stamp. The host reads its bones from the manager, where the batch
+reads them (the test hook runs after the frame's joint math, one frame later); a copy is stamped
+with the time of the pose laid on it.
 
 The runner starts one game per script of `scripts/mp-test/scenarios/<scenario>/`, each with its
 own `--config-path` folder (a copy of the user's saves and settings, small window, side by side,
@@ -269,7 +309,10 @@ A script line is `<seconds> <command>`:
 | `log-part <index>` | Where entry `index` of `*part-id-table*` lives (which level heap). |
 | `log-me` | One line: own position, speed and state (fine-grained probes). |
 | `log-pose-own <npc\|daxter\|gun\|vehicle\|wheel>`, `log-pose-copy <slot> <skeleton name\|*>` | Four bones of one of our objects (the NPC nearest to player 1, Daxter, the gun, the vehicle driven, its first wheel), and of the copies of player `slot`'s objects with that skeleton (`*`: its NPC nearest to us), with the poses laid on each copy. |
-| `log-tasks`, `close-task` | Story progress: closed nodes, nodes closed after another player, the open ones; close the first open node. |
+| `log-tasks`, `close-task [n]` | Story progress: closed nodes, nodes closed after another player, the open ones; close the first open node, n times. |
+| `log-sync` | Phase of a 4-second test cycle computed in the manager's context, stamped with the host's clock: a guest's must follow the host's. |
+| `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, and the elevator trips sent and shown. |
+| `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded and the cutscenes sent, shown and playing. |
 
 Scenarios and what they verified (2026-10-14, Spargus, every one run again after the last change):
 
@@ -285,9 +328,12 @@ Scenarios and what they verified (2026-10-14, Spargus, every one run again after
 | `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
 | `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
-| `pose-all` | Every object type: NPC, Daxter, gun, buggy, wheels | `compare_poses.py`: Daxter 0.7 mm, gun 0.3 mm, buggy 0.4 mm; a walking NPC logged every frame on both sides, 53 frames paired: median 5.9 mm, largest 5.5 cm while its bones move 5.1 cm per frame (the two machines' frames are not in phase); every wheel copy gets its pose each batch; no pose skipped. |
+| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each: Daxter median 0.7 mm (largest 3.0 mm), gun 0.2 mm, buggy 0.5 mm (1.0 mm), wheel 0.0 mm; a running NPC whose bones move 37.5 to 47.6 mm per frame: median 3.0 to 4.3 mm, largest 2.5 to 5.0 cm, about one frame of its motion (the curve between two 15 Hz poses drawn as a straight blend, and the two machines' frames out of phase); no pose skipped. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host); back next to the host, asleep again. |
+| `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
+| `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
+| `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
 
 | | |
 |---|---|
@@ -302,13 +348,13 @@ public IP.
 
 ## 6. Known limits
 
-- World objects that carry or block the player (lifts, platforms, doors) belong to each player's
-  own game (1.2). A mission's own scripted scenes play for the player who runs them; the others
-  get the outcome (1.5).
-- A copy is drawn with art loaded on the viewer's machine, like the world itself: levels load
-  around each player, so an object in a level the viewer has not loaded (far away) waits until it
-  is.
-- At most 64 NPCs per batch and 128 copies drawn, 4 particle groups per copy, 16 emitters and 16
+- Levels follow each player's position, not the other machines' (1.6: loading one more level can
+  crash the game). Players of one region stand in the same levels; an object of a level only a
+  distant player has loaded is drawn once the viewer gets there.
+- Objects that react to a player's weight (floating platforms that tilt) react to the local player
+  only; their cycles and the doors and elevators are shared (1.6).
+- Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
+  128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
 - Bandwidth: about 1.3 KB per Jak pose and 0.6 KB per NPC pose, 15 times a second; a crowd of 40
   NPCs is about 0.4 MB/s from the authority to each player.
@@ -351,6 +397,13 @@ public IP.
   Shared story progress (task nodes, on join and live, host setting). Remote players in their own
   outfit. Test commands `log-pose-own`, `log-pose-copy`, `log-tasks`, `close-task`; scenarios
   `pose-all`, `progress`.
+- **2026-10-14:** world objects kept alike: cycles follow the host's clocks (sync-info), doors open
+  for remote players, elevator trips run on every machine; cutscenes shared within a region.
+  Copies and part-trackers of a leaving level are dropped before it goes (two crashes at a level
+  unload in testing). Sizes raised (128 objects per batch, 256 copies, 8 particle groups per
+  copy). Level copying tried and dropped: an extra level crashes the game without a free bank.
+  Pose comparison at the same moment (stamps from `pc-mp-clock`). Scenarios `world-objects`,
+  `scene`, `progress-late`.
 - **2026-10-14:** a player standing next to another player's vehicle crouched under the underside
   of its collision sphere and could not get in as passenger: the sphere is now centered low, and
   getting in works crouched too. A passenger's hurtbox stopped the driver's vehicle: hurtboxes are
