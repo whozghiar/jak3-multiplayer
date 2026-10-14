@@ -373,6 +373,7 @@
         (mode (-> *mp-attack-modes* (max 0 (min (-> ev iarg 1) (+ (-> *mp-attack-modes* length) -1)))))
         )
     (when (and proc attacker)
+      (format 0 "[multiplayer] player ~D hit ~A (~A, ~f)~%" (-> ev from) proc mode (-> ev fvec w))
       (send-event
         proc
         'attack
@@ -420,7 +421,8 @@
   ((root   collide-shape :override)
    (id     uint32)
    (dying? symbol)
-   (net    mp-actor-state :inline) ;; latest state from the host
+   (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
+   (net    mp-actor-state :inline) ;; latest state from the owner
    )
   )
 
@@ -435,8 +437,18 @@
   )
 
 (defbehavior mp-replica-hit mp-replica ((attacker process) (info attack-info))
-  "The local player hit this replica: send the blow to the host (which owns the NPC)."
-  (when (and (mp-from-local-player? attacker) *target*)
+  "The local player hit this replica: send the blow to its owner (the host for an NPC)."
+  (when (and (mp-from-local-player? attacker)
+             *target*
+             (not (and info
+                       (logtest? (attack-mask id) (-> info mask))
+                       (= (-> info id) (-> self last-attack))
+                       )
+                  )
+             )
+    (if (and info (logtest? (attack-mask id) (-> info mask)))
+        (set! (-> self last-attack) (-> info id))
+        )
     (let ((ev (new 'stack 'mp-event))
           (pen (if (and info (logtest? (attack-mask penetrate-using) (-> info mask)))
                    (the-as uint (-> info penetrate-using))

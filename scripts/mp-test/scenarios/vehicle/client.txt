@@ -1,0 +1,13 @@
+# Vehicle test, guest side: looks at the host's buggy (body and wheels), then steals it.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+55 goto-player 0 7
+56 face-player 0
+57 log
+60 screenshot buggy
+62 goto-player 0 2
+63 press triangle 100
+66 log
+68 screenshot stolen

@@ -208,6 +208,43 @@
   (none)
   )
 
+(defun mp-test-skel-prefix? ((skel (pointer uint8)) (prefix string))
+  "#t when the skeleton name, without its \"skel-\" part, starts with `prefix`."
+  (let ((n (length prefix)))
+    (dotimes (i n)
+      (if (!= (-> skel (+ i 5)) (-> prefix data i))
+          (return #f)
+          )
+      )
+    )
+  #t
+  )
+
+(defun mp-test-goto-npc ((prefix string))
+  "Stand 1.5 m from the first NPC received whose skeleton starts with `prefix`, facing it."
+  (dotimes (i (-> *mp-actors-in* count))
+    (let ((st (-> *mp-actors-in* state i)))
+      (when (and *target* (mp-test-skel-prefix? (-> st skel) prefix))
+        (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans)))
+              (dir (new 'stack-no-clear 'vector))
+              )
+          (+! (-> pos z) (meters -1.5))
+          (move-to-point! (-> *target* control) pos)
+          (vector-! dir (-> st trans) pos)
+          (set! (-> dir y) 0.0)
+          (vector-normalize! dir 1.0)
+          (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
+          (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+          (format 0 "[mp-test] next to npc ~D~%" (-> st id))
+          (return #t)
+          )
+        )
+      )
+    )
+  (format 0 "[mp-test] no npc ~S~%" prefix)
+  #f
+  )
+
 (defun mp-test-run ()
   "Run the command in (-> *mp-test* line)."
   (format 0 "[mp-test] run ~S~%" (-> *mp-test* line))
@@ -286,6 +323,10 @@
              )
            )
          )
+        ((string= cmd "goto-npc")
+         (mp-test-word)
+         (mp-test-goto-npc (-> *mp-test* word))
+         )
         ((string= cmd "goto-actor")
          ;; stand 3 m from the n-th NPC received from the host, facing it
          (let ((n (mp-test-int)))
@@ -326,6 +367,14 @@
          (if *target*
              (send-event *target* 'change-mode 'gun #f (pickup-type gun-yellow-1))
              )
+         )
+        ((string= cmd "vehicle")
+         ;; vehicle <vehicle-type>: get in a new vehicle of that type where the player stands
+         (let ((vtype (mp-test-int)))
+           (if *target*
+               (send-event *target* 'change-mode 'pilot #f vtype #t)
+               )
+           )
          )
         ((string= cmd "zone")
          (mp-teleport-zone (mp-test-int))

@@ -1,0 +1,14 @@
+# NPC hit test, guest side: walks up to a replica of the host's wastelander and punches it.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+58 goto-npc wlander
+60 goto-npc wlander
+60.2 press square 200
+60.6 screenshot punch
+62 log
+63 goto-npc wlander
+63.2 press square 200
+63.6 screenshot punch2
+64 log

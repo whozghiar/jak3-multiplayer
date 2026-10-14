@@ -754,10 +754,19 @@
                      )
                )
           (if (not (and anim (type? anim art-joint-anim)))
-              (set! anim (if (-> self daxter?)
-                             (-> ag data 473) ;; daxter-indax-stance-ja
-                             (-> ag data 18)  ;; jakb-stance-loop-ja
+              (set! anim (cond
+                           ((-> self daxter?)
+                            (-> ag data 473) ;; daxter-indax-stance-ja
+                            )
+                           ;; driving or riding: the pilot animations stream in only on the
+                           ;; driver's machine, so crouch (closer to sitting than standing)
+                           ((logtest? (-> st flags) (mp-flag driving riding))
+                            (-> ag data 33) ;; jakb-duck-stance-ja
+                            )
+                           (else
+                             (-> ag data 18) ;; jakb-stance-loop-ja
                              )
+                           )
                     )
               )
           (when (and anim (type? anim art-joint-anim))

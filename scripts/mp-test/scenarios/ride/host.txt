@@ -1,0 +1,9 @@
+# Passenger test, host side: drives a two-seat buggy (v-snake) and moves; the guest rides along.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52 vehicle 13
+64 stick 128 0 3000
+66 screenshot driving
+67 log

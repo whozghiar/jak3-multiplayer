@@ -1,0 +1,7 @@
+# NPC hit test, host side: its NPC must react to the guest's punch (see the "hit" line).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+62 log
+64 log

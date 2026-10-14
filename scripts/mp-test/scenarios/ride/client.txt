@@ -1,0 +1,10 @@
+# Passenger test, guest side: holds triangle next to the host's buggy, then rides in its seat.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+58 goto-player 0 2
+59 press triangle 900
+62 log
+66 screenshot riding
+67 log

@@ -1,0 +1,10 @@
+# Vehicle test, host side: gets in a buggy; the guest sees it, then steals it.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52 vehicle 15
+56 log
+60 screenshot driving
+66 log
+68 screenshot stolen
