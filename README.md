@@ -20,16 +20,24 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 - **Host or join from the start menu:** START > Options > Multiplayer. Type the server address
   (`ip:port`) and your player name with the D-pad, then host or join. Up to 8 players.
 - **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere.
-- **Your color:** ten tints, seen by the other players on your character and your health bar.
-- **See each other:** every player appears with their name and health bar over their head, and
-  as a dot on the minimap.
+- **Your color:** ten colors, shown as a small square before your name and as your dot on the
+  minimap.
+- **See each other:** every player appears with their name and health bar over their head, as a
+  dot on the minimap, with Daxter on their shoulder, their gun, their shots and the vehicle they
+  drive.
+- **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
+  with their animations and effects. Enemies killed, crates broken and pickups taken disappear for
+  everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
-  triangle to ride next to them when it has two seats.
+  triangle to ride next to them when it has two seats. Guests can also take the host's traffic
+  vehicles.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
+- **Players can hit each other:** punches and shots between players hurt and knock back (the host
+  can turn it off).
 - **Cheats menu:** in the Mods menu (L3 + SELECT): refill ammo, restore health, dark eco and
   light eco, invincibility, teleport to a zone or to a player.
 - **Administration for the host:** kick or ban a player, teleport players to you, allow or forbid
-  cheats for guests, share your time of day, stop the server.
+  cheats for guests and players hitting each other, share your time of day, stop the server.
 
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
@@ -54,7 +62,7 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 > host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
 > mod.
 
-Each player keeps their own save and story progress: you play together in the same world, but
+Each player keeps their own save and story progress: you play together in the host's world, but
 missions are not shared.
 
 ## Download & Play via OpenGOAL Launcher (Players)

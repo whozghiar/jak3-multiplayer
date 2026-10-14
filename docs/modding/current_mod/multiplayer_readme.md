@@ -1,7 +1,7 @@
 # Multiplayer (Jak 3): technical notes
 
-How the online mod is built: the network layer in the runtime, the GOAL side, the vanilla hook
-points, what each requirement maps to, how to test it, its limits, and the change log.
+How the online mod is built: the network layer in the runtime, the GOAL side, the shared world,
+the vanilla hook points, how to test it in game automatically, its limits, and the change log.
 Player-facing description: the root [`README.md`](../../../README.md). GOAL patterns referenced
 here live in the Lisp wiki ([`.agents/skills/goal-lisp/wiki/`](../../../.agents/skills/goal-lisp/wiki/index.md)).
 
@@ -11,10 +11,14 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 | Layer | File | Role |
 |---|---|---|
-| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of remote players, config file. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
-| Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, ban). |
-| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets, vehicle ghosts, passenger seat, shared enemy deaths, hit forwarding, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
-| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer-menu.gc` | START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of players and objects, config file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script. |
+| Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, ban, refusal reason). |
+| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets and their hurtboxes, passenger seat, shared enemy deaths, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
+| GAME | `.../multiplayer-world.gc` | The shared world: NPC and prop replication, guests' NPCs asleep, hits on replicas, NPC vehicles, effects, projectiles, crates and pickups. |
+| GAME | `.../multiplayer-menu.gc` | START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
+| GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
+| Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/` | Runs several game instances on one PC with a script each, gathers logs and screenshots. |
 
 ### 1.1 Network
 
@@ -23,10 +27,12 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 - **Transport:** TCP with `TCP_NODELAY`, non-blocking sockets pumped once per frame from GOAL
   (`pc-mp-update`), no thread. A frame is `[u16 length][u8 type][payload]`; malformed or
   oversized frames drop the peer. Message types: `HELLO` (protocol version), `WELCOME` (slot),
-  `REJECT` (reason, then close: refused, kicked, banned, server stopped), `STATE`, `LEAVE`, `EVENT`.
-- **State:** each player sends its `mp-player-state` (192 bytes: position, orientation, velocity,
-  animation index and frame, health, flags, driven vehicle, passenger seat, name, level, continue
-  point) at 30 Hz.
+  `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`.
+- **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
+  health, flags, driven vehicle, passenger seat, name, color, level, continue point) at 30 Hz.
+- **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
+  player: `[u8 source][u32 source time][u16 count][states]`. Ids carry the owner's slot in the
+  top byte and the owner's process pid below.
 - **Events:** `mp-event` (80 bytes), routed by slot (`to = -1` for everyone). The kinds are
   defined in GOAL (`mp-event-kind`); the C++ side only stamps the sender.
 - **Timeouts:** 15 s of silence drops a peer, 8 s to connect. The pump runs from the per-frame
@@ -34,37 +40,56 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 - **Config:** `<settings>/multiplayer.cfg` (`%APPDATA%/OpenGOAL/jak3/settings/` on Windows):
   name, address, character, color, enabled.
 
-### 1.2 Limiting desynchronization
+### 1.2 The shared world
 
-| Mechanism | Where |
-|---|---|
-| Remote players drawn 100 ms in the past, interpolated between the two surrounding snapshots (positions lerped, rotations nlerped, animation frame lerped within the same clip). | `mp::Remote::sample` |
-| Sender clocks matched by tracking the fastest observed delivery, so jitter does not stretch motion. | `mp::Remote::push` |
-| Late packets: extrapolation along the last velocity for 250 ms, then hold. A jump of more than 10 m snaps (teleports never slide). | `mp::Remote::sample` |
-| Enemy deaths shared by entity `aid`: the other machines play the same enemy's death (`instant-death`). Echoes are suppressed. | `mp-on-enemy-died`, `mp-apply-remote-kill` |
-| Time of day shared by the host every 2 s (15 min tolerance). | `mp-apply-world` |
-| A vehicle has one driver: stealing ejects the driver and removes their copy. | `mp-steal-now`, `mp-on-stolen` |
-| Guests take the host's cheat permission. | `*mp-world*` |
+The host is the authority on the world; every player owns its own avatar and props.
 
-Each player keeps their own story progress and their own copy of the world. Enemies other than
-their deaths, pickups, crates and mission state are not synchronized.
+| What | Simulated by | Seen by the others as |
+|---|---|---|
+| The player, its animation, health | its player | an `mp-puppet` (Jak, or Daxter in `indax` mode) |
+| Daxter on the shoulder, the gun, the vehicle driven and its wheels | its player | replicas of those props |
+| NPCs: the `enemy` family (citizens, guards, monsters, marauders...), vehicles and wheels near a player | the host | replicas; the guests' own NPCs sleep and their traffic is off |
+| One-shot effects (part-trackers) | where they start | the same effect started at the same place |
+| Projectiles | the shooter's machine (the host for NPCs) | a copy fired from the puppet or the replica |
+| Enemy deaths, broken crates, taken pickups | where they happen | the same entity dying or removed |
+| Time of day | the host | followed by the guests |
+
+A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
+process's art group and joint geometry, since a process does not keep it) and plays the owner's
+animation by index. Animation-carried effects (footsteps, sounds) play on the replica itself.
+Both players and objects are drawn 100 ms in the past, interpolated with the owner's clock, so
+props stay on the puppet that carries them.
+
+### 1.3 Who applies damage
+
+Each blow or shot counts once, on the machine that owns the victim:
+
+| Blow | Detected on | Applied by |
+|---|---|---|
+| A player's punch or shot on another player | the attacker's machine (its hurtbox for that player) | the victim, as a stock hit with knockback (`pvp` event) |
+| A player's punch or shot on an NPC replica | the attacker's machine | the host, on the real NPC, from the attacker's puppet (`actor-hit`) |
+| An NPC's melee on a player's puppet | the host | that player (`hit` event) |
+| An NPC's shot | every machine, on its own player, with its copy of the shot | locally; puppets ignore shots |
+
+Copies of a player's shots collide with the background only: they are drawn, the shooter's machine
+sends their hits.
 
 ## 2. Requirements and how they are met
 
 | Requirement | Implementation |
 |---|---|
 | Create or join a server from the start menu | START > Options > Multiplayer: **Host a server**, **Join the server**, **Disconnect**, plus a status line. The ring of the start menu has exactly ten slots (36 degrees each, matching its 3D model), so the page hangs off the Options list, which gets a sixth entry while the mod is enabled. |
-| IP address with port | **Server address (ip:port)** text field. Host names work too (resolved once when joining). |
-| Nickname | **Player name** text field (15 characters). |
-| Jak or Daxter | **Character** carousel. Daxter is the stock playable-Daxter mode (`indax`, `engine/target/indax/`), entered from the idle stance. Its code and animations were only in the FACC, VOCA and HALFPIPE level DGOs; they are now resident in GAME (section 3). |
-| Color | **Color** carousel, ten tints applied to the player's model on the other screens (`draw-control` `color-mult`) and to its health bar. |
-| Cheats menu per player (not the debug menu) | Mods menu (L3 + SELECT) > multiplayer: refill ammo, restore health, dark eco, light eco, invincibility, teleport to a zone (19 continue points), teleport to a player (live list). Greyed out for guests when the host disallows cheats. |
-| Health bar above players | Name and bar drawn over every remote player in a level loaded here, within 80 m (`mp-draw-nameplate`). |
-| Shared vehicle: steal or sit next to the driver | Next to a remote driver's vehicle on foot: press triangle to steal it, hold triangle to ride as passenger when it has a free second seat. See 4.3. |
-| Limit desynchronization | Section 1.2. |
-| Game entities may focus any player | Remote players are `process-focusable` puppets in the player collide list with `collide-spec jak`, which `enemy::find-best-focus` already considers. A hit on a puppet is forwarded to its player (once a second at most). |
-| Players on the minimap in real time | Each puppet adds a minimap icon (class 124, green clamped dot) tracking it. |
-| Administration page when hosting | Options > Multiplayer > **Server administration** (only selectable while hosting): pick a player, kick, ban (address refused until the server stops), teleport them or everyone to you, cheats for guests, share time of day, stop the server. |
+| IP address with port, nickname | **Server address (ip:port)** and **Player name** text fields (D-pad editing). |
+| Jak or Daxter | **Character** carousel. Daxter is the stock playable-Daxter mode (`indax`), made resident in GAME (section 3). |
+| Color | **Color** carousel. A marker, not a tint: a small square of the player's color before its name, and its minimap dot in that color (own copies of the stock dot class, `*mp-minimap-nodes*`). |
+| Cheats menu per player | Mods menu (L3 + SELECT) > multiplayer: refill ammo, restore health, dark eco, light eco, invincibility, teleport to a zone, teleport to a player. Greyed out for guests when the host disallows cheats. |
+| Health bar above players | Name, color square and health bar (green, yellow, red) over every remote player in view. |
+| Shared vehicle: steal or sit next to the driver | Next to a remote driver's vehicle: press triangle to steal it, hold to ride as passenger when it has a free seat. A guest can also take the host's NPC vehicles. See 4.3. |
+| Synchronize everything | Section 1.2. |
+| Players hit each other, with a reaction | Section 1.3: an `mp-hurtbox` child of each puppet receives the local player's blows and shots; the victim plays the stock hit reaction, pushed away from the attacker. Host setting **Players can hit each other** (on by default). |
+| Game entities focus any player | Puppets are `process-focusable` in the player collide list with `collide-spec jak`, which `enemy::find-best-focus` considers. |
+| Players on the minimap in real time | Each puppet has a minimap icon in its player's color. |
+| Administration page when hosting | Options > Multiplayer > **Server administration**: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other, share time of day, stop the server. |
 
 ## 3. Vanilla touch points
 
@@ -73,18 +98,22 @@ Each is marked `MOD multiplayer`.
 | File | Change |
 |---|---|
 | `game/kernel/jak3/kmachine.cpp` | `InitMachine_PCPort` registers the `pc-mp-*` functions. |
+| `game/sce/libpad.cpp` | Pad 0 input forced by a test script. |
 | `game/CMakeLists.txt`, `test/CMakeLists.txt` | The new C++ file and its test. |
-| `goal_src/jak3/dgos/game.gd` | The two mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o` and `jak-indax+0-ag.go` (after the other `jak-*+0-ag` groups). |
-| `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed. A copy in a level DGO would relink the indax states into that level's heap, and they would dangle once the level unloads. The levels use the resident copy. |
+| `goal_src/jak3/dgos/game.gd` | The four mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o` and `jak-indax+0-ag.go`. |
+| `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1529` for the start menu labels. |
-| `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings (other languages fall back to English). |
+| `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
 
-Two methods are wrapped at load time, each calling the stock method kept by `define-perm`:
+Wrapped at load time, each calling the stock version kept by `define-perm`:
 
-- `enemy` `mark-as-dead` (`engine/common-obs/enemy-states.gc`): every enemy death goes through it,
-  from `on-dying`. GAME loads with method-set propagation on, so child classes take the wrapper.
-- `progress` `set-menu-options` (`pc/progress/progress-pc.gc`): adds the `'multiplayer` page, like
-  `'camera-options` maps to a generic scrolling page.
+| Function or method | File | Why |
+|---|---|---|
+| `enemy` `mark-as-dead` | `engine/common-obs/enemy-states.gc` | Share enemy deaths. |
+| `progress` `set-menu-options` | `pc/progress/progress-pc.gc` | The `'multiplayer` page. |
+| `part-tracker-init-base` | `engine/common-obs/generic-obs.gc` | Every one-shot effect starts there. |
+| `projectile-init-by-other` | `engine/common-obs/projectile.gc` | Every projectile starts there (the stock one never returns, so the shot is sent first). |
+| `process-entity-status!` | `engine/entity/entity.gc` | Broken crates and taken pickups mark their entity dead there. |
 
 The per-frame hook `*mods-menu-hook*` (`engine/game/main.gc`) is set to `mp-frame-hook`, which
 calls `mods-menu-update` first.
@@ -93,123 +122,137 @@ calls `mods-menu-update` first.
 
 ### 4.1 One frame
 
-1. `mp-frame-hook` (every frame, paused or not): `mp-build-local-state` describes the player,
-   `pc-mp-update` sends it and pumps the network, `mp-read-remote-states` copies each remote
-   player's interpolated state into `*mp-players*`, the manager is spawned if missing, then
-   `mp-draw-overlay` draws names, health bars, the vehicle prompt and notifications.
+1. `mp-frame-hook` (every frame, paused or not): runs the test script if any, describes the local
+   player, pumps the network, copies the remote players' interpolated states, spawns the manager
+   if missing (at most once a second when the process pool is full), then draws names, health
+   bars, prompts and notifications.
 2. `mp-manager` (`*pc-pool*`, frozen while paused): applies events, keeps one `mp-puppet` per
    remote player, switches the character, keeps invincibility, runs passenger and steal logic,
-   finishes teleports.
+   finishes teleports, then `mp-world-update`: sends this player's objects, keeps the guest's
+   NPCs asleep, and keeps one `mp-replica` per object received.
 
 ### 4.2 Puppets
 
-An `mp-puppet` uses the player's own Jak model (`target-skel-group`, so a puppet follows the local
-outfit) or Daxter's (`skel-sidekick`). Animations travel as an index in the art group, which is
-the same on every machine: `jakb-ag` for Jak, `daxter-ag` while in `indax` mode. A clip that is not
-loaded on the receiving machine (streamed sets such as vehicle or board animations) falls back to
-the idle stance. A puppet is hidden while its player stands in a level that is not active here,
-but its minimap icon keeps moving. A model change (character, outfit) respawns the puppet.
+An `mp-puppet` uses the local player's Jak model (`target-skel-group`) or Daxter's
+(`skel-sidekick`) and plays the remote player's animation by index. A clip not loaded here falls
+back to the idle stance, or to the crouch for a driver or passenger (pilot animations stream in
+only on the driver's machine). Its `mp-hurtbox` child sits in the actor hash, where the player's
+attacks look. A model change (character, outfit) respawns the puppet.
 
 ### 4.3 Shared vehicles
 
-- **The driver** sends its vehicle's type (matched by class name against `vehicle-type`), position,
-  orientation, seat count and the world position of seat 1. Vehicle classes are level code that
-  GAME cannot name, so seat count and seat position come from vehicle methods 65 and 66 called
-  through the method table, after checking the process inherits from `vehicle`.
-- **Other machines** draw a ghost of that vehicle: a `manipy` with `skel-<type>`, only while that
-  art is loaded (the ghost is removed as soon as the lookup fails, before the level is freed).
-  Buggy wheels are separate processes and are not drawn on the ghost.
+- **Drawing:** the vehicle a player drives, and its wheels, are that player's props: the others
+  draw replicas of them.
 - **Steal (press triangle):** the thief stands where the vehicle is and asks the target for a new
-  vehicle of that type (`'change-mode 'pilot #f type #t`, stock spawn path in
-  `target-handler.gc`). Only once that worked (the target is in `target-pilot-start`) does it send
-  `steal`: the driver gets out (`'end-mode 'pilot`) and its copy is removed with `'go-die` half a
-  second later. Only the player vehicles can be stolen: city bikes and cars (types 0-6, spawner in
-  CWI) and Spargus buggies (12-19, WASALL). The others (catapult, marauders, factory car) have
-  their art in levels that lack `vehicle-manager.o`, whose `vehicle-spawn` the stock path calls.
-- **A passenger's puppet** sits in its driver's seat as each machine sees that vehicle (the
-  driver's own machine uses its real vehicle), not at the passenger's reported position, which
-  crosses the network twice and would trail behind.
-- **Ride (hold triangle 0.5 s):** only with a second seat that no other player uses. The manager
-  spawns an `mp-seat` (invisible, follows the driver's seat 1) and puts the player in the stock
-  `target-grab-ride` state, which moves the player to that process every frame. The player's model
-  is hidden and a local puppet shows it in the seat. Triangle, or the driver leaving the vehicle,
-  ends the ride.
-- Daxter leaves `indax` mode before stealing or riding, and goes back to it afterwards.
+  vehicle of that type (`'change-mode 'pilot #f type #t`, stock spawn path). Only once that worked
+  does it send `steal`: the driver gets out and its vehicle is removed half a second later. Only
+  the player vehicles: city bikes and cars (types 0-6) and Spargus buggies (12-19).
+- **The host's NPC vehicles:** a guest presses triangle next to one, gets the same vehicle, and
+  the host removes its own (`vehicle-taken`).
+- **Ride (hold triangle 0.5 s):** with a second seat no other player uses. An invisible `mp-seat`
+  follows the driver's seat 1 and the player rides it with the stock `target-grab-ride` state.
+  Each machine draws the passenger in the driver's seat as it sees that vehicle.
 
-### 4.4 Enemies
+### 4.4 Guests' own NPCs
 
-Enemies pick their focus among the processes of `*collide-player-list*` whose collide spec matches,
-so puppets compete with the local player by distance and awareness. Hits stay visual on the
-attacker's machine; the victim receives a `hit` event and takes one point of damage through a
-stock `'attack` (generic mode), once a second at most.
+While connected, a guest turns its ambient traffic off (`set-setting! 'traffic-spawn #f`, held by
+the manager) and, four times a second, puts every own NPC to sleep: `sleep` process mask, not
+drawn, collision off. Everything is restored when the session ends.
 
-## 5. Building and testing
+## 5. Testing in game
+
+### 5.1 Unit tests and compile
 
 ```bash
 task build-release-game                                   # gk + goalc, after any C++ change
-cmake --build out/build/Release --target goalc-test       # then:
+cmake --build out/build/Release --target goalc-test
 out/build/Release/bin/goalc-test --gtest_filter=Multiplayer.*
-task compile-check                                        # GOAL; first time in a worktree: (make-group "iso" :force #t)
+task compile-check                                        # first time in a worktree: (make-group "iso" :force #t)
 ```
 
-The DGO lists changed, so the ISO build must be redone (`(mi)` does it).
+### 5.2 Automated sessions
 
-Test with two game instances on one PC: the second needs its own settings folder or it shares
-`multiplayer.cfg` (harmless, but both get the same name). Host with `127.0.0.1:7777` on one,
-join `127.0.0.1:7777` on the other. Over the Internet, the host forwards TCP port 7777 (or the
-port chosen) and guests use the host's public IP.
+```bash
+python scripts/mp-test/run_mp_test.py <scenario>
+```
 
-Checklist (by a human, the agent cannot launch the game):
+The runner starts one game per script of `scripts/mp-test/scenarios/<scenario>/`, each with its
+own `--config-path` folder (a copy of the user's saves and settings, small window, side by side,
+controller ignored when unfocused) and the `MP_TEST_SCRIPT` environment variable. The debug boot
+loads save slot 1, so both games start in game at the same place. When the scripts are done, it
+stops them and writes `out/mp-test/<scenario>/summary.txt` (every `[mp-test]` and `[multiplayer]`
+line) and `screenshots/<instance>-<name>.png` (rendered by the game itself).
 
-1. Mods menu > multiplayer > Enable: START > Options shows Multiplayer.
-2. Host, join: both see the other's character, color, name and health bar, and the minimap dot.
-3. Character Daxter: the player turns into playable Daxter from the idle stance, back with Jak.
-4. Cheats: each entry, then disallowed for guests from the administration page.
-5. Teleport to a zone, to a player in the same area and in another area.
-6. Vehicle: steal (driver ejected), ride (passenger seat, triangle to get off).
-7. Enemies attacking a puppet; kill an enemy and check it dies on the other screen.
-8. Kick, ban (rejoining fails), stop the server (guests see the reason).
-9. Disable the mod: Options goes back to five entries, the session closes.
+A script line is `<seconds> <command>`:
+
+| Command | Effect |
+|---|---|
+| `enable`, `name <w>`, `color <n>`, `character <n>` | Mod settings. |
+| `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
+| `press <button> <ms>`, `stick <lx> <ly> <ms>` | Force pad 0 (button names in PS2 order; stick 0-255, 128 centered). |
+| `goto-player <slot> [m]`, `face-player <slot>` | Stand next to a remote player, turn to it. |
+| `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
+| `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
+| `gun`, `vehicle <type>`, `cheat <name>`, `zone <n>`, `continue <name>` | Gameplay helpers. |
+| `screenshot <name>`, `log` | Evidence: the log shows the session, the local player, every remote player and puppet, the objects sent, received and drawn, the effects and shots sent and replayed. |
+
+Scenarios and what they verified (2026-10-14, Spargus):
+
+| Scenario | Checks | Result |
+|---|---|---|
+| `smoke` | Host, join, puppets, names, health bars | Both see each other. |
+| `pvp` | A guest's punch on the host | Host health 8 to 5, pushed back 3 m, hit reaction seen by the guest. |
+| `npc` | Host NPCs on the guest | 12 replicas drawn, 10 own NPCs asleep. |
+| `npc-hit` | A guest's punch on a host NPC | The citizen goes to its knocked state on the host. |
+| `props`, `combat` | Daxter, gun, shots, impacts | Daxter on the shoulder and the gun on the remote puppet; 3 shots and 2 impacts replayed. |
+| `vehicle` | A driven buggy, then stolen | Body and wheels replicated; the driver is ejected and sees the thief's buggy. |
+| `ride` | Passenger seat | The guest rides in the host's two-seat buggy. |
+| `crate` | A crate broken by the host | The guest goes from 48 to 47 crates. |
+
+| | |
+|---|---|
+| ![Name, color square and health bar](multiplayer-screenshots/pvp-nameplate.jpg) | ![The host's NPCs on the guest](multiplayer-screenshots/npc-replicas.jpg) |
+| ![Remote player with gun and Daxter](multiplayer-screenshots/remote-gun-daxter.jpg) | ![A guest's punch on a host NPC](multiplayer-screenshots/npc-hit.jpg) |
+| ![Steal prompt next to the host's buggy](multiplayer-screenshots/vehicle-prompt.jpg) | ![The host after the steal](multiplayer-screenshots/vehicle-stolen.jpg) |
+| ![Riding as passenger](multiplayer-screenshots/passenger.jpg) | |
+
+Over the Internet, the host forwards TCP port 7777 (or the port chosen) and guests use the host's
+public IP.
 
 ## 6. Known limits
 
-- Each player plays their own story: a player in a mission area another player has not unlocked
-  still sees and reaches them, but the world around may differ.
-- Enemies are simulated on each machine; only deaths are shared.
-- Streamed animations (vehicle, board, some powers) show as the idle stance on machines that have
-  not loaded them.
-- Vehicle ghosts have no wheels; hover vehicles look complete.
-- Text fields use the D-pad (keyboard arrows work too); there is no typed text input.
-- Remote Jaks wear the local player's outfit (`target-skel-group` reads the local `ext-geo`).
-- Animation indices match across machines when every clip sits at its `master-art-group-index`;
-  `link-art-to-master` falls back to any free slot when that one is taken, so a remote player can
-  show a wrong clip (never a crash: the clip type is checked).
-- Not audited: enemy code that assumes its focus is the `target` type could misbehave when it
-  focuses a puppet.
-- The resident indax code and `jak-indax+0-ag` (421 KB) add to the global heap; not measured
-  (the PC global heap is about 300 MB).
+- Each player keeps its own story progress; missions are not shared. A guest's world is the host's
+  wherever the host has the level loaded; elsewhere it is the guest's own world without its NPCs.
+- Replicas show channel 0 of the owner's animation: blends, look-at joint mods and ragdolls are not
+  sent.
+- Streamed animations (pilot, board, some powers) show as the stance or the crouch on machines that
+  have not loaded them. Remote Jaks wear the local player's outfit.
+- Guests cannot hijack an NPC vehicle the host does not let go of: they get a copy and the host's
+  disappears.
+- Only one-shot effects (part-trackers) are shared; continuous emitters of an NPC are not.
+- Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
 ## 7. Change log
 
-- **2026-10-14:** first version. Network session in the runtime (TCP star, 30 Hz states,
-  interpolation, events, kick and ban, config file) with its tests; START > Options > Multiplayer
-  and the administration page; Mods menu entries (toggle, cheats, teleports); puppets with tint,
-  name, health bar and minimap icon, focusable by enemies with hit forwarding; vehicle ghosts,
-  steal and passenger seat; playable Daxter made resident in GAME; shared enemy deaths and time of
-  day. Built and unit-tested; not yet played.
-- **2026-10-14:** fixes from a code review. Text fields crashed on confirm (a static object's
-  `mounted?` starts at 0, not `#f`, so the edit buffer was never allocated). Host and Join fired
-  again on the confirm that deselects the button, and Host then dropped every guest; both now
-  act only from offline. "Stop the server" stopped even on "No" (stock confirm option); a
-  subclass now checks the choice. Refusal reasons (full, version, banned) were never sent; a
-  refused or kicked connection now gets its reason, a half-close, and a second of drained input
-  before closing, so no reset swallows the reason (covered by the test). Stealing is limited to
-  the player vehicle types; the steal event is sent only after the new vehicle exists; passengers
-  are drawn in their driver's seat. macOS build: `MSG_NOSIGNAL` fallback.
-- **2026-10-14:** first in-game report: the log filled with `mp-manager could not be allocated,
-  because *nk-dead-pool* was empty`, and the start menu (`progress`) could not open. The manager's
-  handle was kept in a global symbol, which only holds 32 bits: the pid was cut off, the handle
-  never resolved, and the hook spawned a new manager every frame until the process pool was full.
-  The handle (and the notification timer) now live in the `mp-globals` structure, and a failed
-  manager spawn is retried once a second.
+- **2026-10-14:** first version. Network session in the runtime with its tests; START > Options >
+  Multiplayer and the administration page; Mods menu entries (toggle, cheats, teleports);
+  puppets with name, health bar and minimap icon, focusable by enemies with hit forwarding;
+  vehicle ghosts, steal and passenger seat; playable Daxter made resident in GAME; shared enemy
+  deaths and time of day.
+- **2026-10-14:** fixes from a code review: text fields crashed on confirm (a static object's
+  `mounted?` starts at 0, not `#f`); Host and Join fired twice; "Stop the server" ignored "No";
+  refusal reasons were never sent; steal limited to player vehicle types; passengers drawn in
+  their driver's seat; macOS `MSG_NOSIGNAL` fallback.
+- **2026-10-14:** first in-game report: the process pool filled up and the start menu could no
+  longer open. The manager's handle was kept in a global symbol, which only holds 32 bits: the pid
+  was cut off, the handle never resolved, and the hook spawned a manager every frame. Handles and
+  timers now live in structures.
+- **2026-10-14:** second round, tested in game with the automated sessions. Players hit each other
+  (hurtbox, knockback, host setting). The color is a marker before the name and on the minimap, no
+  longer a tint. Shared world: host-authoritative NPCs and vehicles drawn as replicas, guests' own
+  NPCs asleep and traffic off, hits on replicas applied by their owner, NPC vehicles taken by
+  guests. Every player's props (Daxter, gun, vehicle and wheels) replace the ghost vehicle. Shared
+  effects, projectiles, broken crates and taken pickups. A driver or passenger crouches when its
+  pilot animation is not loaded. Automated multi-instance tests with screenshots
+  (`scripts/mp-test/`).
