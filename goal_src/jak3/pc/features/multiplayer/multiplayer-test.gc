@@ -91,6 +91,51 @@
           )
       )
     )
+  (format
+    0
+    "[mp-test] world sent ~D received ~D replicas ~D asleep ~D~%"
+    (-> *mp-actors-out* count)
+    (-> *mp-actors-in* count)
+    (-> *mp-world-state* replica-count)
+    (-> *mp-world-state* suppressed-count)
+    )
+  ;; what the guest received, and the replica drawn for each
+  (dotimes (i (min 8 (-> *mp-actors-in* count)))
+    (let* ((st (-> *mp-actors-in* state i))
+           (index (mp-replica-index (-> st id)))
+           (rep (if (>= index 0)
+                    (the-as mp-replica (handle->process (-> *mp-world-state* replica index)))
+                    (the-as mp-replica #f)
+                    )
+                )
+           )
+      (string<-charp *mp-temp-string* (-> st skel))
+      (format 0 "[mp-test] actor ~D ~S pos ~m ~m ~m anim ~D~%" (-> st id) *mp-temp-string* (-> st trans x) (-> st trans y) (-> st trans z) (-> st anim-index))
+      (if rep
+          (format
+            0
+            "[mp-test]   replica scale ~f seg #x~X channels ~D mgeo ~A~%"
+            (-> rep root scale x)
+            (-> rep draw seg-mask)
+            (-> rep skel active-channels)
+            (-> rep draw mgeo)
+            )
+          )
+      (if rep
+          (format
+            0
+            "[mp-test]   replica pos ~m ~m ~m draw #x~X level ~A state ~A~%"
+            (-> rep root trans x)
+            (-> rep root trans y)
+            (-> rep root trans z)
+            (-> rep draw status)
+            (if (-> rep level) (-> rep level name) #f)
+            (if (-> rep next-state) (-> rep next-state name) #f)
+            )
+          (format 0 "[mp-test]   no replica~%")
+          )
+      )
+    )
   (let ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
     (format 0 "[mp-test] manager ~A~%" (if manager #t #f))
     (dotimes (i MP_MAX_PLAYERS)
@@ -205,6 +250,22 @@
         ((string= cmd "goto-player")
          (let ((slot (mp-test-int)))
            (set! *mp-request-teleport* slot)
+           )
+         )
+        ((string= cmd "goto-actor")
+         ;; stand 3 m from the n-th NPC received from the host, facing it
+         (let ((n (mp-test-int)))
+           (when (and *target* (< n (-> *mp-actors-in* count)))
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> *mp-actors-in* state n trans)))
+                   (dir (new 'stack-no-clear 'vector))
+                   )
+               (+! (-> pos z) (meters -3))
+               (move-to-point! (-> *target* control) pos)
+               (set-vector! dir 0.0 0.0 1.0 1.0)
+               (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
+               (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+               )
+             )
            )
          )
         ((string= cmd "face-player")

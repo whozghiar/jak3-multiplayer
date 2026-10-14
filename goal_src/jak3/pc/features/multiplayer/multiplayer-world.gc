@@ -1,0 +1,792 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; name: multiplayer-world.gc
+;; dgos: GAME
+;;
+;; Jak 3 multiplayer mod -- shared world. The host is the authority on the NPCs: every character
+;; (the `enemy` family: citizens, guards, monsters, marauders...) and every vehicle it simulates
+;; near a player is sent 15 times a second (position, orientation, animation, body variant). The
+;; guests do not simulate their own NPCs while connected: their ambient traffic is turned off and
+;; their own actors are put to sleep, hidden and made intangible. They draw the host's NPCs as
+;; replicas instead, built from the same skeleton, interpolated 100 ms in the past by the runtime
+;; (game/kernel/jak3/kmultiplayer.cpp).
+;;
+;; A guest's blow or shot on a replica is sent to the host, which applies it to the real NPC with
+;; the guest's puppet as the attacker; the NPC's reaction and death come back as its state. A guest
+;; who presses triangle next to a replica vehicle gets the same vehicle, and the host removes its
+;; own.
+;;
+;; Called from the manager (multiplayer.gc) every unpaused frame.
+
+;; ------------------------------------------------------------------------------------------------
+;; Types (mp-actor-state mirrors mp::ActorState)
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_MAX_ACTORS 64)    ;; NPCs the host sends per batch
+(defconstant MP_MAX_REPLICAS 128) ;; NPCs a guest draws (a batch, plus the ones fading out)
+
+(defenum mp-actor-flag
+  :type uint16
+  :bitfield #t
+  (hidden 0)  ;; not drawn on the host
+  (dead 1)    ;; dying on the host
+  (vehicle 2) ;; a vehicle (else a character)
+  )
+
+(deftype mp-actor-state (structure)
+  ((trans      vector     :inline) ;; w = uniform scale
+   (quat       quaternion :inline)
+   (id         uint32)             ;; host process pid
+   (anim-index int16)
+   (flags      mp-actor-flag)
+   (anim-frame float)
+   (seg-mask   uint32)             ;; body variant (low half of the draw-control seg-mask)
+   (skel       uint8 32)           ;; skeleton-group name
+   )
+  :size-assert #x50
+  )
+
+(deftype mp-actor-table (structure)
+  ((count int32)
+   (pad   int32 3)
+   (state mp-actor-state MP_MAX_REPLICAS :inline)
+   )
+  )
+
+(define-extern pc-mp-send-actors (function (inline-array mp-actor-state) int none))
+(define-extern pc-mp-get-actors (function (inline-array mp-actor-state) int int))
+(define-extern mp-player-count (function int)) ;; multiplayer-menu.gc
+
+;; World-sync state that does not fit in 32-bit globals (handles, times).
+(deftype mp-world-state (structure)
+  ((last-send      time-frame) ;; host: last batch sent (real clock)
+   (last-suppress  time-frame) ;; guest: last scan for local NPCs to put to sleep
+   (cache-time     time-frame) ;; host: last reset of the skeleton cache
+   (traffic-off?   symbol)     ;; guest: ambient traffic turned off by us
+   (replica-count  int32)
+   (replica-id     uint32 MP_MAX_REPLICAS)
+   (replica        handle MP_MAX_REPLICAS)
+   (suppressed-count int32)
+   (suppressed     handle 256)
+   (skel-count     int32)
+   (skel-jgeo      art-joint-geo 128)
+   (skel-group     skeleton-group 128)
+   (level-box      level 1)
+   )
+  )
+
+(define *mp-world-state* (new 'global 'mp-world-state))
+(define *mp-actors-out* (new 'global 'mp-actor-table))
+(define *mp-actors-in* (new 'global 'mp-actor-table))
+(set! (-> *mp-world-state* traffic-off?) #f)
+
+;; Attack modes a guest can deal to an NPC, sent as their index (symbols are not sent).
+(define *mp-attack-modes*
+  (new 'static 'boxed-array :type symbol
+    'generic 'punch 'spin 'uppercut 'flop 'dark-punch 'dark-smack 'lunge 'roll 'bonk 'board
+    'eco-yellow 'eco-red 'eco-blue 'eco-dark 'explode 'mech-punch 'flut-attack 'tube
+    )
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Which processes are NPCs
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-actor-kind ((proc process))
+  "1 for a character (the enemy family), 2 for a vehicle, 0 for anything else."
+  (let ((typ (-> proc type)))
+    (dotimes (i 14)
+      (let ((name (-> typ symbol)))
+        (cond
+          ((= name 'enemy) (return 1))
+          ((= name 'vehicle) (return 2))
+          ((or (= name 'process-drawable) (= name 'process)) (return 0))
+          )
+        )
+      (set! typ (-> typ parent))
+      )
+    )
+  0
+  )
+
+(defun mp-driven-vehicle? ((proc process))
+  "#t for the vehicle the local player drives (sent as part of the player, not as an NPC)."
+  (and *target*
+       (focus-test? *target* pilot)
+       (nonzero? (-> *target* pilot))
+       (= (handle->process (-> *target* pilot vehicle)) proc)
+       )
+  )
+
+(defun mp-near-a-player? ((pos vector))
+  "Within 100 m of the local player or of a remote player."
+  (if (and *target* (< (vector-vector-distance pos (-> *target* control trans)) (meters 100)))
+      (return #t)
+      )
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i)))
+      (if (and st (< (vector-vector-distance pos (-> st trans)) (meters 100)))
+          (return #t)
+          )
+      )
+    )
+  #f
+  )
+
+(defun mp-skel-of ((proc process-drawable))
+  "The skeleton-group `proc` was built from. A process keeps only its art group and joint geometry,
+   so the active levels' art-group arrays (where defskelgroup registers every skeleton-group) are
+   searched for a skeleton-group with that art group and that geometry. Cached per geometry; the
+   cache is reset whenever a level loads (see mp-world-host-update). #f when not found."
+  (let ((ws *mp-world-state*)
+        (jgeo (-> proc draw jgeo))
+        (ag (-> proc draw art-group))
+        )
+    (dotimes (i (-> ws skel-count))
+      (if (= (-> ws skel-jgeo i) jgeo)
+          (return (-> ws skel-group i))
+          )
+      )
+    (let ((found (the-as skeleton-group #f)))
+      (countdown (li 11)
+        (let ((lev (-> *level* level li)))
+          (when (and (not found) (or (= (-> lev status) 'active) (= (-> lev status) 'reserved)))
+            (let ((arr (-> lev art-group art-group-array)))
+              (dotimes (ai (-> arr length))
+                (let ((sg (the-as skeleton-group (-> arr ai))))
+                  (when (and (not found)
+                             sg
+                             (type? sg skeleton-group)
+                             (string= (-> sg art-group-name) (-> ag name))
+                             (>= (-> sg jgeo) 0)
+                             (< (-> sg jgeo) (-> ag length))
+                             (= (-> ag data (-> sg jgeo)) jgeo)
+                             )
+                    (set! found sg)
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      (when (< (-> ws skel-count) 128)
+        (set! (-> ws skel-jgeo (-> ws skel-count)) jgeo)
+        (set! (-> ws skel-group (-> ws skel-count)) found)
+        (+! (-> ws skel-count) 1)
+        )
+      found
+      )
+    )
+  )
+
+(defun mp-anim-index ((proc process-drawable))
+  "Index of the animation `proc` plays on channel 0 in its art group, -1 when none."
+  (let ((skel (-> proc skel))
+        (ag (-> proc draw art-group))
+        )
+    (when (> (-> skel active-channels) 0)
+      (let ((fg (-> skel root-channel 0 frame-group)))
+        (when fg
+          (dotimes (i (-> ag length))
+            (if (= (-> ag data i) fg)
+                (return i)
+                )
+            )
+          )
+        )
+      )
+    )
+  -1
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Host: collect and send
+;; ------------------------------------------------------------------------------------------------
+
+(define *mp-collect-count* 0)
+
+(defun mp-collect-actor ((proc process-drawable))
+  "iterate-process-tree callback: add `proc` to the batch when it is an NPC near a player."
+  (when (and (< *mp-collect-count* MP_MAX_ACTORS)
+             (type? proc process-drawable)
+             (nonzero? (-> proc root))
+             (nonzero? (-> proc draw))
+             (nonzero? (-> proc skel))
+             (nonzero? (-> proc draw jgeo))
+             (nonzero? (-> proc draw art-group))
+             )
+    (let ((kind (mp-actor-kind proc)))
+      (when (and (> kind 0) (not (mp-driven-vehicle? proc)) (mp-near-a-player? (-> proc root trans)))
+        (let ((sg (mp-skel-of proc)))
+          (when sg
+            (let ((st (-> *mp-actors-out* state *mp-collect-count*)))
+              (vector-copy! (-> st trans) (-> proc root trans))
+              (set! (-> st trans w) (-> proc root scale x))
+              (quaternion-copy! (-> st quat) (-> proc root quat))
+              (set! (-> st id) (the-as uint (-> proc pid)))
+              (set! (-> st anim-index) (mp-anim-index proc))
+              (set! (-> st anim-frame) (if (>= (-> st anim-index) 0)
+                                           (-> proc skel root-channel 0 frame-num)
+                                           0.0
+                                           )
+                    )
+              (set! (-> st flags) (mp-actor-flag))
+              (if (= kind 2)
+                  (logior! (-> st flags) (mp-actor-flag vehicle))
+                  )
+              (if (logtest? (-> proc draw status) (draw-control-status no-draw))
+                  (logior! (-> st flags) (mp-actor-flag hidden))
+                  )
+              (if (and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) dead))
+                  (logior! (-> st flags) (mp-actor-flag dead))
+                  )
+              (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
+              (copyn-charp<-string (-> st skel) (-> sg name) 32)
+              (+! *mp-collect-count* 1)
+              )
+            )
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-world-host-update ()
+  "Host: send the NPCs near the players, 15 times a second, while someone is connected."
+  (let ((ws *mp-world-state*))
+    ;; level art moves when a level loads: forget the cached skeletons then, and every 4 s
+    (when (or (-> *level* loading-level) (>= (- (mp-now) (-> ws cache-time)) (seconds 4)))
+      (set! (-> ws skel-count) 0)
+      (set! (-> ws cache-time) (mp-now))
+      )
+    (when (and (> (mp-player-count) 0) (>= (- (mp-now) (-> ws last-send)) (seconds 0.066)))
+      (set! (-> ws last-send) (mp-now))
+      (set! *mp-collect-count* 0)
+      (iterate-process-tree
+        *active-pool*
+        (the-as (function object object) mp-collect-actor)
+        *null-kernel-context*
+        )
+      (set! (-> *mp-actors-out* count) *mp-collect-count*)
+      (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
+      )
+    )
+  (none)
+  )
+
+(define *mp-search-pid* 0)
+
+(defun mp-process-by-pid ((pid int))
+  "The live process with this pid, or #f."
+  (set! *mp-search-pid* pid)
+  (the-as
+    process
+    (search-process-tree
+      *active-pool*
+      (lambda ((p process-tree)) (and (type? p process) (= (-> (the-as process p) pid) *mp-search-pid*)))
+      )
+    )
+  )
+
+(defbehavior mp-on-actor-hit mp-manager ((ev mp-event))
+  "Host: a guest hit the replica of one of our NPCs. Apply it to the real one, from the guest's
+   puppet, so the NPC turns to that player and reacts as if hit here."
+  (let ((proc (mp-process-by-pid (-> ev iarg 0)))
+        (attacker (handle->process (-> self puppets (max 0 (min (-> ev from) (+ MP_MAX_PLAYERS -1))))))
+        (mode (-> *mp-attack-modes* (max 0 (min (-> ev iarg 1) (+ (-> *mp-attack-modes* length) -1)))))
+        )
+    (when (and proc attacker)
+      (send-event
+        proc
+        'attack
+        :from attacker
+        #f
+        (static-attack-info
+          :mask (vehicle-impulse-factor)
+          ((id (new-attack-id))
+           (mode mode)
+           (damage (-> ev fvec w))
+           (penetrate-using (the-as penetrate (logior (shl (the-as uint (-> ev iarg 3)) 32)
+                                                      (logand (the-as uint (-> ev iarg 2)) #xffffffff)
+                                                      )
+                                    )
+                            )
+           (attacker (process->handle attacker))
+           (vehicle-damage-factor 1.0)
+           (vehicle-impulse-factor 1.0)
+           )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-on-vehicle-taken mp-manager ((ev mp-event))
+  "Host: a guest took one of our NPC vehicles (it drives its own copy): remove ours."
+  (let ((proc (mp-process-by-pid (-> ev iarg 0))))
+    (if (and proc (= (mp-actor-kind proc) 2) (not (mp-driven-vehicle? proc)))
+        (send-event proc 'go-die)
+        )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Guest: replicas
+;; ------------------------------------------------------------------------------------------------
+
+;; One NPC of the host, drawn here. It plays the host's animation (and with it the effects the
+;; animation carries: footsteps, sounds), takes the host's body variant, and is solid and hittable
+;; like the real one. Hits go to the host.
+(deftype mp-replica (process-drawable)
+  ((root   collide-shape :override)
+   (id     uint32)
+   (dying? symbol)
+   (net    mp-actor-state :inline) ;; latest state from the host
+   )
+  )
+
+(defun mp-attack-mode-index ((mode symbol))
+  "Index of an attack mode in *mp-attack-modes* (0, generic, when unknown)."
+  (dotimes (i (-> *mp-attack-modes* length))
+    (if (= (-> *mp-attack-modes* i) mode)
+        (return i)
+        )
+    )
+  0
+  )
+
+(defbehavior mp-replica-hit mp-replica ((attacker process) (info attack-info))
+  "The local player hit this replica: send the blow to the host (which owns the NPC)."
+  (when (and (mp-from-local-player? attacker) *target*)
+    (let ((ev (new 'stack 'mp-event))
+          (pen (if (and info (logtest? (attack-mask penetrate-using) (-> info mask)))
+                   (the-as uint (-> info penetrate-using))
+                   (the-as uint 0)
+                   )
+               )
+          )
+      (set! (-> ev kind) (mp-event-kind actor-hit))
+      (set! (-> ev to) 0)
+      (set! (-> ev iarg 0) (the-as int (-> self id)))
+      (set! (-> ev iarg 1) (if (and info (logtest? (attack-mask mode) (-> info mask)))
+                               (mp-attack-mode-index (-> info mode))
+                               0
+                               )
+            )
+      (set! (-> ev iarg 2) (the-as int (logand pen #xffffffff)))
+      (set! (-> ev iarg 3) (the-as int (shr pen 32)))
+      (vector-copy! (-> ev fvec) (-> *target* control trans))
+      (set! (-> ev fvec w) (if (and info (logtest? (attack-mask damage) (-> info mask)))
+                               (-> info damage)
+                               1.0
+                               )
+            )
+      (pc-mp-send-event ev)
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-replica-update mp-replica ()
+  "Apply the host's latest state: place, scale, visibility, body variant, animation, death."
+  (let ((st (-> self net)))
+    (move-to-point! (-> self root) (-> st trans))
+    (quaternion-copy! (-> self root quat) (-> st quat))
+    (let ((scale (if (< 0.01 (-> st trans w))
+                     (-> st trans w)
+                     1.0
+                     )
+                 )
+          )
+      (set-vector! (-> self root scale) scale scale scale 1.0)
+      )
+    (cond
+      ((logtest? (-> st flags) (mp-actor-flag hidden))
+       (logior! (-> self draw status) (draw-control-status no-draw))
+       (set! (-> self root root-prim prim-core collide-as) (collide-spec))
+       )
+      (else
+        (logclear! (-> self draw status) (draw-control-status no-draw))
+        (set! (-> self root root-prim prim-core collide-as) (-> self root backup-collide-as))
+        )
+      )
+    ;; 0 means the host's NPC does not use body segments: keep the default
+    (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
+        (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
+        )
+    (let* ((ag (-> self draw art-group))
+           (idx (-> st anim-index))
+           (anim (if (and (>= idx 0) (< idx (-> ag length)))
+                     (-> ag data idx)
+                     (the-as art-element #f)
+                     )
+                 )
+           )
+      (when (and anim (type? anim art-joint-anim))
+        (let ((ja-anim (the-as art-joint-anim anim)))
+          (ja :group! ja-anim
+              :num! (identity (fmax 0.0 (fmin (-> st anim-frame) (the float (+ (-> ja-anim frames num-frames) -1)))))
+              )
+          )
+        )
+      )
+    ;; the host's NPC died: the stock death dissolve, once
+    (when (and (logtest? (-> st flags) (mp-actor-flag dead)) (not (-> self dying?)))
+      (set! (-> self dying?) #t)
+      (set! (-> self root root-prim prim-core collide-as) (collide-spec))
+      (when (nonzero? (-> self skel effect))
+        (logior! (-> self skel effect flags) (effect-control-flag ecf1))
+        (do-effect (-> self skel effect) "death-default" 0.0 -1)
+        )
+      )
+    )
+  (none)
+  )
+
+(defstate mp-replica-idle (mp-replica)
+  :event (behavior ((proc process) (argc int) (message symbol) (block event-message-block))
+    (case message
+      (('attack)
+       (mp-replica-hit proc (the-as attack-info (-> block param 1)))
+       #t
+       )
+      )
+    )
+  :code (behavior ()
+    (loop
+      (suspend)
+      )
+    )
+  :post (behavior ()
+    (mp-replica-update)
+    (ja-post)
+    )
+  )
+
+(defbehavior mp-replica-init-by-other mp-replica ((st mp-actor-state) (sg skeleton-group) (lev level))
+  "A replica of the host's NPC `st`, drawn with `sg`, whose art lives in `lev`."
+  ;; the art lookup of initialize-skeleton goes through the process's level
+  (set! (-> self level) lev)
+  (set! (-> self id) (-> st id))
+  (set! (-> self dying?) #f)
+  (mem-copy! (the-as pointer (-> self net)) (the-as pointer st) (size-of mp-actor-state))
+  (let ((vehicle? (logtest? (-> st flags) (mp-actor-flag vehicle)))
+        (cshape (new 'process 'collide-shape self (collide-list-enum usually-hit-by-player)))
+        )
+    (let ((prim (new 'process 'collide-shape-prim-sphere cshape (the-as uint 0))))
+      (set! (-> prim prim-core collide-as) (if vehicle?
+                                                (collide-spec obstacle)
+                                                (collide-spec enemy)
+                                                )
+            )
+      (set! (-> prim prim-core collide-with) (collide-spec))
+      (set! (-> prim prim-core action) (collide-action solid))
+      (if vehicle?
+          (set-vector! (-> prim local-sphere) 0.0 (meters 1) 0.0 (meters 2.5))
+          (set-vector! (-> prim local-sphere) 0.0 (meters 1) 0.0 (meters 0.8))
+          )
+      (set! (-> cshape total-prims) (the-as uint 1))
+      (set! (-> cshape root-prim) prim)
+      )
+    (let ((prim (-> cshape root-prim)))
+      (set! (-> cshape backup-collide-as) (-> prim prim-core collide-as))
+      (set! (-> cshape backup-collide-with) (-> prim prim-core collide-with))
+      )
+    (set! (-> self root) cshape)
+    )
+  (vector-copy! (-> self root trans) (-> st trans))
+  (quaternion-copy! (-> self root quat) (-> st quat))
+  (initialize-skeleton self sg (the-as pair 0))
+  (ja-channel-set! 1)
+  (go mp-replica-idle)
+  )
+
+(defun mp-replica-index ((id uint))
+  "Index of the replica of NPC `id` in the table, -1 when none."
+  (let ((ws *mp-world-state*))
+    (dotimes (i (-> ws replica-count))
+      (if (= (-> ws replica-id i) id)
+          (return i)
+          )
+      )
+    )
+  -1
+  )
+
+(defun mp-replica-remove ((i int))
+  "Remove entry `i` of the replica table (and its process)."
+  (let* ((ws *mp-world-state*)
+         (proc (handle->process (-> ws replica i)))
+         (last (+ (-> ws replica-count) -1))
+         )
+    (if proc
+        (deactivate proc)
+        )
+    (set! (-> ws replica-id i) (-> ws replica-id last))
+    (set! (-> ws replica i) (-> ws replica last))
+    (set! (-> ws replica-count) last)
+    )
+  (none)
+  )
+
+(defun mp-replicas-clear ()
+  "Remove every replica."
+  (while (> (-> *mp-world-state* replica-count) 0)
+    (mp-replica-remove 0)
+    )
+  (none)
+  )
+
+(defbehavior mp-replica-spawn mp-manager ((st mp-actor-state))
+  "Spawn a replica of `st` if its skeleton is loaded here. #t when spawned."
+  (let ((ws *mp-world-state*))
+    (when (< (-> ws replica-count) MP_MAX_REPLICAS)
+      (string<-charp *mp-temp-string* (-> st skel))
+      (set! (-> ws level-box 0) #f)
+      (let ((sg (the-as skeleton-group (art-group-get-by-name *level* *mp-temp-string* (the-as (pointer level) #f))))
+            (lev (the-as level #f))
+            )
+        ;; the level that registered the skeleton is not always the one that holds its art
+        ;; (dogat: skeleton in WASALL code, art elsewhere): initialize-skeleton needs the latter
+        (when (and sg (type? sg skeleton-group))
+          (art-group-get-by-name *level* (-> sg art-group-name) (the-as (pointer level) (-> ws level-box)))
+          (set! lev (-> ws level-box 0))
+          )
+        (when (and sg lev (type? sg skeleton-group))
+          (let ((proc (process-spawn mp-replica st sg lev :name "mp-replica" :to self :stack-size #x20000)))
+            (when proc
+              (set! (-> ws replica-id (-> ws replica-count)) (-> st id))
+              (set! (-> ws replica (-> ws replica-count)) (ppointer->handle proc))
+              (+! (-> ws replica-count) 1)
+              (return #t)
+              )
+            )
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-nearest-replica-vehicle ((pos vector))
+  "Replica table index of the host's NPC vehicle within 4.5 m of `pos`, -1 when none."
+  (let ((ws *mp-world-state*)
+        (best -1)
+        (best-dist (meters 4.5))
+        )
+    (dotimes (i (-> ws replica-count))
+      (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
+        (when (and proc
+                   (logtest? (-> proc net flags) (mp-actor-flag vehicle))
+                   (not (logtest? (-> proc net flags) (mp-actor-flag hidden dead)))
+                   )
+          (let ((d (vector-vector-distance pos (-> proc root trans))))
+            (when (< d best-dist)
+              (set! best i)
+              (set! best-dist d)
+              )
+            )
+          )
+        )
+      )
+    best
+    )
+  )
+
+(defun mp-vehicle-type-of-skel ((skel (pointer uint8)))
+  "vehicle-type of a vehicle skeleton name (skel-<type>), -1 when it is not one."
+  (dotimes (i (-> *mp-vehicle-types* length))
+    (format (clear *mp-temp-string*) "skel-~S" (symbol->string (-> *mp-vehicle-types* i)))
+    (if (string-charp= *mp-temp-string* skel)
+        (return i)
+        )
+    )
+  -1
+  )
+
+(defbehavior mp-take-replica-vehicle mp-manager ((index int))
+  "Get in a copy of the host's NPC vehicle at replica `index`; the host then removes its own."
+  (let ((proc (the-as mp-replica (handle->process (-> *mp-world-state* replica index)))))
+    (when proc
+      (let ((id (-> proc id)))
+        (when (mp-get-vehicle-at (mp-vehicle-type-of-skel (-> proc net skel)) (-> proc root trans) (-> proc root quat))
+          (mp-send-event (mp-event-kind vehicle-taken) 0 (the-as int id) 0.0)
+          (mp-replica-remove index)
+          (return #t)
+          )
+        )
+      )
+    )
+  #f
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Guest: our own NPCs sleep while the host's are shown
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-suppress-actor ((proc process-drawable))
+  "iterate-process-tree callback: put one of our NPCs to sleep (no logic, not drawn, intangible)."
+  (when (and (type? proc process-drawable)
+             (not (type? proc mp-replica))
+             (nonzero? (-> proc root))
+             (> (mp-actor-kind proc) 0)
+             (not (mp-driven-vehicle? proc))
+             (not (logtest? (-> proc mask) (process-mask sleep)))
+             (< (-> *mp-world-state* suppressed-count) 256)
+             )
+    (logior! (-> proc mask) (process-mask sleep))
+    (if (nonzero? (-> proc draw))
+        (logior! (-> proc draw status) (draw-control-status no-draw))
+        )
+    (when (type? (-> proc root) collide-shape)
+      (let ((prim (-> (the-as collide-shape (-> proc root)) root-prim)))
+        (set! (-> prim prim-core collide-as) (collide-spec))
+        (set! (-> prim prim-core collide-with) (collide-spec))
+        )
+      )
+    (let ((ws *mp-world-state*))
+      (set! (-> ws suppressed (-> ws suppressed-count)) (process->handle proc))
+      (+! (-> ws suppressed-count) 1)
+      )
+    )
+  #f
+  )
+
+(defun mp-unsuppress-all ()
+  "Wake every NPC we put to sleep (end of a session)."
+  (let ((ws *mp-world-state*))
+    (dotimes (i (-> ws suppressed-count))
+      (let ((proc (the-as process-drawable (handle->process (-> ws suppressed i)))))
+        (when proc
+          (logclear! (-> proc mask) (process-mask sleep))
+          (if (nonzero? (-> proc draw))
+              (logclear! (-> proc draw status) (draw-control-status no-draw))
+              )
+          (when (type? (-> proc root) collide-shape)
+            (let ((cshape (the-as collide-shape (-> proc root))))
+              (set! (-> cshape root-prim prim-core collide-as) (-> cshape backup-collide-as))
+              (set! (-> cshape root-prim prim-core collide-with) (-> cshape backup-collide-with))
+              )
+            )
+          )
+        )
+      )
+    (set! (-> ws suppressed-count) 0)
+    )
+  (none)
+  )
+
+(defbehavior mp-world-client-update mp-manager ()
+  "Guest: keep our NPCs asleep and our traffic off, and draw the host's NPCs."
+  (let ((ws *mp-world-state*))
+    (when (not (-> ws traffic-off?))
+      ;; settings belong to the process that sets them: the manager lives as long as the session
+      (set-setting! 'traffic-spawn #f 0.0 0)
+      (set! (-> ws traffic-off?) #t)
+      )
+    (when (>= (- (mp-now) (-> ws last-suppress)) (seconds 0.25))
+      (set! (-> ws last-suppress) (mp-now))
+      ;; forget entries of NPCs that died meanwhile, then catch the new ones
+      (let ((n 0))
+        (dotimes (i (-> ws suppressed-count))
+          (when (handle->process (-> ws suppressed i))
+            (set! (-> ws suppressed n) (-> ws suppressed i))
+            (+! n 1)
+            )
+          )
+        (set! (-> ws suppressed-count) n)
+        )
+      (iterate-process-tree *active-pool* (the-as (function object object) mp-suppress-actor) *null-kernel-context*)
+      )
+    ;; the host's NPCs
+    (let ((count (pc-mp-get-actors (-> *mp-actors-in* state) MP_MAX_REPLICAS))
+          (spawned 0)
+          )
+      (set! (-> *mp-actors-in* count) count)
+      (dotimes (i count)
+        (let* ((st (-> *mp-actors-in* state i))
+               (index (mp-replica-index (-> st id)))
+               )
+          (cond
+            ((>= index 0)
+             (let ((proc (the-as mp-replica (handle->process (-> ws replica index)))))
+               (if proc
+                   (mem-copy! (the-as pointer (-> proc net)) (the-as pointer st) (size-of mp-actor-state))
+                   (mp-replica-remove index)
+                   )
+               )
+             )
+            ;; a few spawns per frame at most, so a crowd appearing does not stall a frame
+            ((< spawned 4)
+             (if (mp-replica-spawn st)
+                 (+! spawned 1)
+                 )
+             )
+            )
+          )
+        )
+      ;; replicas of NPCs the host no longer sends, or whose art left with its level
+      (let ((i 0))
+        (while (< i (-> ws replica-count))
+          (let ((proc (the-as mp-replica (handle->process (-> ws replica i))))
+                (seen? #f)
+                )
+            (dotimes (j count)
+              (if (= (-> *mp-actors-in* state j id) (-> ws replica-id i))
+                  (set! seen? #t)
+                  )
+              )
+            (if (or (not proc)
+                    (not seen?)
+                    (not (-> proc level))
+                    (not (or (= (-> proc level status) 'active) (= (-> proc level status) 'reserved)))
+                    )
+                (mp-replica-remove i)
+                (+! i 1)
+                )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-world-client-stop mp-manager ()
+  "Back to a normal world: replicas gone, our NPCs and traffic back."
+  (let ((ws *mp-world-state*))
+    (mp-replicas-clear)
+    (mp-unsuppress-all)
+    (when (-> ws traffic-off?)
+      (remove-setting! 'traffic-spawn)
+      (set! (-> ws traffic-off?) #f)
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-world-update mp-manager ()
+  "Shared world, once per unpaused frame."
+  (case *mp-mode*
+    (((mp-mode host))
+     (mp-world-host-update)
+     )
+    (((mp-mode client))
+     (mp-world-client-update)
+     )
+    (else
+      (if (or (> (-> *mp-world-state* replica-count) 0)
+              (> (-> *mp-world-state* suppressed-count) 0)
+              (-> *mp-world-state* traffic-off?)
+              )
+          (mp-world-client-stop)
+          )
+      )
+    )
+  (none)
+  )

@@ -1,0 +1,9 @@
+# NPC sync, host side: hosts in Spargus; both sides take screenshots at the same moments.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+60 log
+60 screenshot npc-a
+70 log
+70 screenshot npc-b

@@ -1,0 +1,12 @@
+# NPC sync, guest side: joins; its own NPCs must sleep and the host's be drawn as replicas.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+60 log
+60 screenshot npc-a
+64 goto-actor 1
+66 screenshot near-actor
+66 log
+70 log
+70 screenshot npc-b

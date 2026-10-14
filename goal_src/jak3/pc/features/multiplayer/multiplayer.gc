@@ -57,6 +57,9 @@
   (teleport 4)    ;; to a player or everyone: go to player iarg 0 (administration)
   (world 5)       ;; host to everyone: iarg 0 = mp-world-flag bits, fvec x = time of day
   (pvp 6)         ;; to a player: another player hit you, fvec xyz = attacker position, w = damage
+  (actor-hit 7)   ;; to the host: a guest hit the replica of NPC iarg 0 (pid); iarg 1 = attack mode
+                  ;; index, iarg 2-3 = penetrate-using, fvec xyz = attacker position, w = damage
+  (vehicle-taken 8) ;; to the host: a guest took NPC vehicle iarg 0 (pid) and drives its own copy
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -1087,6 +1090,16 @@
 ;; Manager process
 ;; ------------------------------------------------------------------------------------------------
 
+;; Shared world (multiplayer-world.gc, linked after this file).
+(declare-type mp-manager process)
+(define-extern mp-world-update (function none :behavior mp-manager))
+(define-extern mp-world-client-stop (function none :behavior mp-manager))
+(define-extern mp-on-actor-hit (function mp-event none :behavior mp-manager))
+(define-extern mp-on-vehicle-taken (function mp-event none :behavior mp-manager))
+(define-extern mp-nearest-replica-vehicle (function vector int))
+(define-extern mp-take-replica-vehicle (function int symbol :behavior mp-manager))
+(define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
+
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
 ;; is enabled, killed when it is disabled.
 (deftype mp-manager (process)
@@ -1320,6 +1333,16 @@
              (mp-take-hit (the-as vector #f) (-> ev fvec x))
              )
          )
+        (((mp-event-kind actor-hit))
+         (if (= *mp-mode* (mp-mode host))
+             (mp-on-actor-hit ev)
+             )
+         )
+        (((mp-event-kind vehicle-taken))
+         (if (= *mp-mode* (mp-mode host))
+             (mp-on-vehicle-taken ev)
+             )
+         )
         (((mp-event-kind pvp))
          (if (and *target* (logtest? *mp-world* (mp-world-flag pvp)))
              (mp-take-hit (-> ev fvec) (-> ev fvec w))
@@ -1462,31 +1485,35 @@
   (none)
   )
 
+(defbehavior mp-get-vehicle-at mp-manager ((vtype int) (pos vector) (quat quaternion))
+  "Stand at `pos` facing `quat` and get a new vehicle of type `vtype` there. #t when the player is
+   now getting in. Only the player vehicles: city bikes and cars (0-6, spawner in CWI) and Spargus
+   buggies (12-19, WASALL); the others (catapult, marauders...) have art in levels without the
+   vehicle spawner. Their art being loaded means the code that spawns them is loaded too."
+  (when (and (or (and (>= vtype 0) (<= vtype 6)) (and (>= vtype 12) (<= vtype 19))) (mp-vehicle-skel vtype))
+    (move-to-point! (-> *target* control) pos)
+    (quaternion-copy! (-> *target* control quat) quat)
+    (quaternion-copy! (-> *target* control quat-for-control) quat)
+    ;; #f vehicle: the target spawns one of this type where it stands (target-handler.gc)
+    (send-event *target* 'change-mode 'pilot #f vtype #t)
+    (if (= (mp-target-state-name) 'target-pilot-start)
+        (return #t)
+        )
+    )
+  (mp-show-message "This vehicle cannot be taken here")
+  #f
+  )
+
 (defbehavior mp-steal-now mp-manager ((slot int))
   "Take the vehicle of player `slot`: it leaves it, and we get the same vehicle in its place."
   (let ((st (mp-remote-state slot)))
-    ;; its art being loaded means the level code that spawns it is loaded too, for the player
-    ;; vehicles: city bikes and cars (0-6, CWI) and Spargus buggies (12-19, WASALL). The others
-    ;; (catapult, marauders...) have art in levels without the vehicle spawner.
-    (when (and st
-               (logtest? (-> st flags) (mp-flag driving))
-               (or (and (>= (-> st veh-type) 0) (<= (-> st veh-type) 6))
-                   (and (>= (-> st veh-type) 12) (<= (-> st veh-type) 19))
-                   )
-               (mp-vehicle-skel (-> st veh-type))
-               )
-      (move-to-point! (-> *target* control) (-> st veh-trans))
-      (quaternion-copy! (-> *target* control quat) (-> st veh-quat))
-      (quaternion-copy! (-> *target* control quat-for-control) (-> st veh-quat))
-      ;; #f vehicle: the target spawns one of this type where it stands (target-handler.gc)
-      (send-event *target* 'change-mode 'pilot #f (-> st veh-type) #t)
-      ;; the driver only gets out if we really got a vehicle (the spawn fails when the vehicle's
-      ;; level is not the one that can spawn it)
-      (if (= (mp-target-state-name) 'target-pilot-start)
-          (mp-send-event (mp-event-kind steal) slot 0 0.0)
-          (mp-show-message "This vehicle cannot be taken here")
-          )
-      )
+    ;; the driver only gets out once we really got a vehicle
+    (if (and st
+             (logtest? (-> st flags) (mp-flag driving))
+             (mp-get-vehicle-at (-> st veh-type) (-> st veh-trans) (-> st veh-quat))
+             )
+        (mp-send-event (mp-event-kind steal) slot 0 0.0)
+        )
     )
   (none)
   )
@@ -1542,7 +1569,22 @@
           )
         )
       (set! *mp-prompt-slot* best)
+      (set! *mp-prompt-replica* (if (and (< best 0) (= *mp-mode* (mp-mode client)))
+                                    (mp-nearest-replica-vehicle (-> *target* control trans))
+                                    -1
+                                    )
+            )
       (cond
+        ((and (< best 0) (>= *mp-prompt-replica* 0))
+         ;; an NPC vehicle of the host: press triangle to take it
+         (set! (-> self tri-slot) -1)
+         (when (cpad-pressed? 0 triangle)
+           (if (focus-test? *target* indax)
+               (send-event *target* 'end-mode 'indax)
+               (mp-take-replica-vehicle *mp-prompt-replica*)
+               )
+           )
+         )
         ((< best 0)
          (set! (-> self tri-slot) -1)
          )
@@ -1613,8 +1655,10 @@
     (else
       (set! *mp-ride-slot* -1)
       (set! *mp-prompt-slot* -1)
+      (set! *mp-prompt-replica* -1)
       )
     )
+  (mp-world-update)
   (none)
   )
 
@@ -1629,6 +1673,7 @@
     (set! *mp-invulnerable-applied* #f)
     (set! *mp-ride-slot* -1)
     (set! *mp-prompt-slot* -1)
+    (mp-world-client-stop)
     )
   :code (behavior ()
     (loop
@@ -1733,6 +1778,9 @@
               (mp-draw-nameplate buf i)
               )
           )
+        )
+      (when (>= *mp-prompt-replica* 0)
+        (mp-draw-text buf "Triangle: take this vehicle" 256 330 0.5)
         )
       (when (>= *mp-prompt-slot* 0)
         (string<-charp *mp-temp-string* (-> *mp-players* state *mp-prompt-slot* name))

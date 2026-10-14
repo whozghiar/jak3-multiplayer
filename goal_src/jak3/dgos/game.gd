@@ -497,6 +497,7 @@
   "target-indax.o"
   "target-indax-hang.o"
   "multiplayer.o" ;; MOD multiplayer -- network play (pc/features/multiplayer/)
+  "multiplayer-world.o" ;; MOD multiplayer -- shared NPCs (host authority, replicas on guests)
   "multiplayer-menu.o" ;; MOD multiplayer -- start menu pages and Mods menu entries
   "multiplayer-test.o" ;; MOD multiplayer -- automated test commands (inert without MP_TEST_SCRIPT)
  ))

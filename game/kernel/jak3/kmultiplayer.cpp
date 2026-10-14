@@ -116,9 +116,10 @@ enum Msg : u8 {
   MSG_STATE = 4,    // both ways: u8 slot + PlayerState
   MSG_LEAVE = 5,    // host -> client: u8 slot of a player who left
   MSG_EVENT = 6,    // both ways: Event (the host fills `from`)
+  MSG_ACTORS = 7,   // host -> client: u32 host time ms, u16 count, count x ActorState
 };
 
-constexpr size_t kMaxFrame = 1024;             // larger frames are a protocol violation
+constexpr size_t kMaxFrame = 16384;            // larger frames are a protocol violation
 constexpr size_t kMaxOutBuffer = 1024 * 1024;  // a peer this far behind is dropped
 constexpr double kTimeoutMs = 15000.0;         // silence before a peer is considered gone
 constexpr double kConnectTimeoutMs = 8000.0;
@@ -415,6 +416,8 @@ void Session::leave(const std::string& reason) {
   for (auto& r : m_remotes) {
     r.clear();
   }
+  m_actors.clear();
+  m_actor_clock_known = false;
   m_events.clear();
   m_banned.clear();
   if (m_mode != Mode::Offline && !reason.empty()) {
@@ -551,6 +554,38 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         m_remotes[data[0]].push(st, p.last_recv);
       }
       return;
+    case MSG_ACTORS: {
+      if (len < 6) {
+        return;
+      }
+      u32 time;
+      u16 count;
+      memcpy(&time, data, 4);
+      memcpy(&count, data + 4, 2);
+      if (len != 6 + count * sizeof(ActorState)) {
+        drop(p, "Protocol error");
+        return;
+      }
+      double offset = p.last_recv - (double)time;
+      m_actor_clock_offset =
+          !m_actor_clock_known ? offset : std::min(offset, m_actor_clock_offset + 1.0);
+      m_actor_clock_known = true;
+      for (u16 i = 0; i < count; i++) {
+        ActorState st;
+        memcpy(&st, data + 6 + i * sizeof(ActorState), sizeof(st));
+        st.skel[sizeof(st.skel) - 1] = 0;
+        auto& track = m_actors[st.id];
+        if (!track.snaps.empty() && time < track.snaps.back().first) {
+          track.snaps.clear();
+        }
+        track.snaps.emplace_back((double)time, st);
+        while (track.snaps.size() > 4) {
+          track.snaps.pop_front();
+        }
+        track.last_seen = p.last_recv;
+      }
+      return;
+    }
     case MSG_LEAVE:
       if (len == 1 && data[0] < kMaxPlayers) {
         m_remotes[data[0]].clear();
@@ -739,6 +774,61 @@ void Session::send_event(Event ev) {
     ev.from = m_local_slot;
     m_peers[0]->queue(MSG_EVENT, &ev, sizeof(ev));
   }
+}
+
+void Session::send_actors(const ActorState* actors, int count, double now) {
+  if (m_mode != Mode::Host || count <= 0) {
+    return;
+  }
+  u16 n = (u16)std::min(count, kMaxActors);
+  std::vector<u8> payload(6 + n * sizeof(ActorState));
+  u32 time = (u32)now;
+  memcpy(payload.data(), &time, 4);
+  memcpy(payload.data() + 4, &n, 2);
+  memcpy(payload.data() + 6, actors, n * sizeof(ActorState));
+  for (auto* p : m_peers) {
+    if (p->slot >= 0) {
+      p->queue(MSG_ACTORS, payload.data(), payload.size());
+    }
+  }
+}
+
+int Session::get_actors(double now, ActorState* out, int max) {
+  int n = 0;
+  double t = now - m_actor_clock_offset - kInterpDelayMs;  // drawn time, host clock
+  for (auto it = m_actors.begin(); it != m_actors.end();) {
+    auto& snaps = it->second.snaps;
+    if (now - it->second.last_seen > 1000.0 || snaps.empty()) {
+      it = m_actors.erase(it);  // the host stopped sending it: gone or out of range
+      continue;
+    }
+    if (n < max) {
+      if (t >= snaps.back().first) {
+        out[n] = snaps.back().second;
+      } else if (t <= snaps.front().first) {
+        out[n] = snaps.front().second;
+      } else {
+        size_t i = 1;
+        while (snaps[i].first <= t) {
+          i++;
+        }
+        const auto& [ta, a] = snaps[i - 1];
+        const auto& [tb, b] = snaps[i];
+        float f = (float)((t - ta) / std::max(1.0, tb - ta));
+        out[n] = f < 0.5f ? a : b;
+        if (dist(a.trans, b.trans) < 40960.f) {
+          lerp4(out[n].trans, a.trans, b.trans, f);
+          nlerp_quat(out[n].quat, a.quat, b.quat, f);
+        }
+        if (a.anim_index == b.anim_index && b.anim_frame >= a.anim_frame) {
+          out[n].anim_frame = a.anim_frame + (b.anim_frame - a.anim_frame) * f;
+        }
+      }
+      n++;
+    }
+    ++it;
+  }
+  return n;
 }
 
 bool Session::pop_event(Event* out) {
@@ -958,6 +1048,22 @@ void pc_mp_config_save(u32 src) {
                                  address, cfg->character, cfg->color, cfg->enabled));
 }
 
+// (pc-mp-send-actors states count) host: send `count` mp-actor-state.
+void pc_mp_send_actors(u32 states, u32 count) {
+  if (states) {
+    mp::session().send_actors(Ptr<mp::ActorState>(states).c(), (int)count, mp::now_ms());
+  }
+}
+
+// (pc-mp-get-actors dest max) guest: interpolated host NPCs written to dest. Returns the count.
+u64 pc_mp_get_actors(u32 dest, u32 max) {
+  if (!dest) {
+    return 0;
+  }
+  return (u64)mp::session().get_actors(mp::now_ms(), Ptr<mp::ActorState>(dest).c(),
+                                       std::min<int>((int)max, mp::kMaxActors * 2));
+}
+
 // (pc-mp-test-active?) -> #t when a test script drives this instance.
 u64 pc_mp_test_active() {
   return to_symbol(mp::test::script().loaded);
@@ -1007,6 +1113,8 @@ void pc_mp_test_pad(u32 buttons, u32 lx, u32 ly) {
 }  // namespace
 
 void init_multiplayer_functions() {
+  make_function_symbol_from_c("pc-mp-send-actors", (void*)pc_mp_send_actors);
+  make_function_symbol_from_c("pc-mp-get-actors", (void*)pc_mp_get_actors);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);

@@ -17,6 +17,7 @@
 #include <deque>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "common/common_types.h"
@@ -70,6 +71,28 @@ struct Event {
 };
 static_assert(sizeof(Event) == 80, "Event must match mp-event");
 
+// Mirrors the GOAL type `mp-actor-state`: one NPC (character or vehicle) simulated by the host and
+// drawn as a replica by the other players.
+struct ActorState {
+  float trans[4];    // 0   root position, w = uniform scale
+  float quat[4];     // 16  root orientation
+  u32 id;            // 32  host process pid
+  s16 anim_index;    // 36  index of the animation in the art group, -1 = none
+  u16 flags;         // 38  mp-actor-flag bits (GOAL)
+  float anim_frame;  // 40
+  u32 seg_mask;      // 44  low half of the draw-control seg-mask (body variants)
+  char skel[32];     // 48  skeleton-group name, e.g. "skel-citizen-norm"
+};
+static_assert(sizeof(ActorState) == 80, "ActorState must match mp-actor-state");
+
+constexpr int kMaxActors = 64;
+
+// Received snapshots of one actor, oldest first, with the sender time of each.
+struct ActorTrack {
+  std::deque<std::pair<double, ActorState>> snaps;
+  double last_seen = 0;
+};
+
 // Mirrors the GOAL type `mp-config`: the settings kept between boots.
 struct Config {
   char name[16];     // 0
@@ -106,6 +129,10 @@ class Session {
   // Interpolated state of `slot`, or false if no such remote player.
   bool get_player(int slot, double now_ms, PlayerState* out) const;
   void send_event(Event ev);
+  // Host: send the NPCs it simulates. Guests ignore it.
+  void send_actors(const ActorState* actors, int count, double now_ms);
+  // Guest: interpolated NPCs of the host, at most `max`. Returns the count.
+  int get_actors(double now_ms, ActorState* out, int max);
   bool pop_event(Event* out);
   // Host only: disconnect a player, optionally refusing its address until the server stops.
   void kick(int slot, bool ban);
@@ -129,6 +156,9 @@ class Session {
   u64 m_listen = ~0ull;        // listening socket (host)
   std::vector<Peer*> m_peers;  // host: clients, client: the server
   std::array<Remote, kMaxPlayers> m_remotes;
+  std::unordered_map<u32, ActorTrack> m_actors;
+  double m_actor_clock_offset = 0;
+  bool m_actor_clock_known = false;
   std::deque<Event> m_events;
   std::set<std::string> m_banned;
   double m_connect_start = 0;
