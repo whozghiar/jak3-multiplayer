@@ -1,0 +1,12 @@
+# Late join, guest side: the same early save; on joining it closes the 40 nodes the host has, then
+# keeps playing (log, screenshot) to show the game survived the catch-up.
+1 enable
+1 name Guest
+1 color 2
+42 log-tasks
+45 join 127.0.0.1:7777
+50 log-tasks
+55 log
+60 log-tasks
+66 screenshot after
+68 log

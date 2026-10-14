@@ -20,7 +20,10 @@
 ;;   log-pose [slot] | log-me                                bones of a player's model; own position
 ;;   log-pose-own <npc|daxter|gun|vehicle|wheel>             bones of one of our objects
 ;;   log-pose-copy <slot> <skeleton name|*>                  bones of the copies of player slot's objects
-;;   log-tasks | close-task                                  story progress; close the first open node
+;;   log-tasks | close-task [n]                              story progress; close the first open node(s)
+;;   log-sync                                                phase of a test cycle (host clock sync)
+;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
+;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
@@ -126,17 +129,19 @@
   (none)
   )
 
-(defun mp-test-print-bones ((label string) (id int) (proc process-drawable))
-  "Print four bones of `proc` relative to its bone 0, in world axes. The owner's object and its copy
-   on another machine print the same values when the copy has the owner's pose."
+(defun mp-test-print-bones ((label string) (id int) (proc process-drawable) (stamp int))
+  "Print four joints of `proc` (bones 3 and up: 0-2 are the root, align and prejoint) relative to its
+   bone 0, in world axes, stamped with `stamp`, the owner's time of these bones. The owner's object
+   and its copy on another machine print the same values at the same stamp when the copy has the
+   owner's pose (scripts/mp-test/compare_poses.py)."
   (when (and proc (nonzero? (-> proc node-list)))
     (let* ((nodes (-> proc node-list))
            (n (-> nodes length))
            (base (-> nodes data 0 bone transform trans))
            )
-      (format 0 "[mp-test] ~S ~D bones ~D~%" label id n)
+      (format 0 "[mp-test] ~S ~D bones ~D t ~D~%" label id n stamp)
       (dotimes (k 4)
-        (let* ((i (/ (* (+ k 1) (+ n -1)) 4))
+        (let* ((i (min (+ n -1) (+ 3 (/ (* (+ k 1) (max 0 (+ n -4))) 4))))
                (pos (-> nodes data i bone transform trans))
                )
           (format
@@ -152,6 +157,38 @@
           )
         )
       )
+    )
+  (none)
+  )
+
+(deftype mp-test-own-requests (structure)
+  ((count int32)
+   (kind  string 8)
+   )
+  )
+
+(define *mp-test-own* (new 'global 'mp-test-own-requests))
+(dotimes (i 8)
+  (set! (-> *mp-test-own* kind i) (new 'global 'string 16 (the-as string #f)))
+  )
+
+(define-extern mp-test-own-object (function string process-drawable))
+
+(defun mp-test-own-flush ()
+  "Print the bones of our objects asked by log-pose-own. Called by the manager, at the point of the
+   frame where the batch reads them (before this frame's joint math), so they match what is sent."
+  (let ((rq *mp-test-own*))
+    (dotimes (i (-> rq count))
+      (let* ((kind (-> rq kind i))
+             (proc (mp-test-own-object kind))
+             )
+        (if proc
+            (mp-test-print-bones kind (logand (-> proc pid) #xffffff) proc (pc-mp-clock -1))
+            (format 0 "[mp-test] no own ~S~%" kind)
+            )
+        )
+      )
+    (set! (-> rq count) 0)
     )
   (none)
   )
@@ -249,7 +286,7 @@
              )
             ((string-charp= *mp-temp-string* (-> rep net skel))
              (format 0 "[mp-test] copy ~D poses laid ~D last ~D~%" (logand (-> rep id) #xffffff) (-> rep pose-count) (-> rep pose-last))
-             (mp-test-print-bones name (the-as int (logand (-> rep id) #xffffff)) rep)
+             (mp-test-print-bones name (the-as int (logand (-> rep id) #xffffff)) rep (-> rep pose-time))
              (+! found 1)
              )
             )
@@ -259,7 +296,7 @@
     (when best
       (string<-charp *mp-temp-string* (-> best net skel))
       (format 0 "[mp-test] nearest npc copy: ~S~%" *mp-temp-string*)
-      (mp-test-print-bones name (the-as int (logand (-> best id) #xffffff)) best)
+      (mp-test-print-bones name (the-as int (logand (-> best id) #xffffff)) best (-> best pose-time))
       (+! found 1)
       )
     (if (zero? found)
@@ -287,6 +324,103 @@
         (format 0 "[mp-test]   open ~D ~S~%" (get-idx-in-task-list (-> open i)) (-> open i name))
         )
       )
+    )
+  (none)
+  )
+
+(defun mp-test-log-sync ()
+  "Print the phase of a 4-second test cycle, computed in the manager's context like a world object's
+   (host clock sync), stamped with the host's clock (ours on the host, the drawn time on a guest)."
+  (let ((manager (handle->process (-> *mp-globals* manager)))
+        (cycle (new 'stack 'sync-linear))
+        )
+    (when manager
+      (set! (-> cycle sync-flags) (sync-flags))
+      (set! (-> cycle offset) 0.0)
+      (set! (-> cycle period) (the-as uint (seconds 4)))
+      (with-pp
+        (let ((saved pp))
+          (set! pp manager)
+          (let ((phase (get-norm! cycle 0)))
+            (set! pp saved)
+            (format
+              0
+              "[mp-test] sync t ~D phase ~f shift ~D~%"
+              (pc-mp-clock (if (= *mp-mode* (mp-mode client)) 0 -1))
+              phase
+              (mp-sync-shift cycle)
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(define *mp-test-near* (the-as process-drawable #f))
+(define *mp-test-near-dist* 0.0)
+(define *mp-test-near-type* (the-as type #f))
+(define *mp-test-near-pos* (new 'global 'vector))
+
+(defun mp-test-near-scan ((proc process-drawable))
+  "iterate-process-tree callback: the process of type *mp-test-near-type* nearest *mp-test-near-pos*."
+  (when (and (type? proc *mp-test-near-type*) (nonzero? (-> proc root)))
+    (let ((d (vector-vector-distance (-> proc root trans) *mp-test-near-pos*)))
+      (when (or (not *mp-test-near*) (< d *mp-test-near-dist*))
+        (set! *mp-test-near* proc)
+        (set! *mp-test-near-dist* d)
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-test-nearest ((typ type) (pos vector))
+  "The process of type `typ` nearest to `pos`, or #f."
+  (set! *mp-test-near* #f)
+  (set! *mp-test-near-type* typ)
+  (vector-copy! *mp-test-near-pos* pos)
+  (iterate-process-tree *active-pool* (the-as (function object object) mp-test-near-scan) *null-kernel-context*)
+  *mp-test-near*
+  )
+
+(defun mp-test-reference-pos ()
+  "Where the object tests look: player 0 (the host) on a guest, ourselves on the host."
+  (let ((st (if (= *mp-mode* (mp-mode client))
+                (mp-remote-state 0)
+                (the-as mp-player-state #f)
+                )
+            )
+        )
+    (cond
+      (st (-> st trans))
+      (*target* (-> *target* control trans))
+      (else (the-as vector #f))
+      )
+    )
+  )
+
+(defun mp-test-log-object ((label string) (typ type))
+  "Print the object of type `typ` nearest to the reference position: its entity, state and height."
+  (let* ((pos (mp-test-reference-pos))
+         (proc (if pos
+                   (mp-test-nearest typ pos)
+                   )
+               )
+         )
+    (if proc
+        (format
+          0
+          "[mp-test] ~S aid ~D state ~A at ~m height ~m~%"
+          label
+          (if (-> proc entity) (-> proc entity aid) 0)
+          (if (-> proc next-state) (-> proc next-state name) #f)
+          *mp-test-near-dist*
+          (-> proc root trans y)
+          )
+        (format 0 "[mp-test] no ~S~%" label)
+        )
     )
   (none)
   )
@@ -698,12 +832,13 @@
          (mp-test-log)
          )
         ((string= cmd "log-pose-own")
+         ;; printed by the manager this frame (mp-test-own-flush)
          (mp-test-word)
-         (let ((proc (mp-test-own-object (-> *mp-test* word))))
-           (if proc
-               (mp-test-print-bones (-> *mp-test* word) (logand (-> proc pid) #xffffff) proc)
-               (format 0 "[mp-test] no own ~S~%" (-> *mp-test* word))
-               )
+         (let ((rq *mp-test-own*))
+           (when (< (-> rq count) 8)
+             (copy-string<-string (-> rq kind (-> rq count)) (-> *mp-test* word))
+             (+! (-> rq count) 1)
+             )
            )
          )
         ((string= cmd "log-pose-copy")
@@ -716,11 +851,79 @@
          (mp-test-log-tasks)
          )
         ((string= cmd "close-task")
-         ;; close the first open task node, as if completed here
-         (let ((open (open-task-nodes (new 'stack 'boxed-array game-task-node-info 8))))
-           (when (> (-> open length) 0)
-             (format 0 "[mp-test] closing ~D ~S~%" (get-idx-in-task-list (-> open 0)) (-> open 0 name))
-             (open! (-> open 0) 'event)
+         ;; close-task [n]: close the first open task node, n times, as if completed here
+         (let ((times (max 1 (mp-test-int))))
+           (dotimes (k times)
+             (let ((open (open-task-nodes (new 'stack 'boxed-array game-task-node-info 8))))
+               (when (> (-> open length) 0)
+                 (format 0 "[mp-test] closing ~D ~S~%" (get-idx-in-task-list (-> open 0)) (-> open 0 name))
+                 (open! (-> open 0) 'event)
+                 )
+               )
+             )
+           )
+         )
+        ((string= cmd "scene")
+         ;; start a cutscene here, as a mission would
+         (mp-test-word)
+         (let ((name (new 'global 'string 32 (-> *mp-test* word))))
+           (process-spawn scene-player :init scene-player-init name #t (the-as string #f) :name "scene-player")
+           )
+         )
+        ((string= cmd "log-levels")
+         (dotimes (i (-> *level* length))
+           (let ((lev (-> *level* level i)))
+             (if (-> lev name)
+                 (format 0 "[mp-test] level ~A ~A display ~A~%" (-> lev name) (-> lev status) (-> lev display?))
+                 )
+             )
+           )
+         (format
+           0
+           "[mp-test] scenes sent ~D shown ~D playing ~A~%"
+           (-> *mp-scene* sent)
+           (-> *mp-scene* shown)
+           (if (process-by-name "scene-player" *active-pool*) #t #f)
+           )
+         )
+        ((string= cmd "log-sync")
+         (mp-test-log-sync)
+         )
+        ((string= cmd "log-door")
+         (mp-test-log-object "door" com-airlock)
+         )
+        ((string= cmd "log-elevator")
+         (mp-test-log-object "elevator" elevator)
+         (format
+           0
+           "[mp-test] elevator trips sent ~D shown ~D~%"
+           (-> *mp-world-state* elevator-trips-sent)
+           (-> *mp-world-state* elevator-trips-shown)
+           )
+         )
+        ((or (string= cmd "goto-door") (string= cmd "goto-elevator"))
+         ;; stand 2 m in front of the nearest door, or on top of the nearest elevator
+         (let* ((door? (string= cmd "goto-door"))
+                (proc (if *target*
+                          (mp-test-nearest (if door? com-airlock elevator) (-> *target* control trans))
+                          )
+                      )
+                )
+           (when proc
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> proc root trans))))
+               (cond
+                 (door?
+                   (let ((dir (vector-z-quaternion! (new 'stack-no-clear 'vector) (-> proc root quat))))
+                     (vector+float*! pos pos dir (meters 2))
+                     )
+                   )
+                 (else
+                   (+! (-> pos y) (meters 1))
+                   )
+                 )
+               (move-to-point! (-> *target* control) pos)
+               (format 0 "[mp-test] at ~S ~D~%" cmd (if (-> proc entity) (-> proc entity aid) 0))
+               )
              )
            )
          )

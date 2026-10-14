@@ -1,0 +1,11 @@
+# Shared cutscene, host side: starts a Spargus cutscene, as a mission would; the guest next to it
+# watches it too.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+55 scene wascity-pre-game-intro
+58 log-levels
+62 screenshot scene
+75 log-levels
+76 log

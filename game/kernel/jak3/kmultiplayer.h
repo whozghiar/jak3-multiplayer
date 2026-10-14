@@ -86,7 +86,7 @@ struct ActorState {
 };
 static_assert(sizeof(ActorState) == 80, "ActorState must match mp-actor-state");
 
-constexpr int kMaxActors = 64;
+constexpr int kMaxActors = 128;
 
 // Received snapshots of one actor, oldest first, with the sender time of each.
 struct ActorTrack {
@@ -156,8 +156,8 @@ struct SoundIO {
 static_assert(sizeof(SoundIO) == 64, "SoundIO must match mp-sound");
 
 constexpr int kMaxPoseJoints = 256;
-constexpr int kMaxPoseEmitters = 16;
-constexpr int kMaxPoseSounds = 16;
+constexpr int kMaxPoseEmitters = 32;
+constexpr int kMaxPoseSounds = 32;
 
 struct PoseSnap {
   std::vector<PoseJoint> joints;
@@ -236,6 +236,10 @@ class Session {
   // Host only: disconnect a player, optionally refusing its address until the server stops.
   void kick(int slot, bool ban);
 
+  // Time `source`'s objects are drawn at now, in its clock (ms); the local clock for -1.
+  double clock_of(int source, double now_ms) const {
+    return source < 0 ? now_ms : drawn_time(source, now_ms);
+  }
   Mode mode() const { return m_mode; }
   int local_slot() const { return m_local_slot; }
   const std::string& message() const { return m_message; }

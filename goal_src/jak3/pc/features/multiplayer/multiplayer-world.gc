@@ -20,6 +20,10 @@
 ;; so blends, streamed animations, joint mods and ragdolls look the same everywhere), and the
 ;; particle emitters and sounds each of them used (see "Poses and emitters" below).
 ;;
+;; World objects run on every machine, each for its own player, and are kept alike: cyclic objects
+;; follow the host's clocks, doors open for any player in front of them, and an elevator trip that
+;; starts on one machine starts on the others (see "World objects" below).
+;;
 ;; A blow or shot on a replica is sent to its owner, which applies it to the real object with the
 ;; attacker's puppet as the attacker; the reaction and the death come back as its state. A guest
 ;; who presses triangle next to one of the host's NPC vehicles gets the same vehicle, and the host
@@ -31,8 +35,8 @@
 ;; Types (mp-actor-state mirrors mp::ActorState)
 ;; ------------------------------------------------------------------------------------------------
 
-(defconstant MP_MAX_ACTORS 64)    ;; NPCs the host sends per batch
-(defconstant MP_MAX_REPLICAS 128) ;; NPCs a guest draws (a batch, plus the ones fading out)
+(defconstant MP_MAX_ACTORS 128)   ;; objects one player sends per batch (more than the game spawns)
+(defconstant MP_MAX_REPLICAS 256) ;; copies one player draws (every other player's batch)
 
 (defenum mp-actor-flag
   :type uint16
@@ -69,6 +73,7 @@
 (define-extern pc-mp-add-emitter (function int int int matrix none))
 (define-extern pc-mp-send-poses (function none))
 (define-extern pc-mp-get-pose (function uint matrix (inline-array matrix) int int))
+(define-extern pc-mp-clock (function int int))
 (define-extern pc-mp-get-actors (function (inline-array mp-actor-state) int int))
 (define-extern mp-player-count (function int)) ;; multiplayer-menu.gc
 
@@ -93,6 +98,11 @@
    (served-pos     vector 8 :inline)
    (forced-count   int32)       ;; NPCs whose force-math we set (mp-force-math)
    (forced         handle 128)
+   (elev-count     int32)       ;; elevators seen: entity aid, and whether a trip is under way
+   (elev-aid       uint32 64)
+   (elev-trip      symbol 64)
+   (elevator-trips-sent  int32) ;; counters for the test log
+   (elevator-trips-shown int32)
    )
   )
 
@@ -392,16 +402,16 @@
 (deftype mp-pose-state (structure)
   ((bones       matrix MP_MAX_POSE_JOINTS :inline) ;; scratch: bones sent or received
    (frame       matrix :inline)
-   (emitters    mp-emitter 16 :inline)
+   (emitters    mp-emitter 32 :inline)
    ;; objects of the batch being built (same order as *mp-actors-out*)
    (proc        process-drawable MP_MAX_ACTORS)
    ;; emitters used since the last batch by the objects we send (mp-note-emitter)
    (emit-count  int32)
-   (emit-pid    int32 32)
-   (emit-kind   int32 32)
-   (emit-ptr    basic 32)
-   (emit-calls  int32 32)
-   (emit-origin matrix 32 :inline)
+   (emit-pid    int32 64)
+   (emit-kind   int32 64)
+   (emit-ptr    basic 64)
+   (emit-calls  int32 64)
+   (emit-origin matrix 64 :inline)
    ;; launcher -> *part-id-table* index, reset with the skeleton cache
    (part-ptr    basic 16)
    (part-index  int32 16)
@@ -410,7 +420,7 @@
    (poses-sent     int32)
    (poses-skipped  int32)  ;; poses left out of drawn objects (bones not all fresh): the copy plays
                            ;; the animation
-   (poses-hidden   int32)  ;; objects their owner does not draw (hidden, or a moment while teleporting)
+   (poses-hidden   int32)  ;; objects their owner does not draw (hidden, or for a moment)
    (poses-applied  int32)
    (emitters-sent  int32)
    (emitters-shown int32)
@@ -422,18 +432,18 @@
    ;; sound id
    (snd-count      int32)
    (snd-pid        int32 24)
-   (snd-out        mp-sound 24 :inline)
+   (snd-out        mp-sound 48 :inline)
    ;; recent sound ids of those objects, so a sound-stop on one reaches the others
    (known-pid      int32 32)
    (known-id       sound-id 32)
    (known-next     int32)
    ;; sounds received, and the copies' sounds playing here: copy id, owner's sound id, our id
-   (sounds         mp-sound 16 :inline)
-   (rsnd-copy      uint32 48)
-   (rsnd-remote    sound-id 48)
-   (rsnd-local     sound-id 48)
-   (rsnd-batches   int32 48)
-   (rsnd-time      time-frame 48)
+   (sounds         mp-sound 32 :inline)
+   (rsnd-copy      uint32 96)
+   (rsnd-remote    sound-id 96)
+   (rsnd-local     sound-id 96)
+   (rsnd-batches   int32 96)
+   (rsnd-time      time-frame 96)
    (sounds-sent    int32)
    (sounds-played  int32)
    )
@@ -615,6 +625,8 @@
   )
 
 (define-extern mp-send-poses (function none))
+(define-extern mp-poll-elevator (function process object))
+
 
 (defun mp-world-send ()
   "Send what this player simulates, 15 times a second: its props, and the NPCs near the players it
@@ -641,6 +653,7 @@
             )
           )
       (mp-release-math #f)
+      (iterate-process-tree *active-pool* (the-as (function object object) mp-poll-elevator) *null-kernel-context*)
       (set! (-> *mp-actors-out* count) *mp-collect-count*)
       (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
       (mp-send-poses)
@@ -720,10 +733,11 @@
    (id     uint32)
    (dying? symbol)
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
-   (fx-group   int32 4)            ;; particle groups the owner's object emits (mp-play-emitters)
-   (fx-tracker handle 4)
+   (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the owner's object emits (mp-play-emitters)
+   (fx-tracker handle MP_FX_TRACKERS)
    (pose-count int32)              ;; poses laid on this copy, and the last count received
    (pose-last  int32)
+   (pose-time  int32)              ;; owner's time (ms) of the pose laid last (test logs)
    (net    mp-actor-state :inline) ;; latest state from the owner
    )
   )
@@ -899,7 +913,7 @@
   (ja-channel-set! 1)
   ;; the bones take the owner's pose once computed (mp-pose-postbind)
   (set! (-> self skel postbind-function) mp-pose-postbind)
-  (dotimes (i 4)
+  (dotimes (i MP_FX_TRACKERS)
     (set! (-> self fx-group i) -1)
     (set! (-> self fx-tracker i) (the-as handle #f))
     )
@@ -1226,6 +1240,7 @@
      )
     (else
       (set! *mp-authority* #f)
+      (set! (-> *mp-clock-sync* known?) #f)
       (if (or (> (-> *mp-world-state* replica-count) 0)
               (> (-> *mp-world-state* suppressed-count) 0)
               (> (-> *mp-world-state* forced-count) 0)
@@ -1661,7 +1676,7 @@
           (set! i (-> ps emit-count))
           )
         )
-      (when (and (< slot 0) (< (-> ps emit-count) 32))
+      (when (and (< slot 0) (< (-> ps emit-count) 64))
         (set! slot (-> ps emit-count))
         (+! (-> ps emit-count) 1)
         (set! (-> ps emit-pid slot) pid)
@@ -1692,7 +1707,7 @@
             (set! slot i)
             )
         )
-      (when (and (< slot 0) (< (-> ps snd-count) 24))
+      (when (and (< slot 0) (< (-> ps snd-count) 48))
         (set! slot (-> ps snd-count))
         (+! (-> ps snd-count) 1)
         (set! (-> ps snd-pid slot) pid)
@@ -1742,7 +1757,7 @@
                   (set! slot i)
                   )
               )
-            (when (and (< slot 0) (< (-> ps snd-count) 24))
+            (when (and (< slot 0) (< (-> ps snd-count) 48))
               (set! slot (-> ps snd-count))
               (+! (-> ps snd-count) 1)
               (set! (-> ps snd-pid slot) pid)
@@ -1803,8 +1818,9 @@
           )
       )
     (when (and pose? (not (mp-pose-ready? proc npc?)))
-      ;; not drawn by its owner, for good or for a moment (a teleport): nothing to copy
-      (if (and (nonzero? (-> proc draw)) (logtest? (-> proc draw status) (draw-control-status no-draw no-draw-temp)))
+      ;; not drawn by its owner, for good or for a moment (a teleport, a model set up again and
+      ;; not computed yet): nothing to copy
+      (if (and (nonzero? (-> proc draw)) (logtest? (-> proc draw status) (draw-control-status no-draw no-draw-temp uninited)))
           (+! (-> ps poses-hidden) 1)
           (+! (-> ps poses-skipped) 1)
           )
@@ -1935,9 +1951,10 @@
               (matrix-copy! (-> nodes data i bone transform) (-> ps bones i))
               )
             (+! (-> ps poses-applied) 1)
-            (if (type? pp mp-replica)
-                (+! (-> (the-as mp-replica pp) pose-count) 1)
-                )
+            (when (type? pp mp-replica)
+              (+! (-> (the-as mp-replica pp) pose-count) 1)
+              (set! (-> (the-as mp-replica pp) pose-time) (pc-mp-clock (the-as int (shr id 24))))
+              )
             )
           )
         )
@@ -1961,13 +1978,13 @@
   "Play on copy `copy` (placed at `frame`) the sounds its owner made: one sound id of ours per
    owner's sound id, so a lasting sound stays one sound, updated each batch."
   (let* ((ps *mp-pose*)
-         (count (pc-mp-get-sounds copy frame (-> ps sounds) 16))
+         (count (pc-mp-get-sounds copy frame (-> ps sounds) 32))
          )
     (dotimes (i count)
       (let* ((snd (-> ps sounds i))
              (slot -1)
              )
-        (dotimes (k 48)
+        (dotimes (k 96)
           (if (and (= (-> ps rsnd-copy k) copy) (= (-> ps rsnd-remote k) (-> snd id)))
               (set! slot k)
               )
@@ -1982,11 +1999,11 @@
             (when (< slot 0)
               ;; a free entry, else the oldest one (stopped first)
               (set! slot 0)
-              (dotimes (k 48)
+              (dotimes (k 96)
                 (cond
                   ((zero? (-> ps rsnd-copy k))
                    (set! slot k)
-                   (set! k 48)
+                   (set! k 96)
                    )
                   ((< (-> ps rsnd-time k) (-> ps rsnd-time slot))
                    (set! slot k)
@@ -2027,7 +2044,7 @@
   "Stop the copies' lasting sounds the owner no longer updates (0.4 s), forget the others after
    10 s; every one when `all?`."
   (let ((ps *mp-pose*))
-    (dotimes (i 48)
+    (dotimes (i 96)
       (when (nonzero? (-> ps rsnd-copy i))
         (let ((age (- (mp-now) (-> ps rsnd-time i))))
           (if (or all? (and (>= (-> ps rsnd-batches i) 2) (< (seconds 0.4) age)) (< (seconds 10) age))
@@ -2042,12 +2059,12 @@
 
 (defun mp-play-emitters ((proc process-drawable) (id uint) (groups (pointer int32)) (trackers (pointer handle)))
   "Draw on copy `proc` the emitters its owner uses (object `id`): one part-tracker per particle
-   group, kept alive and moved while the owner keeps the group running (at most 4), and the single
+   group, kept alive and moved while the owner keeps the group running (MP_FX_TRACKERS), and the single
    launches replayed as many times as the owner made them; then play its sounds. `groups` and
-   `trackers` are the copy's 4 tracker slots."
+   `trackers` are the copy's tracker slots."
   (let* ((ps *mp-pose*)
          (frame (mp-frame-of (-> ps frame) (-> proc root trans) (-> proc root quat)))
-         (count (pc-mp-get-emitters id frame (-> ps emitters) 16))
+         (count (pc-mp-get-emitters id frame (-> ps emitters) 32))
          (kept 0)
          )
     (mp-play-sounds id frame)
@@ -2066,13 +2083,13 @@
                    )
                ;; a level's groups are unlinked (0) while that level is not loaded here
                (when (and (nonzero? group) (type? group sparticle-launch-group))
-                 (dotimes (k 4)
+                 (dotimes (k MP_FX_TRACKERS)
                    (if (and (= (-> groups k) (-> em index)) (handle->process (-> trackers k)))
                        (set! slot k)
                        )
                    )
                  (when (< slot 0)
-                   (dotimes (k 4)
+                   (dotimes (k MP_FX_TRACKERS)
                      (if (and (< slot 0) (not (logtest? kept (ash 1 k))) (not (handle->process (-> trackers k))))
                          (set! slot k)
                          )
@@ -2127,7 +2144,7 @@
         )
       )
     ;; groups the owner stopped: their tracker runs out by itself, its slot is free again
-    (dotimes (k 4)
+    (dotimes (k MP_FX_TRACKERS)
       (if (not (logtest? kept (ash 1 k)))
           (set! (-> groups k) -1)
           )
@@ -2220,6 +2237,535 @@
       (mp-note-sound-stop arg0)
       )
   (*mp-stock-sound-stop* arg0)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; World objects
+;; ------------------------------------------------------------------------------------------------
+
+;; Lifts, doors and platforms carry or block the player, so each machine keeps running its own
+;; for its own player; they are kept alike instead of copied:
+;;   - cyclic objects (moving platforms, wheels, lights...) compute their phase from their
+;;     process's clock with sync-info. On a guest, every sync-info method sees the clock shifted by
+;;     the host's lead (*mp-clock-sync*, multiplayer.gc), through the object's offset field, put
+;;     back after the call: the phase follows the host and no timer of the game moves;
+;;   - doors (com-airlock) open for a remote player in front of them as for the local one;
+;;   - an elevator trip that starts on one machine (its player rode it) starts on the others, with
+;;     the elevator's own 'move-to message.
+
+(defun mp-sync-shift ((this sync-info))
+  "Frames to add to the phase of cycle `this` so that it shows the host's (0 offline, on the host,
+   before the host's clocks arrived, or for a clock that is not shared)."
+  (with-pp
+    (let ((cs *mp-clock-sync*)
+          (period (the-as int (-> this period)))
+          )
+      (when (and (-> cs known?) pp (> period 0) (= *mp-mode* (mp-mode client)))
+        (let ((clk (-> pp clock)))
+          (dotimes (i 22)
+            (if (= clk (-> *display* clock i))
+                (return (mod (+ (mod (-> cs shift i) period) period) period))
+                )
+            )
+          )
+        )
+      )
+    )
+  0
+  )
+
+;; MOD multiplayer -- cycle phase of a sync-linear
+(define-perm *mp-stock-sync-linear-get-norm!* (function sync-linear int float)
+  (the-as (function sync-linear int float) (method-of-type sync-linear get-norm!))
+  )
+
+(defmethod get-norm! ((this sync-linear) (arg0 int))
+  "Stock method, with the phase shifted to the host's (mp-sync-shift; no-op offline)."
+  (let ((shift (mp-sync-shift this)))
+    (if (zero? shift)
+        (*mp-stock-sync-linear-get-norm!* this arg0)
+        (let ((saved (-> this offset)))
+          (+! (-> this offset) (the float shift))
+          (let ((result (*mp-stock-sync-linear-get-norm!* this arg0)))
+            (set! (-> this offset) saved)
+            result
+            )
+          )
+        )
+    )
+  )
+
+;; MOD multiplayer -- cycle phase of a sync-eased
+(define-perm *mp-stock-sync-eased-get-norm!* (function sync-eased int float)
+  (the-as (function sync-eased int float) (method-of-type sync-eased get-norm!))
+  )
+
+(defmethod get-norm! ((this sync-eased) (arg0 int))
+  "Stock method, with the phase shifted to the host's (mp-sync-shift; no-op offline)."
+  (let ((shift (mp-sync-shift this)))
+    (if (zero? shift)
+        (*mp-stock-sync-eased-get-norm!* this arg0)
+        (let ((saved (-> this offset)))
+          (+! (-> this offset) (the float shift))
+          (let ((result (*mp-stock-sync-eased-get-norm!* this arg0)))
+            (set! (-> this offset) saved)
+            result
+            )
+          )
+        )
+    )
+  )
+
+;; MOD multiplayer -- cycle phase of a sync-paused
+(define-perm *mp-stock-sync-paused-get-norm!* (function sync-paused int float)
+  (the-as (function sync-paused int float) (method-of-type sync-paused get-norm!))
+  )
+
+(defmethod get-norm! ((this sync-paused) (arg0 int))
+  "Stock method, with the phase shifted to the host's (mp-sync-shift; no-op offline)."
+  (let ((shift (mp-sync-shift this)))
+    (if (zero? shift)
+        (*mp-stock-sync-paused-get-norm!* this arg0)
+        (let ((saved (-> this offset)))
+          (+! (-> this offset) (the float shift))
+          (let ((result (*mp-stock-sync-paused-get-norm!* this arg0)))
+            (set! (-> this offset) saved)
+            result
+            )
+          )
+        )
+    )
+  )
+
+;; MOD multiplayer -- time until the next cycle
+(define-perm *mp-stock-sync-get-timeframe-offset!* (function sync-info time-frame time-frame)
+  (the-as (function sync-info time-frame time-frame) (method-of-type sync-info get-timeframe-offset!))
+  )
+
+(defmethod get-timeframe-offset! ((this sync-info) (arg0 time-frame))
+  "Stock method, with the phase shifted to the host's (mp-sync-shift; no-op offline)."
+  (let ((shift (mp-sync-shift this)))
+    (if (zero? shift)
+        (*mp-stock-sync-get-timeframe-offset!* this arg0)
+        (let ((saved (-> this offset)))
+          (+! (-> this offset) (the float shift))
+          (let ((result (*mp-stock-sync-get-timeframe-offset!* this arg0)))
+            (set! (-> this offset) saved)
+            result
+            )
+          )
+        )
+    )
+  )
+
+;; MOD multiplayer -- raw cycle phase
+(define-perm *mp-stock-sync-get-current-phase-no-mod* (function sync-info float)
+  (the-as (function sync-info float) (method-of-type sync-info get-current-phase-no-mod))
+  )
+
+(defmethod get-current-phase-no-mod ((this sync-info))
+  "Stock method, with the phase shifted to the host's (mp-sync-shift; no-op offline)."
+  (let ((shift (mp-sync-shift this)))
+    (if (zero? shift)
+        (*mp-stock-sync-get-current-phase-no-mod* this)
+        (let ((saved (-> this offset)))
+          (+! (-> this offset) (the float shift))
+          (let ((result (*mp-stock-sync-get-current-phase-no-mod* this)))
+            (set! (-> this offset) saved)
+            result
+            )
+          )
+        )
+    )
+  )
+
+;; MOD multiplayer -- "start the cycle at this phase now"
+(define-perm *mp-stock-sync-now!* (function sync-info float none)
+  (the-as (function sync-info float none) (method-of-type sync-info sync-now!))
+  )
+
+(defmethod sync-now! ((this sync-info) (arg0 float))
+  "Stock method; the offset it sets is taken back by the shift the other methods add, so the cycle
+   still starts at `arg0` now."
+  (*mp-stock-sync-now!* this arg0)
+  (let ((shift (mp-sync-shift this)))
+    (if (nonzero? shift)
+        (set! (-> this offset) (- (-> this offset) (the float shift)))
+        )
+    )
+  (none)
+  )
+
+(defun mp-remote-wants-airlock? ((this com-airlock))
+  "#t when a remote player stands where the local player would open door `this`: in front of it,
+   within its distances and heights, the door allowed to open (its script test, the airlock
+   setting, no close command)."
+  (let ((cmd (airlock-command-lookup (the-as pair (-> this name)))))
+    (when (and (< (-> this latch-closed-time) (current-time))
+               (!= cmd 'close)
+               (-> *setting-control* user-current airlock)
+               )
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (when (and st (not (logtest? (-> st flags) (mp-flag hidden))))
+            (let* ((pos (-> st trans))
+                   (cross (check-crossing-distance this pos #t))
+                   (dist (vector-vector-xz-distance (-> this root trans) pos))
+                   )
+              (if (and (< dist (if (>= cross 0.0)
+                                   (-> this active-distance 0)
+                                   (-> this active-distance 1)
+                                   )
+                          )
+                       (< cross (-> this open-distance 0))
+                       (or (not (-> this y-height))
+                           (and (>= (-> pos y) (- (-> this root trans y) (-> this y-height y)))
+                                (< (-> pos y) (+ (-> this root trans y) (-> this y-height x)))
+                                )
+                           )
+                       (script-eval (-> this open-test))
+                       )
+                  (return #t)
+                  )
+              )
+            )
+          )
+        )
+      )
+    )
+  #f
+  )
+
+;; MOD multiplayer -- doors open for every player (engine/common-obs/airlock.gc)
+(define-perm *mp-stock-want-cross-airlock?* (function com-airlock object)
+  (the-as (function com-airlock object) (method-of-type com-airlock want-cross-airlock?))
+  )
+
+(defmethod want-cross-airlock? ((this com-airlock))
+  "Stock decision for the local player; online, a remote player in front of the door opens it too,
+   so the doors are the same on every machine."
+  (or (*mp-stock-want-cross-airlock?* this) (and (mp-online?) (mp-remote-wants-airlock? this)))
+  )
+
+(defun mp-elevator-slot ((aid uint))
+  "Entry of elevator `aid` in the elevator table (added when new), -1 when the table is full."
+  (let ((ws *mp-world-state*))
+    (dotimes (i (-> ws elev-count))
+      (if (= (-> ws elev-aid i) aid)
+          (return i)
+          )
+      )
+    (when (< (-> ws elev-count) 64)
+      (let ((i (-> ws elev-count)))
+        (set! (-> ws elev-aid i) aid)
+        (set! (-> ws elev-trip i) #f)
+        (+! (-> ws elev-count) 1)
+        (return i)
+        )
+      )
+    )
+  -1
+  )
+
+(defun mp-poll-elevator ((proc process))
+  "iterate-process-tree callback: an elevator near a player that started a trip here, not on
+   another player's word, is announced to the others."
+  (when (and (type? proc elevator) (-> proc entity) (mp-near-a-player? (-> (the-as elevator proc) root trans)))
+    (let* ((elev (the-as elevator proc))
+           (slot (mp-elevator-slot (-> proc entity aid)))
+           (running? (and (-> proc next-state) (= (-> proc next-state name) 'running)))
+           )
+      (when (>= slot 0)
+        (cond
+          ((not running?)
+           (set! (-> *mp-world-state* elev-trip slot) #f)
+           )
+          ((not (-> *mp-world-state* elev-trip slot))
+           (set! (-> *mp-world-state* elev-trip slot) #t)
+           (mp-send-event (mp-event-kind elevator) -1 (the-as int (-> proc entity aid)) (-> elev move-pos 1))
+           (+! (-> *mp-world-state* elevator-trips-sent) 1)
+           )
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-apply-elevator ((ev mp-event))
+  "Another player's elevator started a trip: start the same trip here, when ours waits at a stop
+   (its 'move-to message takes the top or the bottom)."
+  (let ((ent (entity-by-aid (the-as uint (-> ev iarg 0)))))
+    (when ent
+      (let ((proc (-> (the-as entity-actor ent) extra process)))
+        (when (and proc (type? proc elevator))
+          (let ((elev (the-as elevator proc))
+                (slot (mp-elevator-slot (the-as uint (-> ev iarg 0))))
+                (target (-> ev fvec x))
+                )
+            (when (and (-> proc next-state)
+                       (or (= (-> proc next-state name) 'waiting) (= (-> proc next-state name) 'arrived))
+                       (!= target (-> elev move-pos 1))
+                       )
+              ;; noted first: the trip it starts is the other player's, not to be sent back
+              (if (>= slot 0)
+                  (set! (-> *mp-world-state* elev-trip slot) #t)
+                  )
+              (cond
+                ((= target (-> elev bottom-top 1))
+                 (send-event proc 'move-to 'top)
+                 (+! (-> *mp-world-state* elevator-trips-shown) 1)
+                 )
+                ((= target (-> elev bottom-top 0))
+                 (send-event proc 'move-to 'bottom)
+                 (+! (-> *mp-world-state* elevator-trips-shown) 1)
+                 )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Levels leaving
+;; ------------------------------------------------------------------------------------------------
+
+;; A level that leaves kills its entities and their effects (deactivate, engine/level/level.gc),
+;; then its memory is reused. What this mod made from it outlives that: the copies drawn with its
+;; art, part-trackers on copies playing its particle groups, the skeleton cache. They go first.
+
+(deftype mp-leaving-state (structure)
+  ((base  uint32)       ;; heap of the leaving level
+   (top   uint32)
+   (count int32)        ;; part-trackers to kill once the process tree walk is over
+   (kill  handle 128)
+   )
+  )
+
+(define *mp-leaving* (new 'global 'mp-leaving-state))
+
+(defun mp-find-leaving-tracker ((proc process-tree))
+  "iterate-process-tree callback: note a part-tracker playing a group of the leaving level."
+  (let ((lv *mp-leaving*))
+    (when (and (type? proc part-tracker) (nonzero? (-> (the-as part-tracker proc) part)) (< (-> lv count) 128))
+      (let ((group (the-as uint (-> (the-as part-tracker proc) part group))))
+        (when (and (>= group (-> lv base)) (< group (-> lv top)))
+          (set! (-> lv kill (-> lv count)) (process->handle (the-as process proc)))
+          (+! (-> lv count) 1)
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-on-level-leaving ((lev level))
+  "Level `lev` is going away: remove the copies drawn with its art, the part-trackers playing its
+   particle groups, and forget the skeletons found in it."
+  (let ((ws *mp-world-state*)
+        (i 0)
+        )
+    (while (< i (-> ws replica-count))
+      (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
+        (if (and proc (= (-> proc level) lev))
+            (mp-replica-remove i)
+            (+! i 1)
+            )
+        )
+      )
+    (set! (-> ws skel-count) 0)
+    )
+  (dotimes (k 16)
+    (set! (-> *mp-pose* part-ptr k) #f)
+    )
+  (let ((lv *mp-leaving*))
+    (set! (-> lv base) (the-as uint (-> lev heap base)))
+    (set! (-> lv top) (the-as uint (-> lev heap top-base)))
+    (set! (-> lv count) 0)
+    (iterate-process-tree *active-pool* (the-as (function object object) mp-find-leaving-tracker) *null-kernel-context*)
+    (dotimes (k (-> lv count))
+      (let ((proc (handle->process (-> lv kill k))))
+        (if proc
+            (deactivate proc)
+            )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- clean up before a level goes away (engine/level/level.gc)
+(define-perm *mp-stock-level-deactivate* (function level level)
+  (the-as (function level level) (method-of-type level deactivate))
+  )
+
+(defmethod deactivate ((this level))
+  "What this mod made from the level goes first (always: copies can remain after a session), then
+   the stock deactivation."
+  (if (or (= (-> this status) 'active) (= (-> this status) 'alive))
+      (mp-on-level-leaving this)
+      )
+  (*mp-stock-level-deactivate* this)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Shared cutscenes
+;; ------------------------------------------------------------------------------------------------
+
+;; A cutscene (scene-player) that starts on one machine starts on the machines of the players who
+;; share its region (same NPC authority), so they watch it together and get its commands (task
+;; nodes, continue points). Gated by the host's "Share story progress".
+;;
+;; Levels are not copied: a level loaded without a free bank of the level heap crashes the game
+;; ("could not find free ... bank in the level-group heap"), so each machine loads the levels its
+;; own player's position calls for. Players in one region stand in the same levels.
+
+(deftype mp-scene-state (structure)
+  ((replaying? symbol)      ;; starting another player's scene: do not send it back
+   (total      int32)       ;; scenes of the cutscene being received
+   (wait       symbol)
+   (names      string 8)
+   (continue   string)
+   (sent       int32)       ;; counters for the test log
+   (shown      int32)
+   )
+  )
+
+(define *mp-scene* (new 'global 'mp-scene-state))
+(set! (-> *mp-scene* replaying?) #f)
+(dotimes (i 8)
+  (set! (-> *mp-scene* names i) (new 'global 'string 32 (the-as string #f)))
+  )
+(set! (-> *mp-scene* continue) (new 'global 'string 32 (the-as string #f)))
+
+(defun mp-scene-name ((obj object))
+  "The name of a scene argument (a name, or a scene), #f otherwise."
+  (cond
+    ((type? obj string) (the-as string obj))
+    ((type? obj scene) (-> (the-as scene obj) name))
+    (else (the-as string #f))
+    )
+  )
+
+(defun mp-send-scene-part ((index int) (total int) (wait symbol) (name string))
+  "One message of a cutscene: scene `index` of `total` (-1: the continue point, last)."
+  (let ((ev (new 'stack 'mp-event)))
+    (set! (-> ev kind) (mp-event-kind scene))
+    (set! (-> ev to) -1)
+    (set! (-> ev iarg 0) index)
+    (set! (-> ev iarg 1) total)
+    (set! (-> ev iarg 2) (if wait 1 0))
+    (if name
+        (copyn-charp<-string (-> ev text) name 32)
+        (set! (-> ev text 0) (the-as uint 0))
+        )
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defun mp-send-scene ((scenes object) (wait symbol) (continue string))
+  "A cutscene starts here: send its scenes (a name, a scene, or a list or array of them) and its
+   continue point to the others."
+  (let ((total 0))
+    (cond
+      ((type? scenes pair)
+       (let ((p (the-as pair scenes)))
+         (while (and (not (null? p)) (< total 8))
+           (mp-send-scene-part total -1 wait (mp-scene-name (car p)))
+           (+! total 1)
+           (set! p (the-as pair (cdr p)))
+           )
+         )
+       )
+      ((type? scenes array)
+       (let ((arr (the-as (array object) scenes)))
+         (dotimes (i (min 8 (-> arr length)))
+           (mp-send-scene-part i -1 wait (mp-scene-name (-> arr i)))
+           (+! total 1)
+           )
+         )
+       )
+      (else
+        (mp-send-scene-part 0 -1 wait (mp-scene-name scenes))
+        (set! total 1)
+        )
+      )
+    (mp-send-scene-part -1 total wait continue)
+    (+! (-> *mp-scene* sent) 1)
+    )
+  (none)
+  )
+
+(defbehavior mp-apply-scene mp-manager ((ev mp-event))
+  "Part of another player's cutscene; on its last part, start the same cutscene here when that
+   player shares our region and no cutscene plays here."
+  (let ((sc *mp-scene*)
+        (index (-> ev iarg 0))
+        )
+    (cond
+      ((and (>= index 0) (< index 8))
+       (string<-charp (-> sc names index) (-> ev text))
+       )
+      ((and (= index -1)
+            (logtest? *mp-world* (mp-world-flag progress))
+            *target*
+            (>= *mp-local-slot* 0)
+            (= (mp-provider-of *mp-local-slot*) (mp-provider-of (-> ev from)))
+            (not (process-by-name "scene-player" *active-pool*))
+            )
+       (string<-charp (-> sc continue) (-> ev text))
+       (let* ((total (max 1 (min 8 (-> ev iarg 1))))
+              (scenes (if (= total 1)
+                          (the-as object (-> sc names 0))
+                          (let ((lst '()))
+                            (countdown (i total)
+                              (set! lst (cons (-> sc names i) lst))
+                              )
+                            lst
+                            )
+                          )
+                      )
+              )
+         (format 0 "[multiplayer] cutscene ~S of player ~D starts here too~%" (-> sc names 0) (-> ev from))
+         (set! (-> sc replaying?) #t)
+         (process-spawn
+           scene-player
+           :init scene-player-init
+           scenes
+           (nonzero? (-> ev iarg 2))
+           (if (nonzero? (length (-> sc continue)))
+               (-> sc continue)
+               (the-as string #f)
+               )
+           :name "scene-player"
+           )
+         (set! (-> sc replaying?) #f)
+         (+! (-> sc shown) 1)
+         )
+       )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- every cutscene starts here (engine/scene/scene.gc)
+(define-perm *mp-stock-scene-player-init* (function object symbol string none :behavior scene-player)
+  scene-player-init
+  )
+
+(defbehavior scene-player-init scene-player ((arg0 object) (arg1 symbol) (arg2 string))
+  "The others in our region play this cutscene too (multiplayer mod, no-op offline), then the stock
+   init, which goes on to the scene."
+  (if (and (mp-online?) (logtest? *mp-world* (mp-world-flag progress)) (not (-> *mp-scene* replaying?)))
+      (mp-send-scene arg0 arg1 arg2)
+      )
+  (*mp-stock-scene-player-init* arg0 arg1 arg2)
+  (none)
   )
 
 ;; ------------------------------------------------------------------------------------------------

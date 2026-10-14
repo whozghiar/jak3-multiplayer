@@ -1,0 +1,24 @@
+# World objects, host side: logs a test cycle (clock sync), opens the nearest door by standing in
+# front of it, then rides the nearest elevator. The guest, 25 m away, logs the same door and elevator.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52.00 log-sync
+52.25 log-sync
+52.50 log-sync
+52.75 log-sync
+53.00 log-sync
+53.25 log-sync
+53.50 log-sync
+53.75 log-sync
+55 log-door
+56 goto-door
+57.5 log-door
+60 log-door
+62 goto-elevator
+63 log-elevator
+66 log-elevator
+69 log-elevator
+70 screenshot elevator
+72 log

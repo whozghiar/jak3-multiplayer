@@ -1,0 +1,9 @@
+# Late join with much more progress, host side: closes 40 task nodes before the guest joins.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+39 log-tasks
+40 close-task 40
+42 log-tasks
+66 log-tasks

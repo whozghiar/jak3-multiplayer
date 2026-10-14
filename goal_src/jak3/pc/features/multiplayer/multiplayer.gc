@@ -25,6 +25,7 @@
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_MAX_PLAYERS 8)
+(defconstant MP_FX_TRACKERS 8) ;; particle groups one copy can show at once (mp-play-emitters)
 
 ;; Session mode, as returned by pc-mp-update.
 (defenum mp-mode
@@ -56,7 +57,8 @@
   (steal 2)       ;; to a driver: the sender takes your vehicle, get out
   (hit 3)         ;; to a player: an enemy hit your character on the sender's screen, fvec x = damage
   (teleport 4)    ;; to a player or everyone: go to player iarg 0 (administration)
-  (world 5)       ;; host to everyone: iarg 0 = mp-world-flag bits, fvec x = time of day
+  (world 5)       ;; host to everyone: iarg 0 = mp-world-flag bits, fvec x = time of day, text = the
+                  ;; frame counters of the game clocks *mp-synced-clocks* (int32 each)
   (pvp 6)         ;; to a player: another player hit you, fvec xyz = attacker position, w = damage
   (actor-hit 7)   ;; to an object's owner: the sender hit the replica of its object iarg 0 (pid);
                   ;; iarg 1 = attack mode index, iarg 2-3 = penetrate-using, fvec w = damage
@@ -66,6 +68,9 @@
   (projectile 10) ;; to everyone: a projectile was fired; text = its type, fvec = position, iarg 0-2
                   ;; = velocity (float bits), iarg 3 = owner pid, -1 for the sender's player
   (progress 11)   ;; story progress: text = bitmap of the closed task nodes iarg 0 .. iarg 0 + 255
+  (elevator 12)   ;; an elevator of entity iarg 0 started a trip here, to path position fvec x
+  (scene 13)      ;; a cutscene started here: iarg 0 = scene index (text = its name) or -1 for the
+                  ;; last part (text = continue point, iarg 1 = scene count), iarg 2 = wait flag
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -654,8 +659,8 @@
    (ghost-retry time-frame)    ;; last failed ghost spawn (process pool full)
    (hurtbox    handle)         ;; mp-hurtbox: what the local player's attacks hit
    (last-attack uint32)        ;; id of the last attack forwarded, so one blow counts once
-   (fx-group   int32 4)        ;; particle groups the player's model emits here (mp-play-emitters)
-   (fx-tracker handle 4)
+   (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the player's model emits (mp-play-emitters)
+   (fx-tracker handle MP_FX_TRACKERS)
    )
   )
 
@@ -1082,7 +1087,7 @@
   (ja-channel-set! 1)
   ;; the bones take the player's own pose once computed
   (set! (-> self skel postbind-function) mp-pose-postbind)
-  (dotimes (i 4)
+  (dotimes (i MP_FX_TRACKERS)
     (set! (-> self fx-group i) -1)
     (set! (-> self fx-tracker i) (the-as handle #f))
     )
@@ -1328,6 +1333,9 @@
 (define-extern mp-nearest-replica-vehicle (function vector int))
 (define-extern mp-take-replica-vehicle (function int symbol :behavior mp-manager))
 (define-extern mp-replay-effect (function mp-event none))
+(define-extern mp-apply-elevator (function mp-event none))
+(define-extern mp-apply-scene (function mp-event none :behavior mp-manager))
+(define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
 (define-extern mp-replay-projectile (function mp-event none))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
@@ -1520,10 +1528,68 @@
   (none)
   )
 
+;; Objects that move on a cycle (platforms, wheels, lights...) take their phase from their
+;; process's clock (sync-info, engine/util/sync-info.gc), and every machine's clocks started at its
+;; own boot. The host sends its clocks with the world settings; a guest shifts the phase of every
+;; cycle by the difference (multiplayer-world.gc wraps the sync-info methods), minus 100 ms so the
+;; cycles match the host's state as its copies are drawn. The clocks themselves are left alone:
+;; every timer of the game keeps its meaning.
+(define *mp-synced-clocks* (new 'static 'boxed-array :type int32 1 2 6 7 8 9 10 11))
+
+(deftype mp-clock-sync (structure)
+  ((known? symbol)    ;; the host's clocks arrived
+   (shift  int32 22)  ;; per *display* clock: host frame counter - ours - 100 ms
+   )
+  )
+
+(define *mp-clock-sync* (new 'global 'mp-clock-sync))
+(set! (-> *mp-clock-sync* known?) #f)
+
+(defun mp-send-world ()
+  "Host: server settings, time of day and game clocks to everyone."
+  (let ((ev (new 'stack 'mp-event)))
+    (set! (-> ev kind) (mp-event-kind world))
+    (set! (-> ev to) -1)
+    (set! (-> ev iarg 0) (the-as int *mp-world*))
+    (set! (-> ev fvec x) (-> *time-of-day-context* time))
+    (let ((clocks (the-as (pointer int32) (-> ev text))))
+      (dotimes (i (-> *mp-synced-clocks* length))
+        (set! (-> clocks i) (the-as int (-> *display* clock (-> *mp-synced-clocks* i) frame-counter)))
+        )
+      )
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defun mp-apply-clocks ((ev mp-event))
+  "Guest: the shift between the host's clocks (in `ev`) and ours, drawn 100 ms behind."
+  (let ((clocks (the-as (pointer int32) (-> ev text))))
+    (dotimes (i (-> *mp-synced-clocks* length))
+      (let* ((index (-> *mp-synced-clocks* i))
+             ;; 32-bit frame counters: the difference is taken modulo 2^32
+             (diff (- (logand (-> clocks i) #xffffffff)
+                      (logand (-> *display* clock index frame-counter) #xffffffff)
+                      )
+                   )
+             )
+        (cond
+          ((>= diff #x80000000) (set! diff (- diff #x100000000)))
+          ((< diff (- #x80000000)) (set! diff (+ diff #x100000000)))
+          )
+        (set! (-> *mp-clock-sync* shift index) (+ diff (- (seconds 0.1))))
+        )
+      )
+    )
+  (set! (-> *mp-clock-sync* known?) #t)
+  (none)
+  )
+
 (defbehavior mp-apply-world mp-manager ((ev mp-event))
-  "Settings and time of day from the host."
+  "Settings, time of day and game clocks from the host."
   (when (and (= *mp-mode* (mp-mode client)) (zero? (-> ev from)))
     (set! *mp-world* (the-as mp-world-flag (-> ev iarg 0)))
+    (mp-apply-clocks ev)
     (when (and (logtest? *mp-world* (mp-world-flag sync-time)) *time-of-day*)
       (let* ((host-time (-> ev fvec x))
              (diff (fabs (- host-time (-> *time-of-day-context* time))))
@@ -1556,6 +1622,12 @@
          )
         (((mp-event-kind progress))
          (mp-apply-progress ev)
+         )
+        (((mp-event-kind elevator))
+         (mp-apply-elevator ev)
+         )
+        (((mp-event-kind scene))
+         (mp-apply-scene ev)
          )
         (((mp-event-kind steal))
          (if *target*
@@ -1876,7 +1948,7 @@
     (mp-manager-handle-events)
     (when (and (= *mp-mode* (mp-mode host)) (time-elapsed? (-> self world-time) (seconds 2)))
       (set-time! (-> self world-time))
-      (mp-send-event (mp-event-kind world) -1 (the-as int *mp-world*) (-> *time-of-day-context* time))
+      (mp-send-world)
       )
     )
   (mp-manager-update-puppets)
@@ -1896,6 +1968,7 @@
       )
     )
   (mp-world-update)
+  (mp-test-own-flush)
   (none)
   )
 

@@ -1589,6 +1589,16 @@ u64 pc_mp_get_emitters(u32 id, u32 frame, u32 dest, u32 max) {
                                          std::min<int>((int)max, mp::kMaxPoseEmitters));
 }
 
+// (pc-mp-clock slot) -> ms: this machine's clock for -1, else the time player `slot`'s objects are
+// drawn at now, in that player's clock (evidence lines of the test logs are stamped with it).
+u64 pc_mp_clock(u32 slot) {
+  int source = (s32)slot;
+  if (source >= mp::kMaxPlayers) {
+    source = -1;
+  }
+  return (u64)(s64)mp::session().clock_of(source, mp::now_ms());
+}
+
 // (pc-mp-test-active?) -> #t when a test script drives this instance.
 u64 pc_mp_test_active() {
   return to_symbol(mp::test::script().loaded);
@@ -1647,6 +1657,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-get-sounds", (void*)pc_mp_get_sounds);
   make_function_symbol_from_c("pc-mp-get-pose", (void*)pc_mp_get_pose);
   make_function_symbol_from_c("pc-mp-get-emitters", (void*)pc_mp_get_emitters);
+  make_function_symbol_from_c("pc-mp-clock", (void*)pc_mp_clock);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);
