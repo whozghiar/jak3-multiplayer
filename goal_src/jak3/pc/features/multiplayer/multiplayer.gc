@@ -1072,14 +1072,26 @@
   )
 
 (defun mp-apply-remote-kill ((aid uint))
-  "Another player killed the enemy of entity `aid`: kill it here too, with its death animation."
+  "Another player killed the enemy of entity `aid` (its death animation plays here too), or broke the
+   crate or took the pickup of entity `aid` (it is removed here; the break effect comes with the
+   shared effects)."
   (let ((ent (entity-by-aid aid)))
     (when ent
       (let ((proc (-> (the-as entity-actor ent) extra process)))
-        (when (and proc (type? proc enemy) (not (focus-test? (the-as enemy proc) dead)))
-          (set! (-> *mp-remote-kills* *mp-remote-kill-index*) aid)
-          (set! *mp-remote-kill-index* (mod (+ *mp-remote-kill-index* 1) (-> *mp-remote-kills* length)))
-          (send-event proc 'instant-death)
+        (when proc
+          (cond
+            ((and (type? proc enemy) (not (focus-test? (the-as enemy proc) dead)))
+             (set! (-> *mp-remote-kills* *mp-remote-kill-index*) aid)
+             (set! *mp-remote-kill-index* (mod (+ *mp-remote-kill-index* 1) (-> *mp-remote-kills* length)))
+             (send-event proc 'instant-death)
+             )
+            ((or (type? proc crate) (type? proc collectable))
+             (set! (-> *mp-remote-kills* *mp-remote-kill-index*) aid)
+             (set! *mp-remote-kill-index* (mod (+ *mp-remote-kill-index* 1) (-> *mp-remote-kills* length)))
+             (process-entity-status! proc (entity-perm-status dead) #t)
+             (deactivate proc)
+             )
+            )
           )
         )
       )

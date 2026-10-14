@@ -1182,3 +1182,38 @@
   (mp-projectile-fired self arg0)
   (*mp-stock-projectile-init-by-other* arg0)
   )
+
+;; ------------------------------------------------------------------------------------------------
+;; Crates and pickups
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-on-entity-dead ((proc process))
+  "An entity was marked dead here: when it is a crate or a pickup, the other players remove theirs
+   (enemies go through mark-as-dead instead, see multiplayer.gc)."
+  (when (and (mp-online?)
+             (or (type? proc crate) (type? proc collectable))
+             (-> proc entity)
+             (nonzero? (-> proc entity aid))
+             (not (mp-remote-kill? (-> proc entity aid)))
+             )
+    (mp-send-event (mp-event-kind kill-entity) -1 (the-as int (-> proc entity aid)) 0.0)
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- wrap the stock entity status setter (engine/entity/entity.gc): every broken
+;; crate and taken pickup marks its entity dead through it.
+(define-perm *mp-stock-process-entity-status!* (function process entity-perm-status symbol entity-perm-status)
+  process-entity-status!
+  )
+
+(defun process-entity-status! ((arg0 process) (arg1 entity-perm-status) (arg2 symbol))
+  "Stock behavior; a crate or pickup marked dead here is removed on the other machines too
+   (multiplayer mod, no-op offline)."
+  (let ((result (*mp-stock-process-entity-status!* arg0 arg1 arg2)))
+    (if (and arg2 (logtest? arg1 (entity-perm-status dead)))
+        (mp-on-entity-dead arg0)
+        )
+    result
+    )
+  )

@@ -1,0 +1,10 @@
+# Crate test, host side: breaks the nearest crate; the guest's copy must disappear.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+55 log-crates
+56 goto-crate
+57 press square 200
+58 press square 200
+60 log-crates

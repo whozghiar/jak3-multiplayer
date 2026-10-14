@@ -1,0 +1,7 @@
+# Crate test, guest side: counts its crates before and after the host breaks one.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+55 log-crates
+61 log-crates

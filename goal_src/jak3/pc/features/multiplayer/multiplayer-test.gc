@@ -245,6 +245,39 @@
   #f
   )
 
+(define *mp-test-crates* 0)
+(define *mp-test-nearest* (the-as process-drawable #f))
+(define *mp-test-nearest-dist* 0.0)
+
+(defun mp-test-crate-scan ((proc process-drawable))
+  "iterate-process-tree callback: count live crates, keep the nearest to the player."
+  (when (and (type? proc crate) *target* (nonzero? (-> proc root)))
+    (+! *mp-test-crates* 1)
+    (let ((d (vector-vector-distance (-> proc root trans) (-> *target* control trans))))
+      (when (or (not *mp-test-nearest*) (< d *mp-test-nearest-dist*))
+        (set! *mp-test-nearest* proc)
+        (set! *mp-test-nearest-dist* d)
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-test-crates ()
+  "Count the live crates (and find the nearest)."
+  (set! *mp-test-crates* 0)
+  (set! *mp-test-nearest* #f)
+  (iterate-process-tree *active-pool* (the-as (function object object) mp-test-crate-scan) *null-kernel-context*)
+  (format
+    0
+    "[mp-test] crates ~D nearest ~A at ~m~%"
+    *mp-test-crates*
+    (if *mp-test-nearest* (-> *mp-test-nearest* entity aid) #f)
+    *mp-test-nearest-dist*
+    )
+  (none)
+  )
+
 (defun mp-test-run ()
   "Run the command in (-> *mp-test* line)."
   (format 0 "[mp-test] run ~S~%" (-> *mp-test* line))
@@ -320,6 +353,26 @@
              (else
                (set! *mp-request-teleport* slot)
                )
+             )
+           )
+         )
+        ((string= cmd "log-crates")
+         (mp-test-crates)
+         )
+        ((string= cmd "goto-crate")
+         ;; stand 1.5 m from the nearest crate, facing it
+         (mp-test-crates)
+         (when (and *mp-test-nearest* *target*)
+           (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> *mp-test-nearest* root trans)))
+                 (dir (new 'stack-no-clear 'vector))
+                 )
+             (+! (-> pos z) (meters -1.5))
+             (move-to-point! (-> *target* control) pos)
+             (vector-! dir (-> *mp-test-nearest* root trans) pos)
+             (set! (-> dir y) 0.0)
+             (vector-normalize! dir 1.0)
+             (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
+             (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
              )
            )
          )
