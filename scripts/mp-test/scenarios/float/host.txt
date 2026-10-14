@@ -1,0 +1,33 @@
+# Floating platforms, host side (the authority): in the volcano, logs the lava platform in view
+# (about 270 m away) every half second, stamped with its clock.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+48 continue volcanoa-start
+64.00 log-float
+64.25 log-float
+64.50 log-float
+64.75 log-float
+65.00 log-float
+65.25 log-float
+65.50 log-float
+65.75 log-float
+66.00 log-float
+66.25 log-float
+66.50 log-float
+66.75 log-float
+67.00 log-float
+67.25 log-float
+67.50 log-float
+67.75 log-float
+68.00 log-float
+68.25 log-float
+68.50 log-float
+68.75 log-float
+69.00 log-float
+69.25 log-float
+69.50 log-float
+69.75 log-float
+70 screenshot float
+73 log

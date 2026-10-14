@@ -5,6 +5,7 @@
 40 log
 40 screenshot boot
 42 host 0.0.0.0:7777
+58 log-levels
 60 log
 60 screenshot together
 75 log

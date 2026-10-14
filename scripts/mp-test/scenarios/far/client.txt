@@ -5,9 +5,12 @@
 1 color 2
 45 join 127.0.0.1:7777
 52 log
+52.5 log-levels
 53 zone 7
 70 log
 70 screenshot far
+70.5 log-levels
 72 goto-player 0
 88 log
 88 screenshot back
+88.5 log-levels

@@ -4,5 +4,8 @@
 1 color 1
 38 host 0.0.0.0:7777
 52 log
+52 log-levels
 70 log
+70 log-levels
 88 log
+88 log-levels

@@ -46,6 +46,7 @@
   (vehicle 2) ;; a vehicle (else a character)
   (prop 3)    ;; a player's prop (Daxter, gun): drawn, not solid
   (owned 4)   ;; belongs to a player (prop, driven vehicle and wheels), never an NPC
+  (world 5)   ;; a physics object of the level (id: mp-world-object-id): no copy, ours follows it
   )
 
 (deftype mp-actor-state (structure)
@@ -103,6 +104,7 @@
    (elev-trip      symbol 64)
    (elevator-trips-sent  int32) ;; counters for the test log
    (elevator-trips-shown int32)
+   (world-driven  int32)        ;; physics object updates applied from the authority
    )
   )
 
@@ -546,11 +548,123 @@
   (none)
   )
 
+(defun mp-world-object-id ((proc process))
+  "Id of a physics object the same on every machine: its entity's aid, and in bits 20-23 its rank
+   among the objects that entity's process spawned (5 lava platforms share their spawner's
+   entity), 0 for the entity's own process. -1 when it cannot be named."
+  (let* ((ent (-> proc entity))
+         (aid (the-as int (-> ent aid)))
+         (owner (-> ent extra process))
+         (rank 0)
+         )
+    (when (and owner (!= owner proc))
+      (let ((child (-> owner child))
+            (i 1)
+            )
+        (while (and child (zero? rank))
+          (let ((node (ppointer->process child)))
+            (when (and node (type? node rigid-body-object))
+              (if (= node proc)
+                  (set! rank i)
+                  )
+              (+! i 1)
+              )
+            (set! child (if node
+                            (-> node brother)
+                            (the-as (pointer process-tree) #f)
+                            )
+                  )
+            )
+          )
+        (if (zero? rank)
+            (return -1)
+            )
+        )
+      )
+    (if (or (>= aid #x100000) (>= rank 16))
+        -1
+        (logior aid (shl rank 20))
+        )
+    )
+  )
+
+(defun mp-world-object-by-id ((id int))
+  "Our physics object named `id` (mp-world-object-id), or #f."
+  (let ((ent (entity-by-aid (the-as uint (logand id #xfffff))))
+        (rank (logand (shr id 20) 15))
+        )
+    (when ent
+      (let ((owner (-> (the-as entity-actor ent) extra process)))
+        (cond
+          ((not owner)
+           (the-as process #f)
+           )
+          ((zero? rank)
+           owner
+           )
+          (else
+            (let ((child (-> owner child))
+                  (i 1)
+                  )
+              (while child
+                (let ((node (ppointer->process child)))
+                  (when (and node (type? node rigid-body-object))
+                    (if (= i rank)
+                        (return (the-as process node))
+                        )
+                    (+! i 1)
+                    )
+                  (set! child (if node
+                                  (-> node brother)
+                                  (the-as (pointer process-tree) #f)
+                                  )
+                        )
+                  )
+                )
+              )
+            (the-as process #f)
+            )
+          )
+        )
+      )
+    )
+  )
+
+(defun mp-add-world-object ((proc rigid-body-object))
+  "Add physics object `proc` (a floating platform, a crate on physics...) to the batch, named by
+   its entity (mp-world-object-id): the others move their own object of that name to where ours is."
+  (when (and (< *mp-collect-count* MP_MAX_ACTORS) (>= (mp-world-object-id proc) 0))
+    (let ((st (-> *mp-actors-out* state *mp-collect-count*)))
+      (vector-copy! (-> st trans) (-> proc root trans))
+      (set! (-> st trans w) 1.0)
+      (quaternion-copy! (-> st quat) (-> proc root quat))
+      (set! (-> st id) (the-as uint (mp-world-object-id proc)))
+      (set! (-> st anim-index) -1)
+      (set! (-> st anim-frame) 0.0)
+      (set! (-> st flags) (mp-actor-flag world))
+      (set! (-> st seg-mask) (the-as uint 0))
+      (set! (-> st skel 0) (the-as uint 0))
+      (set! (-> *mp-pose* proc *mp-collect-count*) proc)
+      (+! *mp-collect-count* 1)
+      )
+    )
+  (none)
+  )
+
 (defun mp-collect-actor ((proc process-drawable))
   "iterate-process-tree callback (authority): add `proc` when it is an NPC within 100 m of a player
    whose NPCs we simulate."
   (when (type? proc process-drawable)
     (let ((kind (mp-actor-kind proc)))
+      ;; physics objects of the level (not vehicles): their place only, as far as they can be seen
+      (if (and (zero? kind)
+               (type? proc rigid-body-object)
+               (-> proc entity)
+               (nonzero? (-> proc root))
+               (< (mp-served-distance (-> proc root trans)) (meters 300))
+               )
+          (mp-add-world-object (the-as rigid-body-object proc))
+          )
       (when (and (> kind 0)
                  (not (mp-driven-vehicle? proc))
                  (< (mp-served-distance (-> proc root trans)) (meters 100))
@@ -626,6 +740,7 @@
 
 (define-extern mp-send-poses (function none))
 (define-extern mp-poll-elevator (function process object))
+(define-extern mp-update-remote-riders (function none))
 
 
 (defun mp-world-send ()
@@ -1123,6 +1238,25 @@
   (none)
   )
 
+(defun mp-drive-world-object ((st mp-actor-state))
+  "Our physics object of the entity in `st` goes where its authority has it (when that authority
+   provides our NPCs): its rigid body is set there at rest, so its own physics only moves it for
+   the frame until the next state, and it still carries the player standing on it."
+  (when (and (not *mp-authority*) (= (the-as int (shr (-> st id) 24)) (mp-provider-of *mp-local-slot*)))
+    (let ((proc (mp-world-object-by-id (the-as int (logand (-> st id) #xffffff)))))
+      (when (and proc (type? proc rigid-body-object) (nonzero? (-> (the-as rigid-body-object proc) rbody)))
+        (let ((rbody (-> (the-as rigid-body-object proc) rbody)))
+          (rigid-body-control-method-28 rbody (-> st trans) (-> st quat))
+          (reset-momentum! rbody)
+          (init-velocities! rbody)
+          (+! (-> *mp-world-state* world-driven) 1)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-replica-wanted? ((st mp-actor-state))
   "#f for an NPC of another authority standing nearer to us than to that player: our own world
    covers that place, so its copy would be a double."
@@ -1151,6 +1285,10 @@
                (index (mp-replica-index (-> st id)))
                )
           (cond
+            ((logtest? (-> st flags) (mp-actor-flag world))
+             (mp-drive-world-object st)
+             (set! (-> st id) (the-as uint 0))
+             )
             ((not (mp-replica-wanted? st))
              ;; dropped below with the replicas no longer sent
              (set! (-> st id) (the-as uint 0))
@@ -1237,6 +1375,7 @@
          )
      (mp-world-receive)
      (mp-sounds-housekeeping #f)
+     (mp-update-remote-riders)
      )
     (else
       (set! *mp-authority* #f)
@@ -1817,6 +1956,13 @@
           (+! emitters 1)
           )
       )
+    ;; an NPC whose joint math did not run lately (frozen by a cutscene, off the owner's screen):
+    ;; its bones are computed now from its animation, as the owner's would be
+    (when (and pose? npc? (not (mp-pose-ready? proc npc?)) (nonzero? (-> proc draw)) (nonzero? (-> proc skel))
+               (not (logtest? (-> proc draw status) (draw-control-status no-draw no-draw-temp uninited)))
+               )
+      (do-joint-math (-> proc draw) (-> proc node-list) (-> proc skel))
+      )
     (when (and pose? (not (mp-pose-ready? proc npc?)))
       ;; not drawn by its owner, for good or for a moment (a teleport, a model set up again and
       ;; not computed yet): nothing to copy
@@ -1897,14 +2043,17 @@
       )
     (dotimes (i *mp-collect-count*)
       (let ((st (-> *mp-actors-out* state i)))
-        (mp-send-pose
-          (-> st id)
-          (-> ps proc i)
-          (-> st trans)
-          (-> st quat)
-          (not (logtest? (-> st flags) (mp-actor-flag owned)))
-          #t
-          )
+        ;; physics objects of the level have no copy, so no pose
+        (if (not (logtest? (-> st flags) (mp-actor-flag world)))
+            (mp-send-pose
+              (-> st id)
+              (-> ps proc i)
+              (-> st trans)
+              (-> st quat)
+              (not (logtest? (-> st flags) (mp-actor-flag owned)))
+              #t
+              )
+            )
         )
       )
     (pc-mp-send-poses)
@@ -2445,6 +2594,73 @@
   "Stock decision for the local player; online, a remote player in front of the door opens it too,
    so the doors are the same on every machine."
   (or (*mp-stock-want-cross-airlock?* this) (and (mp-online?) (mp-remote-wants-airlock? this)))
+  )
+
+;; Floating platforms (rigid-body-platform, level code of the volcano) take the weight of whoever
+;; stands on them from the 'ridden message their collision gets from a rider. A remote player
+;; standing on one here sends it the same message from its puppet, with the target mask the
+;; handler looks for set for the duration of the call.
+(deftype mp-rider-state (structure)
+  ((typ     type)   ;; rigid-body-platform once its level is loaded, else #f
+   (sent    int32)  ;; counter for the test log
+   )
+  )
+
+(define *mp-riders* (new 'global 'mp-rider-state))
+
+(defun mp-push-remote-riders ((proc process-tree))
+  "iterate-process-tree callback: a floating platform under a remote player gets its weight."
+  (when (and (type? proc (-> *mp-riders* typ)) (nonzero? (-> (the-as process-drawable proc) root)))
+    (let* ((plat (the-as process-drawable proc))
+           (sphere (-> (the-as collide-shape (-> plat root)) root-prim prim-core world-sphere))
+           (manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+           )
+      (when manager
+        (dotimes (i MP_MAX_PLAYERS)
+          (let ((st (mp-remote-state i))
+                (puppet (the-as process-focusable (handle->process (-> manager puppets i))))
+                )
+            (when (and st
+                       puppet
+                       (not (logtest? (-> st flags) (mp-flag hidden driving riding)))
+                       (< (vector-vector-xz-distance (-> st trans) sphere) (-> sphere w))
+                       (< (- (-> plat root trans y) (meters 1)) (-> st trans y))
+                       (< (-> st trans y) (+ (-> plat root trans y) (meters 3)))
+                       )
+              (let ((rider (new 'stack-no-clear 'collide-rider))
+                    (had-mask? (logtest? (-> puppet mask) (process-mask target)))
+                    )
+                (set! (-> rider rider-handle) (process->handle puppet))
+                (set! (-> rider sticky-prim) #f)
+                (logior! (-> puppet mask) (process-mask target))
+                (send-event plat 'ridden rider)
+                (if (not had-mask?)
+                    (logclear! (-> puppet mask) (process-mask target))
+                    )
+                (+! (-> *mp-riders* sent) 1)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-update-remote-riders ()
+  "Every frame: floating platforms under remote players get their weight (when such platforms exist)."
+  (let ((typ (-> (the-as symbol 'rigid-body-platform) value)))
+    (set! (-> *mp-riders* typ) (if (and typ (nonzero? typ) (type? typ type))
+                                   (the-as type typ)
+                                   (the-as type #f)
+                                   )
+          )
+    (if (-> *mp-riders* typ)
+        (iterate-process-tree *active-pool* (the-as (function object object) mp-push-remote-riders) *null-kernel-context*)
+        )
+    )
+  (none)
   )
 
 (defun mp-elevator-slot ((aid uint))

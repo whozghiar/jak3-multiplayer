@@ -1,0 +1,31 @@
+# Floating platform weight, host side (the authority): stands on a lava platform; the guest steps
+# on it too: the host's platform takes the guest's weight through the guest's puppet.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+48 continue volcanoa-start
+64 goto-float
+65 log-me
+66.0 log-float
+66.25 log-me
+66.5 log-float
+66.75 log-me
+67.0 log-float
+67.25 log-me
+67.5 log-float
+67.75 log-me
+68.0 log-float
+68.25 log-me
+68.5 log-float
+68.75 log-me
+69.0 log-float
+69.25 log-me
+69.5 log-float
+69.75 log-me
+70.0 log-float
+70.25 log-me
+70.5 log-float
+70.75 log-me
+71 screenshot weight
+72 log

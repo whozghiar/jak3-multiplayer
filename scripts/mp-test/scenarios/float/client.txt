@@ -1,0 +1,38 @@
+# Floating platforms, guest side: next to the host, logs its own copy of that platform, stamped
+# with the time the host's objects are drawn at: its height and tilt must follow the host's.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+50 continue volcanoa-start
+63 goto-player 0 0 3
+65.00 log-float
+65.25 log-float
+65.50 log-float
+65.75 log-float
+66.00 log-float
+66.25 log-float
+66.50 log-float
+66.75 log-float
+67.00 log-float
+67.25 log-float
+67.50 log-float
+67.75 log-float
+68.00 log-float
+68.25 log-float
+68.50 log-float
+68.75 log-float
+69.00 log-float
+69.25 log-float
+69.50 log-float
+69.75 log-float
+70.00 log-float
+70.25 log-float
+70.50 log-float
+70.75 log-float
+71.00 log-float
+71.25 log-float
+71.50 log-float
+71.75 log-float
+72 screenshot float
+75 log

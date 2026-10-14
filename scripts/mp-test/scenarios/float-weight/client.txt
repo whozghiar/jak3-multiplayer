@@ -1,0 +1,29 @@
+# Floating platform weight, guest side: steps on the host's platform.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+50 continue volcanoa-start
+66.5 goto-player 0 0 1
+68.0 log-float
+68.25 log-me
+68.5 log-float
+68.75 log-me
+69.0 log-float
+69.25 log-me
+69.5 log-float
+69.75 log-me
+70.0 log-float
+70.25 log-me
+70.5 log-float
+70.75 log-me
+71.0 log-float
+71.25 log-me
+71.5 log-float
+71.75 log-me
+72.0 log-float
+72.25 log-me
+72.5 log-float
+72.75 log-me
+73 screenshot weight
+74 log

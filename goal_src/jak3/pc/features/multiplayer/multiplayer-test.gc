@@ -24,6 +24,7 @@
 ;;   log-sync                                                phase of a test cycle (host clock sync)
 ;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
+;;   goto-float | log-float                                  floating platforms (volcano)
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
@@ -888,6 +889,47 @@
          )
         ((string= cmd "log-sync")
          (mp-test-log-sync)
+         )
+        ((string= cmd "log-float")
+         ;; the floating platform nearest to player 0 (guest) or to us (host): height and tilt
+         (let* ((typ (-> (the-as symbol 'rigid-body-platform) value))
+                (pos (mp-test-reference-pos))
+                (proc (if (and pos typ (nonzero? typ) (type? typ type))
+                          (mp-test-nearest (the-as type typ) pos)
+                          )
+                      )
+                )
+           (if proc
+               (format
+                 0
+                 "[mp-test] float aid ~D t ~D height ~m tilt ~f weight sent ~D followed ~D~%"
+                 (if (-> proc entity) (-> proc entity aid) 0)
+                 (pc-mp-clock (if (= *mp-mode* (mp-mode client)) 0 -1))
+                 (-> proc root trans y)
+                 (-> proc root quat y)
+                 (-> *mp-riders* sent)
+                 (-> *mp-world-state* world-driven)
+                 )
+               (format 0 "[mp-test] no float~%")
+               )
+           )
+         )
+        ((string= cmd "goto-float")
+         ;; stand on the nearest floating platform
+         (let* ((typ (-> (the-as symbol 'rigid-body-platform) value))
+                (proc (if (and *target* typ (nonzero? typ) (type? typ type))
+                          (mp-test-nearest (the-as type typ) (-> *target* control trans))
+                          )
+                      )
+                )
+           (when proc
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> proc root trans))))
+               (+! (-> pos y) (meters 3))
+               (move-to-point! (-> *target* control) pos)
+               (format 0 "[mp-test] at goto-float ~D~%" (if (-> proc entity) (-> proc entity aid) 0))
+               )
+             )
+           )
          )
         ((string= cmd "log-door")
          (mp-test-log-object "door" com-airlock)
