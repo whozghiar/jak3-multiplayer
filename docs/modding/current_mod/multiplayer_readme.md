@@ -11,11 +11,11 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 | Layer | File | Role |
 |---|---|---|
-| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of players and objects, config file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script. |
-| Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, ban, refusal reason). |
+| Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason). |
 | GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets and their hurtboxes, passenger seat, shared enemy deaths, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
-| GAME | `.../multiplayer-world.gc` | The shared world: NPC and prop replication, guests' NPCs asleep, hits on replicas, NPC vehicles, effects, projectiles, crates and pickups. |
+| GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, crates and pickups. |
 | GAME | `.../multiplayer-menu.gc` | START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
 | Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/` | Runs several game instances on one PC with a script each, gathers logs and screenshots. |
@@ -26,13 +26,18 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   7777); guests get slots 1 to 7. Every message from a guest goes to the host, which relays it.
 - **Transport:** TCP with `TCP_NODELAY`, non-blocking sockets pumped once per frame from GOAL
   (`pc-mp-update`), no thread. A frame is `[u16 length][u8 type][payload]`; malformed or
-  oversized frames drop the peer. Message types: `HELLO` (protocol version), `WELCOME` (slot),
-  `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`.
+  oversized frames drop the peer. Message types: `HELLO` (protocol version, now 2), `WELCOME`
+  (slot), `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`.
 - **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
-  health, flags, driven vehicle, passenger seat, name, color, level, continue point) at 30 Hz.
+  health, flags, body segments, driven vehicle, passenger seat, name, color, level, continue
+  point) at 30 Hz.
 - **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
   player: `[u8 source][u32 source time][u16 count][states]`. Ids carry the owner's slot in the
   top byte and the owner's process pid below.
+- **Poses:** sent with each object batch, `[u8 source][u32 source time][u16 count]` then one entry
+  per object: `[u32 id][u16 bones][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
+  translation to 1 mm, per-axis scale, relative to the object's frame), each emitter 20 bytes,
+  each sound 40 bytes. Split over several frames of at most 16 KB. About 1.3 KB per Jak pose.
 - **Events:** `mp-event` (80 bytes), routed by slot (`to = -1` for everyone). The kinds are
   defined in GOAL (`mp-event-kind`); the C++ side only stamps the sender.
 - **Timeouts:** 15 s of silence drops a peer, 8 s to connect. The pump runs from the per-frame
@@ -42,23 +47,27 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 ### 1.2 The shared world
 
-The host is the authority on the world; every player owns its own avatar and props.
+Every player owns its avatar and props. The NPCs belong to an authority: the host for everyone
+near it, and a guest far from every authority for itself and the guests near it (1.4).
 
 | What | Simulated by | Seen by the others as |
 |---|---|---|
-| The player, its animation, health | its player | an `mp-puppet` (Jak, or Daxter in `indax` mode) |
-| Daxter on the shoulder, the gun, the vehicle driven and its wheels | its player | replicas of those props |
-| NPCs: the `enemy` family (citizens, guards, monsters, marauders...), vehicles and wheels near a player | the host | replicas; the guests' own NPCs sleep and their traffic is off |
+| The player, its pose, health | its player | an `mp-puppet` (Jak, or Daxter in `indax` mode) with the player's exact pose |
+| Daxter on the shoulder, the gun, the vehicle driven and its wheels | its player | replicas of those props, with their exact pose |
+| NPCs: the `enemy` family (citizens, guards, monsters, marauders...), vehicles and wheels near a player | that player's authority | replicas, with their exact pose for the 12 nearest; a player who is not an authority keeps its own NPCs asleep and its traffic off |
 | One-shot effects (part-trackers) | where they start | the same effect started at the same place |
-| Projectiles | the shooter's machine (the host for NPCs) | a copy fired from the puppet or the replica |
+| Continuous particle emitters and direct particle launches of a player, its props, the NPCs | their owner | the same emitter on the copy, at the same place on it |
+| Sounds of a player, its props, the NPCs (one-shot and lasting, such as engines) | their owner | the same sound at the copy, lasting sounds updated and stopped like the owner's |
+| Projectiles | the shooter's machine (the authority for NPCs) | a copy fired from the puppet or the replica |
 | Enemy deaths, broken crates, taken pickups | where they happen | the same entity dying or removed |
 | Time of day | the host | followed by the guests |
 
 A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
 process's art group and joint geometry, since a process does not keep it) and plays the owner's
-animation by index. Animation-carried effects (footsteps, sounds) play on the replica itself.
-Both players and objects are drawn 100 ms in the past, interpolated with the owner's clock, so
-props stay on the puppet that carries them.
+animation by index, which plays the animation's effects (footsteps, sounds) on the replica
+itself. The owner's full pose then replaces its bones (1.4). Both players and objects are drawn
+100 ms in the past, interpolated with the owner's clock, so props stay on the puppet that carries
+them.
 
 ### 1.3 Who applies damage
 
@@ -73,6 +82,34 @@ Each blow or shot counts once, on the machine that owns the victim:
 
 Copies of a player's shots collide with the background only: they are drawn, the shooter's machine
 sends their hits.
+
+### 1.4 Poses, emitters, sounds and authority
+
+- **Poses.** With each 15 Hz batch, a player sends the bones of its own model, of its props and of
+  the 12 NPCs nearest to another player within 40 m (`MP_POSE_BUDGET`), relative to each object's
+  frame (the root position and orientation of its state, without scale). A pose is left out when
+  its bones are not all fresh: drawn, at a level of detail that animates every joint, and for an
+  NPC its bone 0 still at its root. The copy's `joint-control` has `mp-pose-postbind` as its
+  `postbind-function`: `do-joint-math` computes the copy's bones from its own animation, then this
+  function lays the owner's bones, interpolated, on the copy's frame (same bone count only). Blends,
+  streamed animations, look-at and aiming joint mods, joint scales and ragdolls all come through.
+- **Emitters.** Two wrapped entry points note the particle emitters of the objects sent: the
+  launch-control `spawn` method (groups run every frame: flames, trails, auras) and
+  `sp-launch-particles-var` without a launch control (direct launches: dust, glows). Each batch
+  entry lists them, with their origin relative to the frame. The copy keeps a part-tracker per
+  group (at most 4) while the owner keeps it running, and replays each direct launch as many times
+  as the owner made it. `*part-id-table*` keeps the entries of unloaded levels, so a direct launcher
+  carries a hash of the level holding it, and the copy uses it only from that loaded level.
+- **Sounds.** `sound-play-by-name`, `sound-play-by-spec` and `sound-stop` note the sounds of the
+  same objects, the latest call per sound id. The copy plays each one at its place with a sound id
+  of its own per owner's id: the sound player updates a sound played again with the same id, so an
+  engine stays one sound, and it stops when the owner stops it or stops updating it for 0.4 s.
+- **Authority.** The host always simulates its NPCs. A guest shows the NPCs of a lower-slot
+  authority within 60 m and simulates its own once farther than 90 m from all of them, after 2 s
+  in the new situation (`mp-update-authority`); its state carries the `authority` flag. An
+  authority sends the NPCs within 100 m of the players it serves (itself, and the players who are
+  not authorities and whose nearest authority it is), and drops the copies of another authority's
+  NPCs standing nearer to itself than to that player.
 
 ## 2. Requirements and how they are met
 
@@ -114,6 +151,11 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `part-tracker-init-base` | `engine/common-obs/generic-obs.gc` | Every one-shot effect starts there. |
 | `projectile-init-by-other` | `engine/common-obs/projectile.gc` | Every projectile starts there (the stock one never returns, so the shot is sent first). |
 | `process-entity-status!` | `engine/entity/entity.gc` | Broken crates and taken pickups mark their entity dead there. |
+| `sparticle-launch-control` `spawn` | `engine/gfx/sprite/particles/sparticle-launcher.gc` | Every running particle group goes through it (`spawn-from-mat` and `spawn-from-cspace` too). |
+| `sp-launch-particles-var` | same file | Every particle launch; only the direct ones (no launch control) are noted. |
+| `sound-play-by-name`, `sound-play-by-spec`, `sound-stop` | `engine/sound/gsound.gc` | Every sound a process plays or stops. |
+
+Every wrapper only notes the call when a session is running, for a process the others draw.
 
 The per-frame hook `*mods-menu-hook*` (`engine/game/main.gc`) is set to `mp-frame-hook`, which
 calls `mods-menu-update` first.
@@ -128,16 +170,19 @@ calls `mods-menu-update` first.
    bars, prompts and notifications.
 2. `mp-manager` (`*pc-pool*`, frozen while paused): applies events, keeps one `mp-puppet` per
    remote player, switches the character, keeps invincibility, runs passenger and steal logic,
-   finishes teleports, then `mp-world-update`: sends this player's objects, keeps the guest's
-   NPCs asleep, and keeps one `mp-replica` per object received.
+   finishes teleports, then `mp-world-update`: picks this player's role, sends its objects and
+   their poses, emitters and sounds, keeps its NPCs asleep when it is not an authority (awake
+   otherwise), keeps one `mp-replica` per object received, and stops the copies' lasting sounds
+   their owner dropped.
 
 ### 4.2 Puppets
 
 An `mp-puppet` uses the local player's Jak model (`target-skel-group`) or Daxter's
-(`skel-sidekick`) and plays the remote player's animation by index. A clip not loaded here falls
-back to the idle stance, or to the crouch for a driver or passenger (pilot animations stream in
-only on the driver's machine). Its `mp-hurtbox` child sits in the actor hash, where the player's
-attacks look. A model change (character, outfit) respawns the puppet.
+(`skel-sidekick`), shows the body segments the remote player shows, and takes the remote player's
+exact pose (1.4). It also plays the remote player's animation by index, for the animation's
+effects and for the time before the first pose: a clip not loaded here falls back to the idle
+stance, or to the crouch for a driver or passenger. Its `mp-hurtbox` child sits in the actor hash,
+where the player's attacks look. A model change (character, outfit) respawns the puppet.
 
 ### 4.3 Shared vehicles
 
@@ -147,17 +192,18 @@ attacks look. A model change (character, outfit) respawns the puppet.
   vehicle of that type (`'change-mode 'pilot #f type #t`, stock spawn path). Only once that worked
   does it send `steal`: the driver gets out and its vehicle is removed half a second later. Only
   the player vehicles: city bikes and cars (types 0-6) and Spargus buggies (12-19).
-- **The host's NPC vehicles:** a guest presses triangle next to one, gets the same vehicle, and
-  the host removes its own (`vehicle-taken`).
+- **NPC vehicles:** a player presses triangle next to the replica of another authority's NPC
+  vehicle, gets the same vehicle, and that authority removes its own (`vehicle-taken`).
 - **Ride (hold triangle 0.5 s):** with a second seat no other player uses. An invisible `mp-seat`
   follows the driver's seat 1 and the player rides it with the stock `target-grab-ride` state.
   Each machine draws the passenger in the driver's seat as it sees that vehicle.
 
-### 4.4 Guests' own NPCs
+### 4.4 Sleeping NPCs
 
-While connected, a guest turns its ambient traffic off (`set-setting! 'traffic-spawn #f`, held by
-the manager) and, four times a second, puts every own NPC to sleep: `sleep` process mask, not
-drawn, collision off. Everything is restored when the session ends.
+While it is not an authority (1.4), a player turns its ambient traffic off
+(`set-setting! 'traffic-spawn #f`, held by the manager) and, four times a second, puts every own
+NPC to sleep: `sleep` process mask, not drawn, collision off. Everything is restored when it
+becomes an authority or the session ends.
 
 ## 5. Testing in game
 
@@ -190,46 +236,53 @@ A script line is `<seconds> <command>`:
 | `enable`, `name <w>`, `color <n>`, `character <n>` | Mod settings. |
 | `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
 | `press <button> <ms>`, `stick <lx> <ly> <ms>` | Force pad 0 (button names in PS2 order; stick 0-255, 128 centered). |
-| `goto-player <slot> [m]`, `face-player <slot>` | Stand next to a remote player, turn to it. |
+| `goto-player <slot> [x z]`, `face-player <slot>` | Stand next to a remote player (or x and z meters from it), turn to it. |
 | `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
 | `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
 | `gun`, `vehicle <type>`, `cheat <name>`, `zone <n>`, `continue <name>` | Gameplay helpers. |
-| `screenshot <name>`, `log` | Evidence: the log shows the session, the local player, every remote player and puppet, the objects sent, received and drawn, the effects and shots sent and replayed. |
+| `screenshot <name>`, `log` | Evidence: the log shows the session, the local player, the role (authority) and the own NPCs awake and asleep, every remote player and puppet, the objects sent, received and drawn, the poses sent and applied, the emitters and sounds sent and replayed, the effects and shots sent and replayed. |
+| `log-pose [slot]` | Four bones of player `slot`'s puppet relative to its root, or of the own model without a slot: the owner's line and the other machine's line compare the pose with its copy. |
+| `log-part <index>` | Where entry `index` of `*part-id-table*` lives (which level heap). |
+| `log-me` | One line: own position, speed and state (fine-grained probes). |
 
-Scenarios and what they verified (2026-10-14, Spargus):
+Scenarios and what they verified (2026-10-14, Spargus, every one run again after the last change):
 
 | Scenario | Checks | Result |
 |---|---|---|
-| `smoke` | Host, join, puppets, names, health bars | Both see each other. |
-| `pvp` | A guest's punch on the host | Host health 8 to 5, pushed back 3 m, hit reaction seen by the guest. |
-| `npc` | Host NPCs on the guest | 12 replicas drawn, 10 own NPCs asleep. |
-| `npc-hit` | A guest's punch on a host NPC | The citizen goes to its knocked state on the host. |
-| `props`, `combat` | Daxter, gun, shots, impacts | Daxter on the shoulder and the gun on the remote puppet; 3 shots and 2 impacts replayed. |
-| `vehicle` | A driven buggy, then stolen | Body and wheels replicated; the driver is ejected and sees the thief's buggy. |
+| `smoke` | Host, join, puppets, names, health bars | Both see each other; poses, sounds sent and applied both ways. |
+| `pvp` | A guest's punch on the host | Host health 8 to 5, pushed back 3.1 m, hit reaction seen by the guest; the guest stays in place (0.2 m). |
+| `pvp-probe` | The attacker's position and state every 0.1 s around the punch | The punch lunge stops on the host's hurtbox. |
+| `npc` | Host NPCs on the guest | 12 to 13 replicas drawn, 10 own NPCs asleep. |
+| `npc-hit` | A guest's punch on a host NPC | The host applies it to the citizen (`player 1 hit ... punch`), which strikes back: the guest loses 2 health. |
+| `props`, `combat` | Daxter, gun, shots, impacts, emitters | Daxter on the shoulder and the gun in the aiming pose on the remote puppet; 3 shots and 2 impacts replayed; the gun's emitters replayed (122). |
+| `vehicle` | A driven buggy, then stolen | Body and wheels replicated, its dust and engine sound replayed; the driver is ejected and sees the thief's buggy. |
 | `ride` | Passenger seat | The guest rides in the host's two-seat buggy. |
 | `crate` | A crate broken by the host | The guest goes from 48 to 47 crates. |
+| `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 321 emitters shown, 1046 sounds played on the guest. |
+| `far` | Authority | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host); back next to the host, asleep again. |
 
 | | |
 |---|---|
 | ![Name, color square and health bar](multiplayer-screenshots/pvp-nameplate.jpg) | ![The host's NPCs on the guest](multiplayer-screenshots/npc-replicas.jpg) |
 | ![Remote player with gun and Daxter](multiplayer-screenshots/remote-gun-daxter.jpg) | ![A guest's punch on a host NPC](multiplayer-screenshots/npc-hit.jpg) |
 | ![Steal prompt next to the host's buggy](multiplayer-screenshots/vehicle-prompt.jpg) | ![The host after the steal](multiplayer-screenshots/vehicle-stolen.jpg) |
-| ![Riding as passenger](multiplayer-screenshots/passenger.jpg) | |
+| ![Riding as passenger](multiplayer-screenshots/passenger.jpg) | ![The host aiming its gun, as the guest sees it](multiplayer-screenshots/remote-aiming.jpg) |
+| ![A guest far from the host, in its own world](multiplayer-screenshots/far-own-world.jpg) | |
 
 Over the Internet, the host forwards TCP port 7777 (or the port chosen) and guests use the host's
 public IP.
 
 ## 6. Known limits
 
-- Each player keeps its own story progress; missions are not shared. A guest's world is the host's
-  wherever the host has the level loaded; elsewhere it is the guest's own world without its NPCs.
-- Replicas show channel 0 of the owner's animation: blends, look-at joint mods and ragdolls are not
-  sent.
-- Streamed animations (pilot, board, some powers) show as the stance or the crouch on machines that
-  have not loaded them. Remote Jaks wear the local player's outfit.
-- Guests cannot hijack an NPC vehicle the host does not let go of: they get a copy and the host's
-  disappears.
-- Only one-shot effects (part-trackers) are shared; continuous emitters of an NPC are not.
+- Each player keeps its own story progress; missions and their scripted scenes are not shared.
+- Only the 12 NPCs nearest to another player get their exact pose; farther ones play the owner's
+  main animation, enough at that distance. A copy whose skeleton has a different bone count
+  (another outfit) keeps playing the animation.
+- Remote Jaks wear the local player's outfit.
+- An object's copy needs its art loaded on the viewer's machine: an NPC of a level only the owner
+  has loaded is not drawn.
+- At most 4 particle groups per copy, 16 emitters and 16 sounds per object and batch. Sounds of a
+  sound bank the viewer has not loaded stay silent there.
 - Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
@@ -256,3 +309,12 @@ public IP.
   effects, projectiles, broken crates and taken pickups. A driver or passenger crouches when its
   pilot animation is not loaded. Automated multi-instance tests with screenshots
   (`scripts/mp-test/`).
+- **2026-10-14:** everything synchronized. Full poses (every bone, `POSES` message, protocol 2) for
+  players, props and the nearest NPCs, laid on the copies by a joint-control postbind function:
+  blends, streamed animations, joint mods and ragdolls now look the same everywhere. Continuous
+  particle emitters, direct particle launches and sounds of players, props and NPCs replayed on
+  the copies. NPC authority by region: a guest far from every authority simulates its own NPCs and
+  shares them with the players near it. Body segments of the remote player. Test commands
+  `log-pose`, `log-me`, `log-part`, `goto-player` with x and z offsets; face commands now set the
+  player's heading (the punch lunged the other way, which looked like a bounce). Scenarios `pose`,
+  `far`, `pvp-probe`.

@@ -117,6 +117,9 @@ enum Msg : u8 {
   MSG_LEAVE = 5,    // host -> client: u8 slot of a player who left
   MSG_EVENT = 6,    // both ways: Event (the host fills `from`)
   MSG_ACTORS = 7,   // both ways: u8 source slot, u32 source time ms, u16 count, count x ActorState
+  MSG_POSES = 8,    // both ways: u8 source slot, u32 source time ms, u16 count, count x entry:
+                    // u32 id, u16 joints, u8 emitters, u8 sounds, PoseJoint..., PoseEmitter...,
+                    // PoseSound...
 };
 
 constexpr size_t kMaxFrame = 16384;            // larger frames are a protocol violation
@@ -259,6 +262,159 @@ static void nlerp_quat(float* out, const float* a, const float* b, float f) {
 static float dist(const float* a, const float* b) {
   float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
   return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// Matrices are GOAL's: 16 floats, row vectors (v' = v * M), rows 0-2 the axes, row 3 the
+// translation. out = a * b applies a, then b.
+static void mat_mul(float* out, const float* a, const float* b) {
+  float r[16];
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      r[i * 4 + j] = a[i * 4] * b[j] + a[i * 4 + 1] * b[4 + j] + a[i * 4 + 2] * b[8 + j] +
+                     a[i * 4 + 3] * b[12 + j];
+    }
+  }
+  memcpy(out, r, sizeof(r));
+}
+
+// Inverse of a rigid matrix (rotation and translation only).
+static void rigid_inverse(float* out, const float* m) {
+  float r[16] = {};
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      r[i * 4 + j] = m[j * 4 + i];
+    }
+  }
+  for (int j = 0; j < 3; j++) {
+    r[12 + j] = -(m[12] * r[j] + m[13] * r[4 + j] + m[14] * r[8 + j]);
+  }
+  r[15] = 1.f;
+  memcpy(out, r, sizeof(r));
+}
+
+// Quaternion (x y z w) of the orthonormal rotation in rows 0-2 of m, and back. The two functions
+// only need to be each other's inverse.
+static void mat_to_quat(float* q, const float* m) {
+  float tr = m[0] + m[5] + m[10];
+  if (tr > 0) {
+    float s = std::sqrt(tr + 1.f) * 2.f;
+    q[3] = 0.25f * s;
+    q[0] = (m[6] - m[9]) / s;
+    q[1] = (m[8] - m[2]) / s;
+    q[2] = (m[1] - m[4]) / s;
+  } else if (m[0] > m[5] && m[0] > m[10]) {
+    float s = std::sqrt(1.f + m[0] - m[5] - m[10]) * 2.f;
+    q[3] = (m[6] - m[9]) / s;
+    q[0] = 0.25f * s;
+    q[1] = (m[1] + m[4]) / s;
+    q[2] = (m[8] + m[2]) / s;
+  } else if (m[5] > m[10]) {
+    float s = std::sqrt(1.f + m[5] - m[0] - m[10]) * 2.f;
+    q[3] = (m[8] - m[2]) / s;
+    q[0] = (m[1] + m[4]) / s;
+    q[1] = 0.25f * s;
+    q[2] = (m[6] + m[9]) / s;
+  } else {
+    float s = std::sqrt(1.f + m[10] - m[0] - m[5]) * 2.f;
+    q[3] = (m[1] - m[4]) / s;
+    q[0] = (m[8] + m[2]) / s;
+    q[1] = (m[6] + m[9]) / s;
+    q[2] = 0.25f * s;
+  }
+}
+
+static void quat_to_mat(float* m, const float* q) {
+  float x = q[0], y = q[1], z = q[2], w = q[3];
+  m[0] = 1 - 2 * (y * y + z * z);
+  m[1] = 2 * (x * y + z * w);
+  m[2] = 2 * (x * z - y * w);
+  m[4] = 2 * (x * y - z * w);
+  m[5] = 1 - 2 * (x * x + z * z);
+  m[6] = 2 * (y * z + x * w);
+  m[8] = 2 * (x * z + y * w);
+  m[9] = 2 * (y * z - x * w);
+  m[10] = 1 - 2 * (x * x + y * y);
+  m[3] = m[7] = m[11] = 0.f;
+}
+
+static s16 to_s16(float v) {
+  return (s16)std::clamp<long>(std::lround(v), -32767, 32767);
+}
+
+// Rotation, translation and per-axis scale of an affine matrix.
+static void decompose(const float* m, float* q, float* t, float* sc) {
+  float rot[16] = {};
+  for (int i = 0; i < 3; i++) {
+    const float* row = m + i * 4;
+    sc[i] = std::sqrt(row[0] * row[0] + row[1] * row[1] + row[2] * row[2]);
+    for (int j = 0; j < 3; j++) {
+      rot[i * 4 + j] = sc[i] > 1e-6f ? row[j] / sc[i] : (i == j ? 1.f : 0.f);
+    }
+    t[i] = m[12 + i];
+  }
+  // a mirrored joint: flip the last axis so the rest is a rotation
+  float det = rot[0] * (rot[5] * rot[10] - rot[6] * rot[9]) -
+              rot[1] * (rot[4] * rot[10] - rot[6] * rot[8]) +
+              rot[2] * (rot[4] * rot[9] - rot[5] * rot[8]);
+  if (det < 0) {
+    sc[2] = -sc[2];
+    for (int j = 0; j < 3; j++) {
+      rot[8 + j] = -rot[8 + j];
+    }
+  }
+  mat_to_quat(q, rot);
+}
+
+static void compose(float* m, const float* q, const float* t, const float* sc) {
+  quat_to_mat(m, q);
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      m[i * 4 + j] *= sc[i];
+    }
+    m[12 + i] = t[i];
+  }
+  m[15] = 1.f;
+}
+
+static void encode_quat(s16* out, const float* q) {
+  for (int i = 0; i < 4; i++) {
+    out[i] = to_s16(q[i] * 32767.f);
+  }
+}
+
+static void decode_quat(float* q, const s16* in) {
+  float len = 0;
+  for (int i = 0; i < 4; i++) {
+    q[i] = in[i] / 32767.f;
+    len += q[i] * q[i];
+  }
+  len = std::sqrt(len);
+  for (int i = 0; i < 4; i++) {
+    q[i] = len > 1e-6f ? q[i] / len : (i == 3 ? 1.f : 0.f);
+  }
+}
+
+static void encode_joint(PoseJoint* j, const float* rel) {
+  float q[4], t[3], sc[3];
+  decompose(rel, q, t, sc);
+  encode_quat(j->q, q);
+  for (int i = 0; i < 3; i++) {
+    j->t[i] = to_s16(t[i] / 4.f);
+    j->s[i] = to_s16(sc[i] * 2048.f);
+  }
+}
+
+// Bone `a` blended toward `b` by f, as a matrix relative to the object's frame.
+static void decode_joint(float* rel, const PoseJoint& a, const PoseJoint& b, float f) {
+  float qa[4], qb[4], q[4], t[3], sc[3];
+  decode_quat(qa, a.q);
+  decode_quat(qb, b.q);
+  nlerp_quat(q, qa, qb, f);
+  for (int i = 0; i < 3; i++) {
+    t[i] = (a.t[i] + (b.t[i] - a.t[i]) * f) * 4.f;
+    sc[i] = (a.s[i] + (b.s[i] - a.s[i]) * f) / 2048.f;
+  }
+  compose(rel, q, t, sc);
 }
 
 bool Remote::sample(double now, PlayerState* out) const {
@@ -534,6 +690,20 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         }
         return;
       }
+      case MSG_POSES: {
+        if (p.slot < 0 || len < 7) {
+          return;
+        }
+        std::vector<u8> copy(data, data + len);
+        copy[0] = (u8)p.slot;
+        store_poses(p.slot, copy.data(), copy.size(), p.last_recv);
+        for (auto* o : m_peers) {
+          if (o != &p && o->slot >= 0) {
+            o->queue(MSG_POSES, copy.data(), copy.size());
+          }
+        }
+        return;
+      }
       case MSG_EVENT: {
         if (p.slot < 0 || len != sizeof(Event)) {
           return;
@@ -572,6 +742,11 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
     case MSG_ACTORS:
       if (len >= 7 && data[0] < kMaxPlayers && data[0] != m_local_slot) {
         store_actors(data[0], data, len, p.last_recv);
+      }
+      return;
+    case MSG_POSES:
+      if (len >= 7 && data[0] < kMaxPlayers && data[0] != m_local_slot) {
+        store_poses(data[0], data, len, p.last_recv);
       }
       return;
     case MSG_LEAVE:
@@ -772,11 +947,7 @@ void Session::store_actors(int source, const u8* data, size_t len, double recv) 
   if (len != 7 + count * sizeof(ActorState)) {
     return;
   }
-  double offset = recv - (double)time;
-  auto& known = m_actor_offset_known[source];
-  auto& est = m_actor_offset[source];
-  est = !known ? offset : std::min(offset, est + 1.0);
-  known = true;
+  note_actor_clock(source, time, recv);
   for (u16 i = 0; i < count; i++) {
     ActorState st;
     memcpy(&st, data + 7 + i * sizeof(ActorState), sizeof(st));
@@ -825,7 +996,7 @@ int Session::get_actors(double now, ActorState* out, int max) {
     }
     if (n < max) {
       // drawn at the same time as its owner's player state, so props stay on the puppet
-      double t = now - m_actor_offset[track.source] - kInterpDelayMs;
+      double t = drawn_time(track.source, now);
       if (t >= snaps.back().first) {
         out[n] = snaps.back().second;
       } else if (t <= snaps.front().first) {
@@ -850,6 +1021,281 @@ int Session::get_actors(double now, ActorState* out, int max) {
       n++;
     }
     ++it;
+  }
+  return n;
+}
+
+void Session::note_actor_clock(int source, u32 time, double recv) {
+  // same estimate as Remote::push, for the batches of one sender
+  double offset = recv - (double)time;
+  auto& known = m_actor_offset_known[source];
+  auto& est = m_actor_offset[source];
+  est = !known ? offset : std::min(offset, est + 1.0);
+  known = true;
+}
+
+double Session::drawn_time(int source, double now) const {
+  return now - m_actor_offset[source] - kInterpDelayMs;
+}
+
+void Session::add_pose(u32 id, const float* frame, const float* bones, int count) {
+  count = std::clamp(count, 0, kMaxPoseJoints);
+  float inv[16];
+  rigid_inverse(inv, frame);
+  memcpy(m_pose_frame, frame, sizeof(m_pose_frame));
+  std::vector<u8> entry(8 + count * sizeof(PoseJoint));
+  u16 joints = (u16)count;
+  memcpy(entry.data(), &id, 4);
+  memcpy(entry.data() + 4, &joints, 2);
+  for (int i = 0; i < count; i++) {
+    float rel[16];
+    mat_mul(rel, bones + 16 * i, inv);
+    PoseJoint j;
+    encode_joint(&j, rel);
+    memcpy(entry.data() + 8 + i * sizeof(PoseJoint), &j, sizeof(j));
+  }
+  m_pose_out.push_back(std::move(entry));
+}
+
+void Session::add_emitter(int kind, int index, int count, const float* origin) {
+  if (m_pose_out.empty() || m_pose_out.back()[6] >= kMaxPoseEmitters || index < 0 ||
+      index > 0xffff) {
+    return;
+  }
+  auto& entry = m_pose_out.back();
+  float inv[16], rel[16], q[4], t[3], sc[3];
+  rigid_inverse(inv, m_pose_frame);
+  mat_mul(rel, origin, inv);
+  decompose(rel, q, t, sc);
+  PoseEmitter em{};
+  em.index = (u16)index;
+  em.kind = (u8)(kind & 0xff);
+  em.home = (u16)((kind >> 8) & 0xffff);
+  em.count = (u8)std::clamp(count, 0, 255);
+  for (int i = 0; i < 3; i++) {
+    em.t[i] = to_s16(t[i] / 4.f);
+  }
+  encode_quat(em.q, q);
+  const u8* raw = (const u8*)&em;
+  entry.insert(entry.end(), raw, raw + sizeof(em));
+  entry[6]++;
+}
+
+void Session::add_sound(const SoundIO& snd) {
+  if (m_pose_out.empty() || m_pose_out.back()[7] >= kMaxPoseSounds) {
+    return;
+  }
+  auto& entry = m_pose_out.back();
+  PoseSound ps{};
+  memcpy(ps.name, snd.name, sizeof(ps.name));
+  ps.id = snd.id;
+  ps.vol = snd.vol;
+  ps.pitch = snd.pitch;
+  ps.bend = snd.bend;
+  ps.flags = (u16)snd.flags;
+  float inv[16],
+      at[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, snd.pos[0], snd.pos[1], snd.pos[2], 1};
+  rigid_inverse(inv, m_pose_frame);
+  mat_mul(at, at, inv);
+  for (int i = 0; i < 3; i++) {
+    ps.t[i] = to_s16(at[12 + i] / 4.f);
+  }
+  const u8* raw = (const u8*)&ps;
+  entry.insert(entry.end(), raw, raw + sizeof(ps));
+  entry[7]++;
+}
+
+void Session::send_poses(double now) {
+  auto entries = std::move(m_pose_out);
+  m_pose_out.clear();
+  if (m_local_slot < 0 || (m_mode != Mode::Host && m_mode != Mode::Client)) {
+    return;
+  }
+  u32 time = (u32)now;
+  size_t at = 0;
+  while (at < entries.size()) {
+    // as many entries as fit in one frame (one entry is at most ~5 KB)
+    std::vector<u8> payload(7);
+    payload[0] = (u8)m_local_slot;
+    memcpy(payload.data() + 1, &time, 4);
+    u16 n = 0;
+    while (at < entries.size() && payload.size() + entries[at].size() < kMaxFrame - 16) {
+      payload.insert(payload.end(), entries[at].begin(), entries[at].end());
+      n++;
+      at++;
+    }
+    if (n == 0) {
+      at++;  // cannot happen with kMaxPoseJoints, but never loop forever
+      continue;
+    }
+    memcpy(payload.data() + 5, &n, 2);
+    for (auto* p : m_peers) {
+      if (p->slot >= 0 || m_mode == Mode::Client) {
+        p->queue(MSG_POSES, payload.data(), payload.size());
+      }
+    }
+  }
+}
+
+void Session::store_poses(int source, const u8* data, size_t len, double recv) {
+  u32 time;
+  u16 count;
+  memcpy(&time, data + 1, 4);
+  memcpy(&count, data + 5, 2);
+  note_actor_clock(source, time, recv);
+  size_t at = 7;
+  for (u16 i = 0; i < count; i++) {
+    if (at + 8 > len) {
+      return;
+    }
+    u32 id;
+    u16 joints;
+    memcpy(&id, data + at, 4);
+    memcpy(&joints, data + at + 4, 2);
+    u8 emitters = data[at + 6];
+    u8 sounds = data[at + 7];
+    size_t size = 8 + joints * sizeof(PoseJoint) + emitters * sizeof(PoseEmitter) +
+                  sounds * sizeof(PoseSound);
+    if (joints > kMaxPoseJoints || at + size > len) {
+      return;
+    }
+    PoseSnap snap;
+    snap.joints.resize(joints);
+    snap.emitters.resize(emitters);
+    snap.sounds.resize(sounds);
+    const u8* body = data + at + 8;
+    memcpy(snap.joints.data(), body, joints * sizeof(PoseJoint));
+    body += joints * sizeof(PoseJoint);
+    memcpy(snap.emitters.data(), body, emitters * sizeof(PoseEmitter));
+    body += emitters * sizeof(PoseEmitter);
+    memcpy(snap.sounds.data(), body, sounds * sizeof(PoseSound));
+    at += size;
+    id = ((u32)source << 24) | (id & 0xffffff);  // the owner is the sender, whatever it claims
+    auto& track = m_poses[id];
+    track.source = source;
+    if (!track.snaps.empty() && time < track.snaps.back().first) {
+      track.snaps.clear();
+      track.consumed = -1;
+      track.consumed_sounds = -1;
+    }
+    track.snaps.emplace_back((double)time, std::move(snap));
+    while (track.snaps.size() > 4) {
+      track.snaps.pop_front();
+    }
+    track.last_seen = recv;
+  }
+  for (auto it = m_poses.begin(); it != m_poses.end();) {
+    it = recv - it->second.last_seen > 1000.0 ? m_poses.erase(it) : std::next(it);
+  }
+}
+
+int Session::get_pose(u32 id, double now, const float* frame, float* out, int max) {
+  auto it = m_poses.find(id);
+  if (it == m_poses.end() || now - it->second.last_seen > 1000.0 || it->second.snaps.empty()) {
+    return 0;
+  }
+  const auto& snaps = it->second.snaps;
+  double t = drawn_time(it->second.source, now);
+  const PoseSnap* a = &snaps.front().second;
+  const PoseSnap* b = a;
+  float f = 0;
+  if (t >= snaps.back().first) {
+    a = b = &snaps.back().second;
+  } else if (t > snaps.front().first) {
+    size_t i = 1;
+    while (snaps[i].first <= t) {
+      i++;
+    }
+    a = &snaps[i - 1].second;
+    b = &snaps[i].second;
+    f = (float)((t - snaps[i - 1].first) / std::max(1.0, snaps[i].first - snaps[i - 1].first));
+  }
+  if (a->joints.size() != b->joints.size()) {
+    a = b = f < 0.5f ? a : b;  // the skeleton changed: no blending across it
+    f = 0;
+  }
+  int n = std::min((int)a->joints.size(), max);
+  for (int i = 0; i < n; i++) {
+    float rel[16];
+    decode_joint(rel, a->joints[i], b->joints[i], f);
+    mat_mul(out + 16 * i, rel, frame);
+  }
+  return n;
+}
+
+int Session::get_emitters(u32 id, double now, const float* frame, EmitterOut* out, int max) {
+  auto it = m_poses.find(id);
+  if (it == m_poses.end() || now - it->second.last_seen > 1000.0) {
+    return 0;
+  }
+  auto& track = it->second;
+  double t = drawn_time(track.source, now);
+  // the newest batch at or before the drawn time
+  const std::pair<double, PoseSnap>* cur = nullptr;
+  for (const auto& snap : track.snaps) {
+    if (snap.first <= t) {
+      cur = &snap;
+    }
+  }
+  if (!cur) {
+    return 0;
+  }
+  bool fresh = cur->first > track.consumed;
+  track.consumed = cur->first;
+  int n = 0;
+  for (const auto& em : cur->second.emitters) {
+    if (n >= max) {
+      break;
+    }
+    float q[4], rel[16];
+    float tr[3] = {em.t[0] * 4.f, em.t[1] * 4.f, em.t[2] * 4.f};
+    float one[3] = {1.f, 1.f, 1.f};
+    decode_quat(q, em.q);
+    compose(rel, q, tr, one);
+    EmitterOut& o = out[n++];
+    o.kind = em.kind;
+    o.index = em.index;
+    o.count = fresh ? em.count : 0;
+    o.home = em.home;
+    mat_mul(o.mat, rel, frame);
+  }
+  return n;
+}
+
+int Session::get_sounds(u32 id, double now, const float* frame, SoundIO* out, int max) {
+  auto it = m_poses.find(id);
+  if (it == m_poses.end() || now - it->second.last_seen > 1000.0) {
+    return 0;
+  }
+  auto& track = it->second;
+  double t = drawn_time(track.source, now);
+  int n = 0;
+  // every batch reached since the last call, oldest first: a sound is an event, none is skipped
+  for (const auto& [time, snap] : track.snaps) {
+    if (time <= track.consumed_sounds || time > t) {
+      continue;
+    }
+    for (const auto& ps : snap.sounds) {
+      if (n >= max) {
+        break;
+      }
+      SoundIO& o = out[n++];
+      memset(&o, 0, sizeof(o));
+      memcpy(o.name, ps.name, sizeof(o.name));
+      o.id = ps.id;
+      o.vol = ps.vol;
+      o.pitch = ps.pitch;
+      o.bend = ps.bend;
+      o.flags = ps.flags;
+      float at[16] = {
+          1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ps.t[0] * 4.f, ps.t[1] * 4.f, ps.t[2] * 4.f, 1};
+      mat_mul(at, at, frame);
+      o.pos[0] = at[12];
+      o.pos[1] = at[13];
+      o.pos[2] = at[14];
+      o.pos[3] = 1.f;
+    }
+    track.consumed_sounds = time;
   }
   return n;
 }
@@ -1087,6 +1533,62 @@ u64 pc_mp_get_actors(u32 dest, u32 max) {
                                        std::min<int>((int)max, mp::kMaxActors * 2));
 }
 
+// (pc-mp-add-pose id frame bones count): queue the pose of one object this player simulates.
+void pc_mp_add_pose(u32 id, u32 frame, u32 bones, u32 count) {
+  if (frame && (bones || count == 0)) {
+    mp::session().add_pose(id, Ptr<float>(frame).c(), bones ? Ptr<float>(bones).c() : nullptr,
+                           (int)count);
+  }
+}
+
+// (pc-mp-add-emitter kind index count origin): an emitter of the object of the last add-pose.
+void pc_mp_add_emitter(u32 kind, u32 index, u32 count, u32 origin) {
+  if (origin) {
+    mp::session().add_emitter((int)kind, (int)index, (int)count, Ptr<float>(origin).c());
+  }
+}
+
+// (pc-mp-add-sound sound): a sound of the object of the last add-pose (mp-sound, world position).
+void pc_mp_add_sound(u32 snd) {
+  if (snd) {
+    mp::session().add_sound(*Ptr<mp::SoundIO>(snd).c());
+  }
+}
+
+// (pc-mp-get-sounds id frame dest max) -> sounds of object `id` to play now, written into dest.
+u64 pc_mp_get_sounds(u32 id, u32 frame, u32 dest, u32 max) {
+  if (!frame || !dest) {
+    return 0;
+  }
+  return (u64)mp::session().get_sounds(id, mp::now_ms(), Ptr<float>(frame).c(),
+                                       Ptr<mp::SoundIO>(dest).c(),
+                                       std::min<int>((int)max, mp::kMaxPoseSounds * 4));
+}
+
+// (pc-mp-send-poses): send the queued poses.
+void pc_mp_send_poses() {
+  mp::session().send_poses(mp::now_ms());
+}
+
+// (pc-mp-get-pose id frame dest max) -> bones written into dest (world matrices), 0 when none.
+u64 pc_mp_get_pose(u32 id, u32 frame, u32 dest, u32 max) {
+  if (!frame || !dest) {
+    return 0;
+  }
+  return (u64)mp::session().get_pose(id, mp::now_ms(), Ptr<float>(frame).c(), Ptr<float>(dest).c(),
+                                     std::min<int>((int)max, mp::kMaxPoseJoints));
+}
+
+// (pc-mp-get-emitters id frame dest max) -> emitters written into dest (mp-emitter).
+u64 pc_mp_get_emitters(u32 id, u32 frame, u32 dest, u32 max) {
+  if (!frame || !dest) {
+    return 0;
+  }
+  return (u64)mp::session().get_emitters(id, mp::now_ms(), Ptr<float>(frame).c(),
+                                         Ptr<mp::EmitterOut>(dest).c(),
+                                         std::min<int>((int)max, mp::kMaxPoseEmitters));
+}
+
 // (pc-mp-test-active?) -> #t when a test script drives this instance.
 u64 pc_mp_test_active() {
   return to_symbol(mp::test::script().loaded);
@@ -1138,6 +1640,13 @@ void pc_mp_test_pad(u32 buttons, u32 lx, u32 ly) {
 void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-send-actors", (void*)pc_mp_send_actors);
   make_function_symbol_from_c("pc-mp-get-actors", (void*)pc_mp_get_actors);
+  make_function_symbol_from_c("pc-mp-add-pose", (void*)pc_mp_add_pose);
+  make_function_symbol_from_c("pc-mp-add-emitter", (void*)pc_mp_add_emitter);
+  make_function_symbol_from_c("pc-mp-send-poses", (void*)pc_mp_send_poses);
+  make_function_symbol_from_c("pc-mp-add-sound", (void*)pc_mp_add_sound);
+  make_function_symbol_from_c("pc-mp-get-sounds", (void*)pc_mp_get_sounds);
+  make_function_symbol_from_c("pc-mp-get-pose", (void*)pc_mp_get_pose);
+  make_function_symbol_from_c("pc-mp-get-emitters", (void*)pc_mp_get_emitters);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);

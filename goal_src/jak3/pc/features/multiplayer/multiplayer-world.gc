@@ -8,11 +8,17 @@
 ;; orientation, animation, body variant) from the player who simulates them to the others, who draw
 ;; them as replicas built from the same skeleton, interpolated 100 ms in the past by the runtime
 ;; (game/kernel/jak3/kmultiplayer.cpp) with the owner's clock, like the owner's own puppet:
-;;   - the host's NPCs: every character (the `enemy` family: citizens, guards, monsters,
-;;     marauders...), vehicle and wheel it simulates near a player. The host is their authority:
-;;     the guests do not simulate their own NPCs while connected (ambient traffic off, their own
-;;     actors asleep, hidden and intangible);
+;;   - the NPCs: every character (the `enemy` family: citizens, guards, monsters, marauders...),
+;;     vehicle and wheel simulated near a player by that player's authority. The host is the
+;;     authority of everyone near it; a guest farther than 90 m from every authority simulates
+;;     its own world and becomes the authority of the guests near it (mp-update-authority).
+;;     A player who is not an authority does not simulate its own NPCs (ambient traffic off,
+;;     its own actors asleep, hidden and intangible);
 ;;   - every player's props: Daxter on the shoulder, the gun, the vehicle driven and its wheels.
+;;
+;; With each batch go the full poses of the player and of its props and nearest NPCs (every bone,
+;; so blends, streamed animations, joint mods and ragdolls look the same everywhere), and the
+;; particle emitters and sounds each of them used (see "Poses and emitters" below).
 ;;
 ;; A blow or shot on a replica is sent to its owner, which applies it to the real object with the
 ;; attacker's puppet as the attacker; the reaction and the death come back as its state. A guest
@@ -35,6 +41,7 @@
   (dead 1)    ;; dying on the host
   (vehicle 2) ;; a vehicle (else a character)
   (prop 3)    ;; a player's prop (Daxter, gun): drawn, not solid
+  (owned 4)   ;; belongs to a player (prop, driven vehicle and wheels), never an NPC
   )
 
 (deftype mp-actor-state (structure)
@@ -58,6 +65,10 @@
   )
 
 (define-extern pc-mp-send-actors (function (inline-array mp-actor-state) int none))
+(define-extern pc-mp-add-pose (function uint matrix (inline-array matrix) int none))
+(define-extern pc-mp-add-emitter (function int int int matrix none))
+(define-extern pc-mp-send-poses (function none))
+(define-extern pc-mp-get-pose (function uint matrix (inline-array matrix) int int))
 (define-extern pc-mp-get-actors (function (inline-array mp-actor-state) int int))
 (define-extern mp-player-count (function int)) ;; multiplayer-menu.gc
 
@@ -76,6 +87,11 @@
    (skel-jgeo      art-joint-geo 128)
    (skel-group     skeleton-group 128)
    (level-box      level 1)
+   (authority-want  symbol)     ;; role the situation asks for, applied after 2 s
+   (authority-since time-frame)
+   (served-count   int32)       ;; players whose NPCs we simulate, for the batch being built
+   (served-remote  symbol 8)
+   (served-pos     vector 8 :inline)
    )
   )
 
@@ -120,6 +136,139 @@
     (let ((veh (handle->process (-> *target* pilot vehicle))))
       (and veh (or (= veh proc) (= (ppointer->process (-> proc parent)) veh)))
       )
+    )
+  )
+
+(defun mp-player-pos ((slot int))
+  "Where player `slot` stands (this player included), #f when unknown."
+  (if (= slot *mp-local-slot*)
+      (if *target*
+          (-> *mp-local* trans)
+          (the-as vector #f)
+          )
+      (let ((st (mp-remote-state slot)))
+        (if st
+            (-> st trans)
+            (the-as vector #f)
+            )
+        )
+      )
+  )
+
+(defun mp-authority-flag? ((slot int))
+  "#t when player `slot` simulates its own NPCs (for this player: its current role)."
+  (if (= slot *mp-local-slot*)
+      *mp-authority*
+      (let ((st (mp-remote-state slot)))
+        (and st (logtest? (-> st flags) (mp-flag authority)))
+        )
+      )
+  )
+
+(defun mp-provider-of ((slot int))
+  "Slot of the player whose NPCs player `slot` sees: itself when it is an authority, else the first
+   authority within 90 m, else the host."
+  (if (mp-authority-flag? slot)
+      (return slot)
+      )
+  (let ((pos (mp-player-pos slot)))
+    (when pos
+      (dotimes (q MP_MAX_PLAYERS)
+        (let ((other (mp-player-pos q)))
+          (if (and (!= q slot) other (mp-authority-flag? q) (< (vector-vector-distance pos other) (meters 90)))
+              (return q)
+              )
+          )
+        )
+      )
+    )
+  0
+  )
+
+(defun mp-update-authority ()
+  "Pick this player's role. The host always simulates its NPCs. A guest shows the NPCs of a
+   lower-slot authority within 60 m, and simulates its own once farther than 90 m from all of them,
+   after 2 s in the new situation (a player on the border does not flip every frame)."
+  (let* ((ws *mp-world-state*)
+         (want (cond
+                 ((= *mp-mode* (mp-mode host))
+                  #t
+                  )
+                 ((< *mp-local-slot* 0)
+                  #f
+                  )
+                 (else
+                   (let ((me (mp-player-pos *mp-local-slot*))
+                         (nearest (meters 1000000))
+                         )
+                     (when me
+                       (dotimes (q *mp-local-slot*)
+                         (let ((other (mp-player-pos q)))
+                           (if (and other (mp-authority-flag? q))
+                               (set! nearest (fmin nearest (vector-vector-distance me other)))
+                               )
+                           )
+                         )
+                       )
+                     (cond
+                       ((< nearest (meters 60)) #f)
+                       ((< (meters 90) nearest) #t)
+                       (else *mp-authority*)
+                       )
+                     )
+                   )
+                 )
+               )
+         )
+    (when (!= want (-> ws authority-want))
+      (set! (-> ws authority-want) want)
+      (set! (-> ws authority-since) (mp-now))
+      )
+    (when (and (!= want *mp-authority*)
+               (or (= *mp-mode* (mp-mode host)) (>= (- (mp-now) (-> ws authority-since)) (seconds 2)))
+               )
+      (set! *mp-authority* want)
+      (format 0 "[multiplayer] ~S~%" (if want
+                                         "this player now simulates the NPCs around it"
+                                         "this player now shows another player's NPCs"
+                                         )
+              )
+      )
+    )
+  (none)
+  )
+
+(defun mp-collect-served ()
+  "Note where the players whose NPCs we simulate stand, for the batch being built."
+  (let ((ws *mp-world-state*))
+    (set! (-> ws served-count) 0)
+    (when *mp-authority*
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((pos (mp-player-pos i)))
+          (when (and pos (= (mp-provider-of i) *mp-local-slot*))
+            (vector-copy! (-> ws served-pos (-> ws served-count)) pos)
+            (set! (-> ws served-remote (-> ws served-count)) (!= i *mp-local-slot*))
+            (+! (-> ws served-count) 1)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-served-distance ((pos vector) (remote? symbol))
+  "Distance from `pos` to the nearest player whose NPCs we simulate (only the other players when
+   `remote?`)."
+  (let ((ws *mp-world-state*)
+        (best (meters 1000000))
+        )
+    (dotimes (i (-> ws served-count))
+      (if (or (not remote?) (-> ws served-remote i))
+          (set! best (fmin best (vector-vector-distance pos (-> ws served-pos i))))
+          )
+      )
+    best
     )
   )
 
@@ -211,6 +360,94 @@
 
 (define *mp-collect-count* 0)
 
+;; ------------------------------------------------------------------------------------------------
+;; Poses and emitters: types (the code is after the replicas)
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_MAX_POSE_JOINTS 256)
+(defconstant MP_POSE_BUDGET 12) ;; NPC poses per batch, the nearest to another player first
+
+;; One emitter to draw on a copy, in world space. 80 bytes, mirrors mp::EmitterOut.
+(deftype mp-emitter (structure)
+  ((kind  int32)  ;; 0 particle group, 1 single launcher (2d system), 2 single launcher (3d)
+   (index int32)  ;; in *part-group-id-table* or *part-id-table*
+   (count int32)  ;; single launcher: launches to replay now
+   (home  int32)  ;; single launcher: hash of the level holding it, 0 = global (mp-level-hash)
+   (mat   matrix :inline)
+   )
+  :size-assert #x50
+  )
+
+;; One sound sent with an object (world position), or to play on its copy (position on the copy).
+;; 64 bytes, mirrors mp::SoundIO.
+(deftype mp-sound (structure)
+  ((name  sound-name)
+   (id    sound-id) ;; the owner's sound id: the same id over several batches is one lasting sound
+   (vol   int32)
+   (pitch int32)
+   (bend  int32)
+   (flags int32)  ;; 1 positional, 2 stopped
+   (pad   int32 3)
+   (pos   vector :inline)
+   )
+  :size-assert #x40
+  )
+
+(deftype mp-pose-state (structure)
+  ((bones       matrix MP_MAX_POSE_JOINTS :inline) ;; scratch: bones sent or received
+   (frame       matrix :inline)
+   (emitters    mp-emitter 16 :inline)
+   ;; objects of the batch being built (same order as *mp-actors-out*) and their distance to
+   ;; the nearest other player we simulate NPCs for
+   (proc        process-drawable MP_MAX_ACTORS)
+   (dist        float MP_MAX_ACTORS)
+   ;; emitters used since the last batch by the objects we send (mp-note-emitter)
+   (emit-count  int32)
+   (emit-pid    int32 32)
+   (emit-kind   int32 32)
+   (emit-ptr    basic 32)
+   (emit-calls  int32 32)
+   (emit-origin matrix 32 :inline)
+   ;; launcher -> *part-id-table* index, reset with the skeleton cache
+   (part-ptr    basic 16)
+   (part-index  int32 16)
+   (part-next   int32)
+   ;; counters for the test log
+   (poses-sent     int32)
+   (poses-applied  int32)
+   (emitters-sent  int32)
+   (emitters-shown int32)
+   (emitters-received int32)
+   (last-kind      int32)  ;; last emitter received, for the test log
+   (last-index     int32)
+   (last-home      int32)
+   ;; sounds played since the last batch by the objects we send (mp-note-sound), latest call per
+   ;; sound id
+   (snd-count      int32)
+   (snd-pid        int32 24)
+   (snd-out        mp-sound 24 :inline)
+   ;; recent sound ids of those objects, so a sound-stop on one reaches the others
+   (known-pid      int32 32)
+   (known-id       sound-id 32)
+   (known-next     int32)
+   ;; sounds received, and the copies' sounds playing here: copy id, owner's sound id, our id
+   (sounds         mp-sound 16 :inline)
+   (rsnd-copy      uint32 48)
+   (rsnd-remote    sound-id 48)
+   (rsnd-local     sound-id 48)
+   (rsnd-batches   int32 48)
+   (rsnd-time      time-frame 48)
+   (sounds-sent    int32)
+   (sounds-played  int32)
+   )
+  )
+
+(define *mp-pose* (new 'global 'mp-pose-state))
+
+(define-extern pc-mp-get-emitters (function uint matrix (inline-array mp-emitter) int int))
+(define-extern pc-mp-add-sound (function mp-sound none))
+(define-extern pc-mp-get-sounds (function uint matrix (inline-array mp-sound) int int))
+
 (defun mp-add-actor ((proc process-drawable) (flags mp-actor-flag))
   "Add `proc` to the batch being built. #f when it cannot be drawn elsewhere (no skeleton found)."
   (when (and (< *mp-collect-count* MP_MAX_ACTORS)
@@ -243,6 +480,8 @@
               )
           (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
           (copyn-charp<-string (-> st skel) (-> sg name) 32)
+          (set! (-> *mp-pose* proc *mp-collect-count*) proc)
+          (set! (-> *mp-pose* dist *mp-collect-count*) (mp-served-distance (-> proc root trans) #t))
           (+! *mp-collect-count* 1)
           (return #t)
           )
@@ -253,10 +492,14 @@
   )
 
 (defun mp-collect-actor ((proc process-drawable))
-  "iterate-process-tree callback (host): add `proc` when it is an NPC near a player."
+  "iterate-process-tree callback (authority): add `proc` when it is an NPC within 100 m of a player
+   whose NPCs we simulate."
   (when (type? proc process-drawable)
     (let ((kind (mp-actor-kind proc)))
-      (when (and (> kind 0) (not (mp-driven-vehicle? proc)) (mp-near-a-player? (-> proc root trans)))
+      (when (and (> kind 0)
+                 (not (mp-driven-vehicle? proc))
+                 (< (mp-served-distance (-> proc root trans) #f) (meters 100))
+                 )
         (mp-add-actor proc (if (= kind 1)
                                (mp-actor-flag)
                                (mp-actor-flag vehicle)
@@ -271,7 +514,7 @@
 (defun mp-add-prop ((proc process-drawable))
   "Add a prop attached to the player. Daxter and the gun keep their root still: their root joint is
    computed from one of Jak's joints each frame, so that joint's world transform is sent instead."
-  (when (and (mp-add-actor proc (mp-actor-flag prop)) (nonzero? (-> proc node-list)))
+  (when (and (mp-add-actor proc (mp-actor-flag prop owned)) (nonzero? (-> proc node-list)))
     (let ((st (-> *mp-actors-out* state (+ *mp-collect-count* -1)))
           (mat (-> proc node-list data 0 bone transform))
           )
@@ -302,12 +545,12 @@
     (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
       (let ((veh (handle->process (-> *target* pilot vehicle))))
         (when (and veh (type? veh process-drawable))
-          (mp-add-actor (the-as process-drawable veh) (mp-actor-flag vehicle))
+          (mp-add-actor (the-as process-drawable veh) (mp-actor-flag vehicle owned))
           (let ((child (-> veh child)))
             (while child
               (let ((node (ppointer->process child)))
                 (when (and node (type? node process) (= (mp-actor-kind (the-as process node)) 3))
-                  (mp-add-actor (the-as process-drawable node) (mp-actor-flag vehicle))
+                  (mp-add-actor (the-as process-drawable node) (mp-actor-flag vehicle owned))
                   )
                 (set! child (if node
                                 (-> node brother)
@@ -324,20 +567,26 @@
   (none)
   )
 
+(define-extern mp-send-poses (function none))
+
 (defun mp-world-send ()
-  "Send what this player simulates, 15 times a second: its props, and the NPCs near the players
-   when hosting."
+  "Send what this player simulates, 15 times a second: its props, and the NPCs near the players it
+   is the authority of; then their poses and emitters."
   (let ((ws *mp-world-state*))
     ;; level art moves when a level loads: forget the cached skeletons then, and every 4 s
     (when (or (-> *level* loading-level) (>= (- (mp-now) (-> ws cache-time)) (seconds 4)))
       (set! (-> ws skel-count) 0)
       (set! (-> ws cache-time) (mp-now))
+      (dotimes (i 16)
+        (set! (-> *mp-pose* part-ptr i) #f)
+        )
       )
     (when (and (> (mp-player-count) 0) (>= (- (mp-now) (-> ws last-send)) (seconds 0.066)))
       (set! (-> ws last-send) (mp-now))
       (set! *mp-collect-count* 0)
+      (mp-collect-served)
       (mp-collect-props)
-      (if (= *mp-mode* (mp-mode host))
+      (if *mp-authority*
           (iterate-process-tree
             *active-pool*
             (the-as (function object object) mp-collect-actor)
@@ -346,6 +595,7 @@
           )
       (set! (-> *mp-actors-out* count) *mp-collect-count*)
       (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
+      (mp-send-poses)
       )
     )
   (none)
@@ -422,6 +672,8 @@
    (id     uint32)
    (dying? symbol)
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
+   (fx-group   int32 4)            ;; particle groups the owner's object emits (mp-play-emitters)
+   (fx-tracker handle 4)
    (net    mp-actor-state :inline) ;; latest state from the owner
    )
   )
@@ -551,6 +803,7 @@
     )
   :post (behavior ()
     (mp-replica-update)
+    (mp-play-emitters self (-> self id) (-> self fx-group) (-> self fx-tracker))
     (ja-post)
     )
   )
@@ -592,6 +845,12 @@
   (quaternion-copy! (-> self root quat) (-> st quat))
   (initialize-skeleton self sg (the-as pair 0))
   (ja-channel-set! 1)
+  ;; the bones take the owner's pose once computed (mp-pose-postbind)
+  (set! (-> self skel postbind-function) mp-pose-postbind)
+  (dotimes (i 4)
+    (set! (-> self fx-group i) -1)
+    (set! (-> self fx-tracker i) (the-as handle #f))
+    )
   (go mp-replica-idle)
   )
 
@@ -663,7 +922,7 @@
   )
 
 (defun mp-nearest-replica-vehicle ((pos vector))
-  "Replica table index of the host's NPC vehicle within 4.5 m of `pos`, -1 when none."
+  "Replica table index of another player's NPC vehicle within 4.5 m of `pos`, -1 when none."
   (let ((ws *mp-world-state*)
         (best -1)
         (best-dist (meters 4.5))
@@ -671,7 +930,7 @@
     (dotimes (i (-> ws replica-count))
       (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
         (when (and proc
-                   (zero? (shr (-> proc id) 24))
+                   (not (logtest? (-> proc net flags) (mp-actor-flag owned)))
                    (logtest? (-> proc net flags) (mp-actor-flag vehicle))
                    (not (logtest? (-> proc net flags) (mp-actor-flag hidden dead)))
                    )
@@ -700,7 +959,8 @@
   )
 
 (defbehavior mp-take-replica-vehicle mp-manager ((index int))
-  "Get in a copy of the host's NPC vehicle at replica `index`; the host then removes its own."
+  "Get in a copy of the NPC vehicle at replica `index`; the player who simulates it then removes its
+   own."
   (let ((proc (the-as mp-replica (handle->process (-> *mp-world-state* replica index)))))
     (when proc
       (let ((id (-> proc id)))
@@ -716,7 +976,7 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
-;; Guest: our own NPCs sleep while the host's are shown
+;; Not an authority: our own NPCs sleep while another player's are shown
 ;; ------------------------------------------------------------------------------------------------
 
 (defun mp-suppress-actor ((proc process-drawable))
@@ -772,7 +1032,7 @@
   )
 
 (defbehavior mp-world-suppress mp-manager ()
-  "Guest: keep our NPCs asleep and our traffic off (the host's are shown instead)."
+  "Keep our NPCs asleep and our traffic off (another player's are shown instead)."
   (let ((ws *mp-world-state*))
     (when (not (-> ws traffic-off?))
       ;; settings belong to the process that sets them: the manager lives as long as the session
@@ -797,8 +1057,24 @@
   (none)
   )
 
+(defun mp-replica-wanted? ((st mp-actor-state))
+  "#f for an NPC of another authority standing nearer to us than to that player: our own world
+   covers that place, so its copy would be a double."
+  (or (not *mp-authority*)
+      (logtest? (-> st flags) (mp-actor-flag owned))
+      (let ((me (mp-player-pos *mp-local-slot*))
+            (owner (mp-player-pos (the-as int (shr (-> st id) 24))))
+            )
+        (or (not me)
+            (not owner)
+            (< (vector-vector-distance (-> st trans) owner) (vector-vector-distance (-> st trans) me))
+            )
+        )
+      )
+  )
+
 (defbehavior mp-world-receive mp-manager ()
-  "Draw the other players' objects (NPCs from the host, everyone's props) as replicas."
+  "Draw the other players' objects (the NPCs of their authority, everyone's props) as replicas."
   (let ((ws *mp-world-state*))
     (let ((count (pc-mp-get-actors (-> *mp-actors-in* state) MP_MAX_REPLICAS))
           (spawned 0)
@@ -809,6 +1085,10 @@
                (index (mp-replica-index (-> st id)))
                )
           (cond
+            ((not (mp-replica-wanted? st))
+             ;; dropped below with the replicas no longer sent
+             (set! (-> st id) (the-as uint 0))
+             )
             ((>= index 0)
              (let ((proc (the-as mp-replica (handle->process (-> ws replica index)))))
                (if proc
@@ -853,11 +1133,12 @@
   (none)
   )
 
-(defbehavior mp-world-client-stop mp-manager ()
-  "Back to a normal world: replicas gone, our NPCs and traffic back."
+(defbehavior mp-world-wake mp-manager ()
+  "Our NPCs and traffic back (we simulate our world again)."
   (let ((ws *mp-world-state*))
-    (mp-replicas-clear)
-    (mp-unsuppress-all)
+    (if (> (-> ws suppressed-count) 0)
+        (mp-unsuppress-all)
+        )
     (when (-> ws traffic-off?)
       (remove-setting! 'traffic-spawn)
       (set! (-> ws traffic-off?) #f)
@@ -866,19 +1147,31 @@
   (none)
   )
 
+(define-extern mp-sounds-housekeeping (function symbol none))
+
+(defbehavior mp-world-client-stop mp-manager ()
+  "Back to a normal world: replicas gone (and their sounds), our NPCs and traffic back."
+  (mp-sounds-housekeeping #t)
+  (mp-replicas-clear)
+  (mp-world-wake)
+  (none)
+  )
+
 (defbehavior mp-world-update mp-manager ()
   "Shared world, once per unpaused frame."
-  (case *mp-mode*
-    (((mp-mode host))
+  (cond
+    ((mp-online?)
+     (mp-update-authority)
      (mp-world-send)
+     (if *mp-authority*
+         (mp-world-wake)
+         (mp-world-suppress)
+         )
      (mp-world-receive)
-     )
-    (((mp-mode client))
-     (mp-world-send)
-     (mp-world-suppress)
-     (mp-world-receive)
+     (mp-sounds-housekeeping #f)
      )
     (else
+      (set! *mp-authority* #f)
       (if (or (> (-> *mp-world-state* replica-count) 0)
               (> (-> *mp-world-state* suppressed-count) 0)
               (-> *mp-world-state* traffic-off?)
@@ -1057,7 +1350,7 @@
            (mine? (mp-from-local-player? (the-as process shooter)))
            )
       (when (and (or mine?
-                     (and (= *mp-mode* (mp-mode host)) shooter (type? shooter process) (> (mp-actor-kind (the-as process shooter)) 0))
+                     (and *mp-authority* shooter (type? shooter process) (> (mp-actor-kind (the-as process shooter)) 0))
                      )
                  (mp-near-a-player? (-> params pos))
                  (mp-fx-budget #f)
@@ -1181,6 +1474,694 @@
    which never returns (it goes to the projectile's first state)."
   (mp-projectile-fired self arg0)
   (*mp-stock-projectile-init-by-other* arg0)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Poses and emitters
+;; ------------------------------------------------------------------------------------------------
+
+;; A copy plays the owner's animation by index, which misses blended channels, animations streamed
+;; on the owner's machine (vehicle seats, scripted moves), joint mods (look-at, aiming) and
+;; ragdolls. So each batch also carries the owner's bones, relative to the object's frame (its
+;; root position and orientation, as sent in its state): the player's, its props', and those of the
+;; NPCs nearest to another player (MP_POSE_BUDGET of them). The copy computes its own bones from
+;; its animation, then mp-pose-postbind (its joint-control postbind-function) lays the owner's on
+;; its frame, interpolated by the runtime like the rest of its state. The animation still runs: it
+;; plays the animation's effects (footsteps, sounds) and stands in until a pose arrives.
+;;
+;; Particle emitters are noted where they are used: launch-control `spawn` (groups that run every
+;; frame: engine flames, trails, auras) and direct launches (sp-launch-particles-var without a
+;; launch control: dust, glows). An object's batch entry lists the emitters it used since the
+;; previous batch; the copy keeps a part-tracker per group while the owner keeps it running, and
+;; replays single launches as many times as the owner made them.
+;;
+;; Sounds the same way: sound-play-by-name and sound-play-by-spec (every sound a process plays)
+;; and sound-stop are noted for those objects, the latest call per sound id. The copy plays each
+;; with an id of its own per owner's id, so a lasting sound (an engine, updated every frame on the
+;; owner's machine) stays one sound, updated each batch, and stops when the owner stops it.
+
+(defun mp-frame-of ((out matrix) (trans vector) (quat quaternion))
+  "The rigid frame (no scale) poses and emitters are expressed in: `quat` then `trans`."
+  (quaternion->matrix out quat)
+  (vector-copy! (-> out trans) trans)
+  (set! (-> out trans w) 1.0)
+  out
+  )
+
+(defun mp-level-hash ((lev level))
+  "16-bit hash of a level's name, never 0 (0 means global data)."
+  (let ((str (symbol->string (-> lev name)))
+        (h 0)
+        )
+    (dotimes (i (length str))
+      (set! h (logand (+ (* h 31) (-> str data i)) #xffff))
+      )
+    (logior h 1)
+    )
+  )
+
+(defun mp-heap-level ((addr uint))
+  "The level whose heap holds `addr`, #f for global data."
+  (countdown (li 11)
+    (let ((lev (-> *level* level li)))
+      (if (and (>= addr (the-as uint (-> lev heap base))) (< addr (the-as uint (-> lev heap top-base))))
+          (return lev)
+          )
+      )
+    )
+  (the-as level #f)
+  )
+
+(defun mp-part-index ((launcher sparticle-launcher))
+  "Index of a single launcher in *part-id-table*, -1 when absent. Cached (reset when levels move)."
+  (let ((ps *mp-pose*))
+    (dotimes (i 16)
+      (if (= (-> ps part-ptr i) launcher)
+          (return (-> ps part-index i))
+          )
+      )
+    (dotimes (i (-> *part-id-table* length))
+      (when (= (-> *part-id-table* i) launcher)
+        (let ((k (-> ps part-next)))
+          (set! (-> ps part-ptr k) launcher)
+          (set! (-> ps part-index k) i)
+          (set! (-> ps part-next) (logand (+ k 1) 15))
+          )
+        (return i)
+        )
+      )
+    )
+  -1
+  )
+
+(defun mp-launcher-usable? ((index int) (home int))
+  "#t when entry `index` of *part-id-table* is the launcher the owner meant. The table keeps the
+   entries of unloaded levels (only groups are unlinked), so the launcher must be global data when
+   `home` is 0, else in the heap of a loaded level whose name hashes to `home`."
+  (when (and (>= index 0) (< index (-> *part-id-table* length)))
+    (let ((launcher (-> *part-id-table* index)))
+      (when (nonzero? launcher)
+        (let ((lev (mp-heap-level (the-as uint launcher))))
+          (if (zero? home)
+              (not lev)
+              (and lev
+                   (= (mp-level-hash lev) home)
+                   (or (= (-> lev status) 'active) (= (-> lev status) 'alive) (= (-> lev status) 'loaded))
+                   )
+              )
+          )
+        )
+      )
+    )
+  )
+
+(defun mp-emitter-owner? ((proc process))
+  "#t when the others draw `proc` from this machine: the player, Daxter, the gun, the vehicle driven
+   (and its wheels), or an NPC while we simulate the NPCs around us."
+  (and proc
+       (nonzero? proc)
+       (or (= proc *target*)
+           (and *target*
+                (or (= proc (ppointer->process (-> *target* sidekick)))
+                    (and (nonzero? (-> *target* gun)) (= proc (ppointer->process (-> *target* gun gun))))
+                    )
+                )
+           (mp-driven-vehicle? proc)
+           (and *mp-authority* (> (mp-actor-kind proc) 0))
+           )
+       )
+  )
+
+(defun mp-note-emitter ((proc process) (kind int) (ptr basic) (origin matrix))
+  "`proc` used emitter `ptr` (a group for kind 0, a single launcher else) at `origin`: remember it
+   for the next batch, once per object and emitter, with the number of uses."
+  (when (and (not (-> *mp-fx* replaying?)) (mp-emitter-owner? proc))
+    (let ((ps *mp-pose*)
+          (pid (-> proc pid))
+          (slot -1)
+          )
+      (dotimes (i (-> ps emit-count))
+        (when (and (= (-> ps emit-pid i) pid) (= (-> ps emit-ptr i) ptr))
+          (set! slot i)
+          (set! i (-> ps emit-count))
+          )
+        )
+      (when (and (< slot 0) (< (-> ps emit-count) 32))
+        (set! slot (-> ps emit-count))
+        (+! (-> ps emit-count) 1)
+        (set! (-> ps emit-pid slot) pid)
+        (set! (-> ps emit-kind slot) kind)
+        (set! (-> ps emit-ptr slot) ptr)
+        (set! (-> ps emit-calls slot) 0)
+        )
+      (when (>= slot 0)
+        (+! (-> ps emit-calls slot) 1)
+        (matrix-copy! (-> ps emit-origin slot) origin)
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-note-sound ((proc process) (name sound-name) (id sound-id) (vol int) (pitch int) (bend int) (trans object))
+  "`proc` played sound `name` as `id`: remember the call for the next batch (the latest one per id)
+   when the others draw `proc`. `trans` is a position, #t for the process's root, #f for a sound
+   without position (the others hear it at the copy)."
+  (when (and (not (-> *mp-fx* replaying?)) (nonzero? id) (mp-emitter-owner? proc))
+    (let ((ps *mp-pose*)
+          (pid (-> proc pid))
+          (slot -1)
+          )
+      (dotimes (i (-> ps snd-count))
+        (if (and (= (-> ps snd-pid i) pid) (= (-> ps snd-out i id) id))
+            (set! slot i)
+            )
+        )
+      (when (and (< slot 0) (< (-> ps snd-count) 24))
+        (set! slot (-> ps snd-count))
+        (+! (-> ps snd-count) 1)
+        (set! (-> ps snd-pid slot) pid)
+        (let ((k (-> ps known-next)))
+          (set! (-> ps known-pid k) pid)
+          (set! (-> ps known-id k) id)
+          (set! (-> ps known-next) (logand (+ k 1) 31))
+          )
+        )
+      (when (>= slot 0)
+        (let ((snd (-> ps snd-out slot)))
+          (set! (-> snd name) name)
+          (set! (-> snd id) id)
+          (set! (-> snd vol) vol)
+          (set! (-> snd pitch) pitch)
+          (set! (-> snd bend) bend)
+          (set! (-> snd flags) 1)
+          (cond
+            ((and trans (!= trans #t))
+             (vector-copy! (-> snd pos) (the-as vector trans))
+             )
+            ((and (type? proc process-drawable) (nonzero? (-> (the-as process-drawable proc) root)))
+             (vector-copy! (-> snd pos) (-> (the-as process-drawable proc) root trans))
+             )
+            (else
+              (set! (-> snd flags) 0)
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-note-sound-stop ((id sound-id))
+  "Sound `id` was stopped: when an object we send played it, the others stop their copy of it."
+  (when (and (nonzero? id) (not (-> *mp-fx* replaying?)))
+    (let ((ps *mp-pose*))
+      (dotimes (k 32)
+        (when (= (-> ps known-id k) id)
+          (let ((pid (-> ps known-pid k))
+                (slot -1)
+                )
+            (dotimes (i (-> ps snd-count))
+              (if (and (= (-> ps snd-pid i) pid) (= (-> ps snd-out i id) id))
+                  (set! slot i)
+                  )
+              )
+            (when (and (< slot 0) (< (-> ps snd-count) 24))
+              (set! slot (-> ps snd-count))
+              (+! (-> ps snd-count) 1)
+              (set! (-> ps snd-pid slot) pid)
+              (set! (-> ps snd-out slot id) id)
+              (vector-reset! (-> ps snd-out slot pos))
+              )
+            (if (>= slot 0)
+                (set! (-> ps snd-out slot flags) 2)
+                )
+            )
+          (set! (-> ps known-id k) (the-as sound-id 0))
+          (return #f)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-pose-ready? ((proc process-drawable) (npc? symbol))
+  "#t when every bone of `proc` came out of its last joint math: drawn, at a level of detail that
+   animates every joint, and, for an NPC, not skipping its joint math (bone 0 still at its root)."
+  (let ((nodes (-> proc node-list))
+        (draw (-> proc draw))
+        )
+    (and (nonzero? nodes)
+         (nonzero? draw)
+         (nonzero? (-> proc skel))
+         (<= (-> nodes length) MP_MAX_POSE_JOINTS)
+         (not (logtest? (-> draw status) (draw-control-status no-draw no-draw-temp uninited)))
+         (or (logtest? (-> proc skel status) (joint-control-status force-math))
+             (and (nonzero? (-> draw mgeo)) (-> draw mgeo) (>= (+ (-> draw mgeo num-joints) 3) (-> nodes length)))
+             )
+         (or (not npc?)
+             (< (vector-vector-distance (-> nodes data 0 bone transform trans) (-> proc root trans)) (meters 0.5))
+             )
+         )
+    )
+  )
+
+(defun mp-send-pose ((id uint) (proc process-drawable) (trans vector) (quat quaternion) (npc? symbol) (pose? symbol))
+  "Queue object `proc` in the pose batch: its bones relative to its frame (`trans` `quat`, as sent
+   in its state) when `pose?` and they are complete, and the emitters it used since the last batch.
+   Nothing is queued when there is neither."
+  (let ((ps *mp-pose*)
+        (pid (-> proc pid))
+        (count 0)
+        (emitters 0)
+        )
+    (dotimes (i (-> ps emit-count))
+      (if (= (-> ps emit-pid i) pid)
+          (+! emitters 1)
+          )
+      )
+    (dotimes (i (-> ps snd-count))
+      (if (= (-> ps snd-pid i) pid)
+          (+! emitters 1)
+          )
+      )
+    (when (and pose? (mp-pose-ready? proc npc?))
+      (let ((nodes (-> proc node-list)))
+        (dotimes (i (-> nodes length))
+          (matrix-copy! (-> ps bones i) (-> nodes data i bone transform))
+          )
+        (set! count (-> nodes length))
+        )
+      )
+    (when (or (> count 0) (> emitters 0))
+      (pc-mp-add-pose id (mp-frame-of (-> ps frame) trans quat) (-> ps bones) count)
+      (if (> count 0)
+          (+! (-> ps poses-sent) 1)
+          )
+      (dotimes (i (-> ps emit-count))
+        (when (= (-> ps emit-pid i) pid)
+          (let* ((group? (zero? (-> ps emit-kind i)))
+                 (index (if group?
+                            (mp-part-group-index (the-as sparticle-launch-group (-> ps emit-ptr i)))
+                            (mp-part-index (the-as sparticle-launcher (-> ps emit-ptr i)))
+                            )
+                        )
+                 (lev (if group?
+                          (the-as level #f)
+                          (mp-heap-level (the-as uint (-> ps emit-ptr i)))
+                          )
+                      )
+                 )
+            (when (>= index 0)
+              ;; the kind carries the hash of the launcher's level in its upper bits
+              (pc-mp-add-emitter
+                (logior (-> ps emit-kind i) (shl (if lev (mp-level-hash lev) 0) 8))
+                index
+                (-> ps emit-calls i)
+                (-> ps emit-origin i)
+                )
+              (+! (-> ps emitters-sent) 1)
+              )
+            )
+          )
+        )
+      (dotimes (i (-> ps snd-count))
+        (when (= (-> ps snd-pid i) pid)
+          (pc-mp-add-sound (-> ps snd-out i))
+          (+! (-> ps sounds-sent) 1)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-send-poses ()
+  "Queue and send the poses of this batch: the player, its props, the MP_POSE_BUDGET NPCs nearest
+   to another player within 40 m (the other NPCs send only their emitters), then forget the
+   emitters noted since the last batch."
+  (let ((ps *mp-pose*))
+    (when *target*
+      (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t)
+      )
+    (dotimes (i *mp-collect-count*)
+      (let ((st (-> *mp-actors-out* state i)))
+        (when (logtest? (-> st flags) (mp-actor-flag owned))
+          (mp-send-pose (-> st id) (-> ps proc i) (-> st trans) (-> st quat) #f #t)
+          (set! (-> ps dist i) -1.0) ;; done
+          )
+        )
+      )
+    (dotimes (k MP_POSE_BUDGET)
+      (let ((best -1)
+            (best-dist (meters 40))
+            )
+        (dotimes (i *mp-collect-count*)
+          (when (and (>= (-> ps dist i) 0.0) (< (-> ps dist i) best-dist))
+            (set! best i)
+            (set! best-dist (-> ps dist i))
+            )
+          )
+        (when (>= best 0)
+          (let ((st (-> *mp-actors-out* state best)))
+            (mp-send-pose (-> st id) (-> ps proc best) (-> st trans) (-> st quat) #t #t)
+            (set! (-> ps dist best) -1.0)
+            )
+          )
+        )
+      )
+    (dotimes (i *mp-collect-count*)
+      (when (>= (-> ps dist i) 0.0)
+        (let ((st (-> *mp-actors-out* state i)))
+          (mp-send-pose (-> st id) (-> ps proc i) (-> st trans) (-> st quat) #t #f)
+          )
+        )
+      )
+    (pc-mp-send-poses)
+    (set! (-> ps emit-count) 0)
+    (set! (-> ps snd-count) 0)
+    )
+  (none)
+  )
+
+(defun mp-pose-postbind ((draw draw-control) (nodes cspace-array) (jc joint-control))
+  "postbind-function of puppets and replicas, called by do-joint-math with pp the copy: replace the
+   bones computed from the local animation by the owner's pose laid on the copy's frame, when one
+   arrived for this skeleton (same bone count)."
+  (with-pp
+    (let ((id (cond
+                ((type? pp mp-replica)
+                 (-> (the-as mp-replica pp) id)
+                 )
+                ((and (type? pp mp-puppet) (not (-> (the-as mp-puppet pp) local?)))
+                 (mp-puppet-pose-id (-> (the-as mp-puppet pp) slot))
+                 )
+                (else
+                  (the-as uint 0)
+                  )
+                )
+              )
+          )
+      (when (nonzero? id)
+        (let* ((ps *mp-pose*)
+               (proc (the-as process-drawable pp))
+               (count (pc-mp-get-pose
+                        id
+                        (mp-frame-of (-> ps frame) (-> proc root trans) (-> proc root quat))
+                        (-> ps bones)
+                        MP_MAX_POSE_JOINTS
+                        )
+                      )
+               )
+          (when (and (> count 0) (= count (-> nodes length)))
+            (dotimes (i count)
+              (matrix-copy! (-> nodes data i bone transform) (-> ps bones i))
+              )
+            (+! (-> ps poses-applied) 1)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-sound-stop-copy ((i int))
+  "Stop the copy's sound in entry `i` of the table and free the entry."
+  (let ((ps *mp-pose*))
+    (set! (-> *mp-fx* replaying?) #t)
+    (sound-stop (-> ps rsnd-local i))
+    (set! (-> *mp-fx* replaying?) #f)
+    (set! (-> ps rsnd-copy i) (the-as uint 0))
+    )
+  (none)
+  )
+
+(defun mp-play-sounds ((copy uint) (frame matrix))
+  "Play on copy `copy` (placed at `frame`) the sounds its owner made: one sound id of ours per
+   owner's sound id, so a lasting sound stays one sound, updated each batch."
+  (let* ((ps *mp-pose*)
+         (count (pc-mp-get-sounds copy frame (-> ps sounds) 16))
+         )
+    (dotimes (i count)
+      (let* ((snd (-> ps sounds i))
+             (slot -1)
+             )
+        (dotimes (k 48)
+          (if (and (= (-> ps rsnd-copy k) copy) (= (-> ps rsnd-remote k) (-> snd id)))
+              (set! slot k)
+              )
+          )
+        (cond
+          ((logtest? (-> snd flags) 2)
+           (if (>= slot 0)
+               (mp-sound-stop-copy slot)
+               )
+           )
+          (else
+            (when (< slot 0)
+              ;; a free entry, else the oldest one (stopped first)
+              (set! slot 0)
+              (dotimes (k 48)
+                (cond
+                  ((zero? (-> ps rsnd-copy k))
+                   (set! slot k)
+                   (set! k 48)
+                   )
+                  ((< (-> ps rsnd-time k) (-> ps rsnd-time slot))
+                   (set! slot k)
+                   )
+                  )
+                )
+              (if (nonzero? (-> ps rsnd-copy slot))
+                  (mp-sound-stop-copy slot)
+                  )
+              (set! (-> ps rsnd-copy slot) copy)
+              (set! (-> ps rsnd-remote slot) (-> snd id))
+              (set! (-> ps rsnd-local slot) (new-sound-id))
+              (set! (-> ps rsnd-batches slot) 0)
+              )
+            (+! (-> ps rsnd-batches slot) 1)
+            (set! (-> ps rsnd-time slot) (mp-now))
+            (set! (-> *mp-fx* replaying?) #t)
+            (sound-play-by-name
+              (-> snd name)
+              (-> ps rsnd-local slot)
+              (-> snd vol)
+              (-> snd pitch)
+              (-> snd bend)
+              (sound-group sfx)
+              (-> snd pos)
+              )
+            (set! (-> *mp-fx* replaying?) #f)
+            (+! (-> ps sounds-played) 1)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-sounds-housekeeping ((all? symbol))
+  "Stop the copies' lasting sounds the owner no longer updates (0.4 s), forget the others after
+   10 s; every one when `all?`."
+  (let ((ps *mp-pose*))
+    (dotimes (i 48)
+      (when (nonzero? (-> ps rsnd-copy i))
+        (let ((age (- (mp-now) (-> ps rsnd-time i))))
+          (if (or all? (and (>= (-> ps rsnd-batches i) 2) (< (seconds 0.4) age)) (< (seconds 10) age))
+              (mp-sound-stop-copy i)
+              )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-play-emitters ((proc process-drawable) (id uint) (groups (pointer int32)) (trackers (pointer handle)))
+  "Draw on copy `proc` the emitters its owner uses (object `id`): one part-tracker per particle
+   group, kept alive and moved while the owner keeps the group running (at most 4), and the single
+   launches replayed as many times as the owner made them; then play its sounds. `groups` and
+   `trackers` are the copy's 4 tracker slots."
+  (let* ((ps *mp-pose*)
+         (frame (mp-frame-of (-> ps frame) (-> proc root trans) (-> proc root quat)))
+         (count (pc-mp-get-emitters id frame (-> ps emitters) 16))
+         (kept 0)
+         )
+    (mp-play-sounds id frame)
+    (set! (-> *mp-fx* replaying?) #t)
+    (dotimes (i count)
+      (let ((em (-> ps emitters i)))
+        (+! (-> ps emitters-received) 1)
+        (set! (-> ps last-kind) (-> em kind))
+        (set! (-> ps last-index) (-> em index))
+        (set! (-> ps last-home) (-> em home))
+        (cond
+          ((zero? (-> em kind))
+           (when (and (>= (-> em index) 0) (< (-> em index) (-> *part-group-id-table* length)))
+             (let ((group (-> *part-group-id-table* (-> em index)))
+                   (slot -1)
+                   )
+               ;; a level's groups are unlinked (0) while that level is not loaded here
+               (when (and (nonzero? group) (type? group sparticle-launch-group))
+                 (dotimes (k 4)
+                   (if (and (= (-> groups k) (-> em index)) (handle->process (-> trackers k)))
+                       (set! slot k)
+                       )
+                   )
+                 (when (< slot 0)
+                   (dotimes (k 4)
+                     (if (and (< slot 0) (not (logtest? kept (ash 1 k))) (not (handle->process (-> trackers k))))
+                         (set! slot k)
+                         )
+                     )
+                   (when (>= slot 0)
+                     (matrix-copy! *launch-matrix* (-> em mat))
+                     (let ((tracker (the-as
+                                      (pointer process)
+                                      (if (logtest? (-> group flags) (sp-group-flag sp13))
+                                          (part-tracker-spawn part-tracker-subsampler :to proc :group group :duration (seconds 0.25))
+                                          (part-tracker-spawn part-tracker :to proc :group group :duration (seconds 0.25))
+                                          )
+                                      )
+                                    )
+                           )
+                       (set! (-> trackers slot) (if tracker
+                                                    (ppointer->handle tracker)
+                                                    (the-as handle #f)
+                                                    )
+                             )
+                       (set! (-> groups slot) (-> em index))
+                       )
+                     )
+                   )
+                 (when (>= slot 0)
+                   (let ((tracker (the-as part-tracker (handle->process (-> trackers slot)))))
+                     (when tracker
+                       (set! kept (logior kept (ash 1 slot)))
+                       (matrix-copy! (-> tracker mat) (-> em mat))
+                       (vector-copy! (-> tracker root trans) (-> em mat trans))
+                       (set! (-> tracker state-time) (-> tracker clock frame-counter))
+                       (+! (-> ps emitters-shown) 1)
+                       )
+                     )
+                   )
+                 )
+               )
+             )
+           )
+          ((and (> (-> em count) 0) (mp-launcher-usable? (-> em index) (-> em home)))
+           (let ((launcher (-> *part-id-table* (-> em index))))
+             (dotimes (k (min 4 (-> em count)))
+               (if (= (-> em kind) 2)
+                   (launch-particles :system *sp-particle-system-3d* launcher (-> em mat) :origin-is-matrix #t)
+                   (launch-particles launcher (-> em mat) :origin-is-matrix #t)
+                   )
+               )
+             (+! (-> ps emitters-shown) 1)
+             )
+           )
+          )
+        )
+      )
+    ;; groups the owner stopped: their tracker runs out by itself, its slot is free again
+    (dotimes (k 4)
+      (if (not (logtest? kept (ash 1 k)))
+          (set! (-> groups k) -1)
+          )
+      )
+    (set! (-> *mp-fx* replaying?) #f)
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- wrap the two ways particles are launched, to note the emitters of the objects
+;; the others draw (no-op offline). define-perm keeps the stock code on a REPL reload.
+(define-perm *mp-stock-launch-spawn* (function sparticle-launch-control vector object)
+  (the-as (function sparticle-launch-control vector object) (method-of-type sparticle-launch-control spawn))
+  )
+
+(defmethod spawn ((this sparticle-launch-control) (arg0 vector))
+  "Stock behavior; the other players see this group on their copy of its process too."
+  (when (mp-online?)
+    ;; the stock method starts with the same copy; the origin is then complete for the note
+    (vector-copy! (-> this origin trans) arg0)
+    (mp-note-emitter (-> this proc) 0 (-> this group) (-> this origin))
+    )
+  (*mp-stock-launch-spawn* this arg0)
+  )
+
+(define-perm *mp-stock-sp-launch-particles-var*
+             (function sparticle-system sparticle-launcher matrix sparticle-launch-state sparticle-launch-control float none)
+  sp-launch-particles-var
+  )
+
+(defun sp-launch-particles-var ((arg0 sparticle-system)
+                                (arg1 sparticle-launcher)
+                                (arg2 matrix)
+                                (arg3 sparticle-launch-state)
+                                (arg4 sparticle-launch-control)
+                                (arg5 float)
+                                )
+  "Stock launch; a launch made directly by a process the others draw (not by a launch control,
+   noted in spawn) is replayed on their copy."
+  (when (and (not arg4) (mp-online?))
+    (with-pp
+      (mp-note-emitter pp (if (= arg0 *sp-particle-system-3d*) 2 1) arg1 arg2)
+      )
+    )
+  (*mp-stock-sp-launch-particles-var* arg0 arg1 arg2 arg3 arg4 arg5)
+  (none)
+  )
+
+;; MOD multiplayer -- wrap the sound entry points (engine/sound/gsound.gc) to note the sounds of
+;; the objects the others draw (no-op offline).
+(define-perm *mp-stock-sound-play-by-name*
+             (function sound-name sound-id int int int sound-group object sound-id :behavior process-drawable)
+  sound-play-by-name
+  )
+
+(defbehavior sound-play-by-name process-drawable ((arg0 sound-name)
+                                                  (arg1 sound-id)
+                                                  (arg2 int)
+                                                  (arg3 int)
+                                                  (arg4 int)
+                                                  (arg5 sound-group)
+                                                  (arg6 object)
+                                                  )
+  "Stock behavior; the other players hear this sound on their copy of the process too."
+  (if (mp-online?)
+      (mp-note-sound self arg0 arg1 arg2 arg3 arg4 arg6)
+      )
+  (*mp-stock-sound-play-by-name* arg0 arg1 arg2 arg3 arg4 arg5 arg6)
+  )
+
+(define-perm *mp-stock-sound-play-by-spec* (function sound-spec sound-id vector sound-id :behavior process-drawable)
+  sound-play-by-spec
+  )
+
+(defbehavior sound-play-by-spec process-drawable ((arg0 sound-spec) (arg1 sound-id) (arg2 vector))
+  "Stock behavior; the other players hear this sound on their copy of the process too."
+  (if (mp-online?)
+      (mp-note-sound self (-> arg0 sound-name) arg1 (-> arg0 volume) (-> arg0 pitch-mod) (-> arg0 bend) arg2)
+      )
+  (*mp-stock-sound-play-by-spec* arg0 arg1 arg2)
+  )
+
+(define-perm *mp-stock-sound-stop* (function sound-id int)
+  sound-stop
+  )
+
+(defun sound-stop ((arg0 sound-id))
+  "Stock behavior; a sound the others hear on a copy stops there too."
+  (if (mp-online?)
+      (mp-note-sound-stop arg0)
+      )
+  (*mp-stock-sound-stop* arg0)
   )
 
 ;; ------------------------------------------------------------------------------------------------

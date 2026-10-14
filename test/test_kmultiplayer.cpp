@@ -2,6 +2,7 @@
 // interpolation between snapshots, and a host and a client talking over loopback.
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <thread>
 
@@ -86,6 +87,61 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   EXPECT_STREQ(got_actors[0].skel, "skel-citizen-norm");
   ASSERT_EQ(host.get_actors(now(), got_actors, 4), 1);
   EXPECT_EQ(got_actors[0].id, (1u << 24) | 7u);
+
+  // A pose and an emitter come back laid on the receiver's frame: same bones relative to it.
+  auto mul = [](float* out, const float* a, const float* b) {
+    for (int i = 0; i < 4; i++) {
+      for (int j = 0; j < 4; j++) {
+        out[i * 4 + j] = 0;
+        for (int k = 0; k < 4; k++) {
+          out[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+        }
+      }
+    }
+  };
+  const float c = std::cos(0.5f), s = std::sin(0.5f);
+  const float frame[16] = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 1000, 200, 300, 1};
+  const float rel[16] = {1.5f, 0,         0,        0, 0,    1.5f * c, 1.5f * s, 0,
+                         0,    -1.5f * s, 1.5f * c, 0, 8000, -400,     1200,     1};
+  const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  float bones[32];
+  memcpy(bones, frame, sizeof(frame));
+  mul(bones + 16, rel, frame);
+  client.add_pose(9, frame, bones, 2);
+  client.add_emitter(1, 1234, 3, bones + 16);
+  mp::SoundIO snd{};
+  memcpy(snd.name, "engine", 7);
+  snd.id = 77;
+  snd.vol = 1024;
+  snd.flags = mp::kSoundPositional;
+  snd.pos[0] = bones[28];  // at bone 1
+  snd.pos[1] = bones[29];
+  snd.pos[2] = bones[30];
+  client.add_sound(snd);
+  client.send_poses(now());
+  pump(10);
+  const u32 pose_id = (1u << 24) | 9u;
+  float out[32];
+  ASSERT_EQ(host.get_pose(pose_id, now(), identity, out, 8), 2);
+  for (int i = 0; i < 16; i++) {
+    EXPECT_NEAR(out[i], identity[i], 1e-3f) << i;
+    EXPECT_NEAR(out[16 + i], rel[i], i >= 12 ? 4.f : 2e-3f) << i;
+  }
+  mp::EmitterOut em[2];
+  ASSERT_EQ(host.get_emitters(pose_id, now(), identity, em, 2), 1);
+  EXPECT_EQ(em[0].kind, 1);
+  EXPECT_EQ(em[0].index, 1234);
+  EXPECT_EQ(em[0].count, 3);
+  EXPECT_NEAR(em[0].mat[12], 8000.f, 4.f);
+  ASSERT_EQ(host.get_emitters(pose_id, now(), identity, em, 2), 1);
+  EXPECT_EQ(em[0].count, 0);  // single launches are handed out once
+  mp::SoundIO sounds[2];
+  ASSERT_EQ(host.get_sounds(pose_id, now(), identity, sounds, 2), 1);
+  EXPECT_STREQ((const char*)sounds[0].name, "engine");
+  EXPECT_EQ(sounds[0].id, 77u);
+  EXPECT_NEAR(sounds[0].pos[0], 8000.f, 4.f);
+  EXPECT_NEAR(sounds[0].pos[2], 1200.f, 4.f);
+  EXPECT_EQ(host.get_sounds(pose_id, now(), identity, sounds, 2), 0);  // played once
 
   // A banned client is disconnected with a reason and cannot come back.
   host.kick(1, true);

@@ -1,0 +1,8 @@
+# Authority test, host side: stays in Spargus while the guest goes far away and comes back.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52 log
+70 log
+88 log

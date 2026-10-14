@@ -14,9 +14,10 @@
 ;;   host <ip:port> | join <ip:port> | leave                 session
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> | stick <lx> <ly> <ms>              force pad 0 (0-255, 128 = center)
-;;   goto-player <slot> | face-player <slot>                 stand next to / face a remote player
+;;   goto-player <slot> [x z] | face-player <slot>           stand next to / face a remote player
 ;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
+;;   log-pose [slot] | log-me                                bones of a player's model; own position
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
@@ -66,6 +67,62 @@
   0
   )
 
+(define *mp-test-awake* 0)
+(define *mp-test-asleep* 0)
+
+(defun mp-test-npc-scan ((proc process-drawable))
+  "iterate-process-tree callback: count our own NPCs, awake and asleep."
+  (when (and (type? proc process-drawable) (not (type? proc mp-replica)) (> (mp-actor-kind proc) 0))
+    (if (logtest? (-> proc mask) (process-mask sleep))
+        (+! *mp-test-asleep* 1)
+        (+! *mp-test-awake* 1)
+        )
+    )
+  #f
+  )
+
+(defun mp-test-log-pose ((slot int))
+  "Print four bones of a player's model relative to its root, in world axes: the local player's
+   (slot < 0) or the puppet of remote player `slot`. The same line on the owner's machine and on
+   another one compares the pose with its copy."
+  (let ((proc (the-as process-drawable
+                      (if (< slot 0)
+                          *target*
+                          (let ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+                            (if manager
+                                (handle->process (-> manager puppets (min slot (+ MP_MAX_PLAYERS -1))))
+                                )
+                            )
+                          )
+                      )
+              )
+        )
+    (when (and proc (nonzero? (-> proc node-list)))
+      (let ((n (-> proc node-list length))
+            (root (-> proc root trans))
+            )
+        (format 0 "[mp-test] pose ~D bones ~D anim ~D applied ~D~%" slot n (mp-anim-index proc) (-> *mp-pose* poses-applied))
+        (dotimes (k 4)
+          (let* ((i (/ (* (+ k 1) (+ n -1)) 4))
+                 (pos (-> proc node-list data i bone transform trans))
+                 )
+            (format
+              0
+              "[mp-test] pose ~D bone ~D offset ~m ~m ~m~%"
+              slot
+              i
+              (- (-> pos x) (-> root x))
+              (- (-> pos y) (-> root y))
+              (- (-> pos z) (-> root z))
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-test-log ()
   "Print the multiplayer state: session, local player, every remote player and its puppet."
   (format 0 "[mp-test] log mode ~D slot ~D players ~D~%" *mp-mode* *mp-local-slot* (+ 1 (mp-player-count)))
@@ -98,6 +155,27 @@
     (-> *mp-actors-in* count)
     (-> *mp-world-state* replica-count)
     (-> *mp-world-state* suppressed-count)
+    )
+  (set! *mp-test-awake* 0)
+  (set! *mp-test-asleep* 0)
+  (iterate-process-tree *active-pool* (the-as (function object object) mp-test-npc-scan) *null-kernel-context*)
+  (format 0 "[mp-test] authority ~A own npcs awake ~D asleep ~D~%" *mp-authority* *mp-test-awake* *mp-test-asleep*)
+  (format
+    0
+    "[mp-test] poses sent ~D applied ~D emitters sent ~D received ~D shown ~D~%"
+    (-> *mp-pose* poses-sent)
+    (-> *mp-pose* poses-applied)
+    (-> *mp-pose* emitters-sent)
+    (-> *mp-pose* emitters-received)
+    (-> *mp-pose* emitters-shown)
+    )
+  (format 0 "[mp-test] sounds sent ~D played ~D~%" (-> *mp-pose* sounds-sent) (-> *mp-pose* sounds-played))
+  (format
+    0
+    "[mp-test] last emitter kind ~D index ~D home #x~X~%"
+    (-> *mp-pose* last-kind)
+    (-> *mp-pose* last-index)
+    (-> *mp-pose* last-home)
     )
   (format
     0
@@ -201,6 +279,8 @@
           (vector-normalize! dir 1.0)
           (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
           (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+          ;; the heading the player turns to every frame, or it turns back
+          (quaternion-copy! (-> *target* control dir-targ) (-> *target* control quat))
           )
         )
       )
@@ -235,6 +315,8 @@
           (vector-normalize! dir 1.0)
           (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
           (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+          ;; the heading the player turns to every frame, or it turns back
+          (quaternion-copy! (-> *target* control dir-targ) (-> *target* control quat))
           (format 0 "[mp-test] next to npc ~D~%" (-> st id))
           (return #t)
           )
@@ -338,15 +420,18 @@
            )
          )
         ((string= cmd "goto-player")
-         ;; goto-player <slot> [meters]: stand that far from the player (along x), else 1.5 m
+         ;; goto-player <slot> [x] [z]: stand that many meters from the player along x and z, else
+         ;; next to it (teleport through its continue point when far)
          (let* ((slot (mp-test-int))
-                (dist (mp-test-int))
+                (dx (mp-test-int))
+                (dz (mp-test-int))
                 (st (mp-remote-state slot))
                 )
            (cond
-             ((and st *target* (> dist 0))
+             ((and st *target* (or (nonzero? dx) (nonzero? dz)))
               (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans))))
-                (+! (-> pos x) (* (meters 1) (the float dist)))
+                (+! (-> pos x) (* (meters 1) (the float dx)))
+                (+! (-> pos z) (* (meters 1) (the float dz)))
                 (move-to-point! (-> *target* control) pos)
                 )
               )
@@ -373,6 +458,8 @@
              (vector-normalize! dir 1.0)
              (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
              (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+             ;; the heading the player turns to every frame, or it turns back
+             (quaternion-copy! (-> *target* control dir-targ) (-> *target* control quat))
              )
            )
          )
@@ -392,6 +479,8 @@
                (set-vector! dir 0.0 0.0 1.0 1.0)
                (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
                (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+               ;; the heading the player turns to every frame, or it turns back
+               (quaternion-copy! (-> *target* control dir-targ) (-> *target* control quat))
                )
              )
            )
@@ -438,6 +527,44 @@
          )
         ((string= cmd "log")
          (mp-test-log)
+         )
+        ((string= cmd "log-me")
+         ;; one short line: own position, speed and state (fine-grained probes)
+         (when *target*
+           (format
+             0
+             "[mp-test] me ~m ~m ~m speed ~m state ~A~%"
+             (-> *target* control trans x)
+             (-> *target* control trans y)
+             (-> *target* control trans z)
+             (vector-length (-> *target* control transv))
+             (mp-target-state-name)
+             )
+           )
+         )
+        ((string= cmd "log-part")
+         ;; log-part <index>: where entry <index> of *part-id-table* lives (level heaps)
+         (let* ((index (mp-test-int))
+                (launcher (-> *part-id-table* index))
+                (lev (mp-heap-level (the-as uint launcher)))
+                )
+           (format 0 "[mp-test] part ~D at #x~X level ~A~%" index launcher (if lev (-> lev name) #f))
+           (countdown (li 11)
+             (let ((l (-> *level* level li)))
+               (format 0 "[mp-test]   level ~D ~A ~A #x~X #x~X~%" li (-> l name) (-> l status) (-> l heap base) (-> l heap top-base))
+               )
+             )
+           )
+         )
+        ((string= cmd "log-pose")
+         (let ((slot (if (mp-test-word)
+                         (string->int (-> *mp-test* word))
+                         -1
+                         )
+                     )
+               )
+           (mp-test-log-pose slot)
+           )
          )
         (else
           (format 0 "[mp-test] unknown command ~S~%" cmd)

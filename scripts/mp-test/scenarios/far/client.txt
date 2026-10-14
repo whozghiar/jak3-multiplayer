@@ -1,0 +1,13 @@
+# Authority test, guest side: next to the host it shows the host's NPCs (its own asleep); 570 m
+# away it simulates its own NPCs; back next to the host it shows the host's again.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+52 log
+53 zone 7
+70 log
+70 screenshot far
+72 goto-player 0
+88 log
+88 screenshot back

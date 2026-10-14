@@ -24,10 +24,11 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
   minimap.
 - **See each other:** every player appears with their name and health bar over their head, as a
   dot on the minimap, with Daxter on their shoulder, their gun, their shots and the vehicle they
-  drive.
+  drive, moving exactly as they move on their own screen, with their effects and sounds.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
-  with their animations and effects. Enemies killed, crates broken and pickups taken disappear for
-  everybody.
+  with their movements, effects and sounds. A player who goes far from the others keeps a living
+  world around them, which the players near them share. Enemies killed, crates broken and pickups
+  taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
   triangle to ride next to them when it has two seats. Guests can also take the host's traffic
   vehicles.
@@ -62,7 +63,7 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 > host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
 > mod.
 
-Each player keeps their own save and story progress: you play together in the host's world, but
+Each player keeps their own save and story progress: you play together in the same world, but
 missions are not shared.
 
 ## Download & Play via OpenGOAL Launcher (Players)

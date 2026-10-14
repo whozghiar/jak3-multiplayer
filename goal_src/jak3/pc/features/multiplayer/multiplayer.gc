@@ -46,6 +46,7 @@
   (invulnerable 4) ;; invincibility cheat on
   (indax 5)        ;; plays as Daxter: anim-index is an index in Daxter's art group
   (paused 6)       ;; in a menu
+  (authority 7)    ;; simulates the NPCs around it (see multiplayer-world.gc)
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -94,7 +95,7 @@
    (seat-count int8)
    (ride-slot  int8)
    (time-ms    uint32)
-   (pad        uint32)
+   (seg-mask   uint32)     ;; body segments shown (low half of the draw-control seg-mask)
    (name       uint8 16)
    (level      uint8 16)
    (cont       uint8 32)
@@ -169,6 +170,8 @@
 (define *mp-world* (mp-world-flag cheats sync-time pvp))
 ;; Invincibility cheat (Mods menu).
 (define *mp-invulnerable* #f)
+;; #t while this player simulates the NPCs around it (always for the host), see mp-update-authority
+(define *mp-authority* #f)
 (define *mp-invulnerable-applied* #f)
 ;; Slot of the driver this player rides with, -1 when not riding.
 (define *mp-ride-slot* -1)
@@ -496,6 +499,10 @@
     (if (>= *mp-ride-slot* 0)
         (logior! (-> st flags) (mp-flag riding))
         )
+    (if *mp-authority*
+        (logior! (-> st flags) (mp-flag authority))
+        )
+    (set! (-> st seg-mask) (the-as uint 0))
     (cond
       ((not *target*)
        (logior! (-> st flags) (mp-flag hidden))
@@ -507,6 +514,7 @@
           (vector-copy! (-> st vel) (-> tgt control transv))
           (set! (-> st health) (-> tgt fact health))
           (set! (-> st health-max) (-> tgt fact health-max))
+          (set! (-> st seg-mask) (the-as uint (-> tgt draw seg-mask)))
           (if (focus-test? tgt indax)
               (logior! (-> st flags) (mp-flag indax))
               )
@@ -606,7 +614,18 @@
    (ghost-retry time-frame)    ;; last failed ghost spawn (process pool full)
    (hurtbox    handle)         ;; mp-hurtbox: what the local player's attacks hit
    (last-attack uint32)        ;; id of the last attack forwarded, so one blow counts once
+   (fx-group   int32 4)        ;; particle groups the player's model emits here (mp-play-emitters)
+   (fx-tracker handle 4)
    )
+  )
+
+;; Full poses and continuous emitters (multiplayer-world.gc, linked after this file).
+(define-extern mp-pose-postbind (function draw-control cspace-array joint-control none))
+(define-extern mp-play-emitters (function process-drawable uint (pointer int32) (pointer handle) none))
+
+(defun mp-puppet-pose-id ((slot int))
+  "Id under which a player's own model is sent in pose batches (its props use their pid)."
+  (the-as uint (logior (shl slot 24) #xffffff))
   )
 
 (defun mp-forward-hit ((slot int))
@@ -739,12 +758,18 @@
             (set! (-> self focus-status) (focus-status disable))
             )
           )
+        ;; body segments shown (helmet, gun holster...), like the player's own model
+        (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
+            (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
+            )
         ;; the color is a marker, not a tint: only the minimap dot takes it
         (if (-> self minimap)
             (set! (-> self minimap class) (-> *mp-minimap-nodes* node (mp-color-index (-> st color))))
             )
         ;; the animation the player plays, by index; one that is not loaded here falls back to
-        ;; the idle stance (resident). Indices: engine/data/art-elts.gc.
+        ;; the idle stance (resident). Indices: engine/data/art-elts.gc. This only drives the
+        ;; animation effects (footsteps, sounds) and the model while no pose arrived: the player's
+        ;; exact pose replaces the bones (mp-pose-postbind).
         (let* ((ag (-> self draw art-group))
                (idx (-> st anim-index))
                (anim (if (and (>= idx 0) (< idx (-> ag length)))
@@ -941,6 +966,9 @@
     )
   :post (behavior ()
     (mp-puppet-update)
+    (if (not (-> self local?))
+        (mp-play-emitters self (mp-puppet-pose-id (-> self slot)) (-> self fx-group) (-> self fx-tracker))
+        )
     (ja-post)
     )
   )
@@ -995,6 +1023,12 @@
     (initialize-skeleton self sg (the-as pair 0))
     )
   (ja-channel-set! 1)
+  ;; the bones take the player's own pose once computed
+  (set! (-> self skel postbind-function) mp-pose-postbind)
+  (dotimes (i 4)
+    (set! (-> self fx-group i) -1)
+    (set! (-> self fx-tracker i) (the-as handle #f))
+    )
   (set! (-> self focus-status) (focus-status disable))
   (set! (-> self hurtbox) (the-as handle #f))
   (when (not local?)
@@ -1600,14 +1634,14 @@
           )
         )
       (set! *mp-prompt-slot* best)
-      (set! *mp-prompt-replica* (if (and (< best 0) (= *mp-mode* (mp-mode client)))
+      (set! *mp-prompt-replica* (if (< best 0)
                                     (mp-nearest-replica-vehicle (-> *target* control trans))
                                     -1
                                     )
             )
       (cond
         ((and (< best 0) (>= *mp-prompt-replica* 0))
-         ;; an NPC vehicle of the host: press triangle to take it
+         ;; an NPC vehicle another player simulates: press triangle to take it
          (set! (-> self tri-slot) -1)
          (when (cpad-pressed? 0 triangle)
            (if (focus-test? *target* indax)

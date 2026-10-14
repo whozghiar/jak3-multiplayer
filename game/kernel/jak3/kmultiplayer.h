@@ -26,7 +26,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 1;
+constexpr u32 kProtocolVersion = 2;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -52,7 +52,7 @@ struct PlayerState {
   s8 seat_count;        // 118 seats of the driven vehicle
   s8 ride_slot;         // 119 slot of the driver this player rides with, -1 = none
   u32 time_ms;          // 120 sender clock, filled by the session
-  u32 pad;              // 124
+  u32 seg_mask;         // 124 body segments shown (low half of the draw-control seg-mask)
   char name[16];        // 128 nickname, null-terminated
   char level[16];       // 144 name of the level the player stands in
   char cont[32];        // 160 name of the player's current continue point
@@ -95,6 +95,85 @@ struct ActorTrack {
   int source = 0;  // slot of the player who simulates it
 };
 
+// A pose: every bone of an object, relative to the object's frame (its root position and
+// orientation, without scale), so it can be laid on the copy of the object another player draws.
+// This carries everything the owner's animation system produced: blended channels, streamed
+// animations, joint mods (look-at, aiming), ragdolls. Wire encoding of one bone:
+struct PoseJoint {
+  s16 q[4];  // rotation, x 32767
+  s16 t[3];  // translation, in units of 4 game units (1 mm), +-32 m
+  s16 s[3];  // scale per axis, x 2048 (negative: mirrored axis)
+};
+static_assert(sizeof(PoseJoint) == 20, "PoseJoint is a wire format");
+
+// Wire encoding of one particle emitter an object used since the previous batch.
+struct PoseEmitter {
+  u16 index;  // in *part-group-id-table* (kind 0) or *part-id-table* (kinds 1, 2)
+  u8 kind;    // 0 group (launch control), 1 single launcher 2d, 2 single launcher 3d
+  u8 count;   // launches since the previous batch
+  s16 t[3];   // origin relative to the object's frame, units of 4
+  u16 home;   // single launchers: hash of the level holding the launcher, 0 = global data
+  s16 q[4];   // origin rotation relative to the frame, x 32767
+};
+static_assert(sizeof(PoseEmitter) == 20, "PoseEmitter is a wire format");
+
+// Mirrors the GOAL type `mp-emitter`: one emitter to draw on a copy, in world space.
+struct EmitterOut {
+  s32 kind;
+  s32 index;
+  s32 count;      // single launchers: launches to replay now (0 until the next batch)
+  s32 home;       // single launchers: PoseEmitter::home
+  float mat[16];  // world origin
+};
+static_assert(sizeof(EmitterOut) == 80, "EmitterOut must match mp-emitter");
+
+// Wire encoding of one sound an object played (or stopped) since the previous batch.
+struct PoseSound {
+  u8 name[16];  // sound-name
+  u32 id;       // the owner's sound id: the same id over several batches is one lasting sound
+  s32 vol;
+  s32 pitch;
+  s32 bend;
+  s16 t[3];   // position relative to the object's frame, units of 4
+  u16 flags;  // kSoundPositional, kSoundStopped
+};
+static_assert(sizeof(PoseSound) == 40, "PoseSound is a wire format");
+constexpr u16 kSoundPositional = 1;
+constexpr u16 kSoundStopped = 2;
+
+// Mirrors the GOAL type `mp-sound`: a sound to send (position in world space), or to play on a
+// copy (position on the copy's frame).
+struct SoundIO {
+  u8 name[16];
+  u32 id;
+  s32 vol;
+  s32 pitch;
+  s32 bend;
+  s32 flags;
+  s32 pad[3];
+  float pos[4];
+};
+static_assert(sizeof(SoundIO) == 64, "SoundIO must match mp-sound");
+
+constexpr int kMaxPoseJoints = 256;
+constexpr int kMaxPoseEmitters = 16;
+constexpr int kMaxPoseSounds = 16;
+
+struct PoseSnap {
+  std::vector<PoseJoint> joints;
+  std::vector<PoseEmitter> emitters;
+  std::vector<PoseSound> sounds;
+};
+
+// Received poses of one object, oldest first, with the sender time of each.
+struct PoseTrack {
+  std::deque<std::pair<double, PoseSnap>> snaps;
+  double last_seen = 0;
+  double consumed = -1;         // sender time of the batch whose single launches were handed out
+  double consumed_sounds = -1;  // same for its sounds
+  int source = 0;
+};
+
 // Mirrors the GOAL type `mp-config`: the settings kept between boots.
 struct Config {
   char name[16];     // 0
@@ -135,6 +214,24 @@ class Session {
   void send_actors(const ActorState* actors, int count, double now_ms);
   // Interpolated objects of the other players, at most `max`. Returns the count.
   int get_actors(double now_ms, ActorState* out, int max);
+  // Queue the pose of one object: `count` world bone matrices, relative to `frame` (rigid, 16
+  // floats, GOAL layout). `count` may be 0 to send only emitters.
+  void add_pose(u32 id, const float* frame, const float* bones, int count);
+  // Queue an emitter of the object of the last add_pose. `origin` is a world matrix; `kind` holds
+  // PoseEmitter::kind in its low byte and PoseEmitter::home above.
+  void add_emitter(int kind, int index, int count, const float* origin);
+  // Queue a sound of the object of the last add_pose.
+  void add_sound(const SoundIO& snd);
+  // Send the queued poses (the host relays a guest's poses to the others).
+  void send_poses(double now_ms);
+  // World bones of object `id` laid on `frame`, interpolated like its actor state. Returns the
+  // count written (0 when no pose arrived).
+  int get_pose(u32 id, double now_ms, const float* frame, float* out, int max);
+  // Emitters object `id` uses now, in world space on `frame`. Returns the count written.
+  int get_emitters(u32 id, double now_ms, const float* frame, EmitterOut* out, int max);
+  // Sounds object `id` played in the batch reached at the drawn time, each batch handed out once,
+  // positioned on `frame`. Returns the count written.
+  int get_sounds(u32 id, double now_ms, const float* frame, SoundIO* out, int max);
   bool pop_event(Event* out);
   // Host only: disconnect a player, optionally refusing its address until the server stops.
   void kick(int slot, bool ban);
@@ -149,6 +246,9 @@ class Session {
   void handle_frame(Peer& p, u8 type, const u8* data, size_t len);
   void route_event(Event ev, int sender_slot);
   void store_actors(int source, const u8* data, size_t len, double recv_ms);
+  void store_poses(int source, const u8* data, size_t len, double recv_ms);
+  void note_actor_clock(int source, u32 time, double recv_ms);
+  double drawn_time(int source, double now_ms) const;
   void drop(Peer& p, const std::string& reason);
   void refuse(Peer& p, const char* why);
 
@@ -163,6 +263,9 @@ class Session {
   // Per sender: local ms minus sender ms, for its actor batches (see Remote::clock_offset).
   std::array<double, kMaxPlayers> m_actor_offset{};
   std::array<bool, kMaxPlayers> m_actor_offset_known{};
+  std::unordered_map<u32, PoseTrack> m_poses;
+  std::vector<std::vector<u8>> m_pose_out;  // entries queued by add_pose, sent by send_poses
+  float m_pose_frame[16] = {};              // frame of the last queued entry
   std::deque<Event> m_events;
   std::set<std::string> m_banned;
   double m_connect_start = 0;

@@ -1,0 +1,11 @@
+# PvP test, host side: stands still while the guest punches it; logs health around the blow.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+55 log
+62 log
+63 screenshot hit
+64 log
+70 log
+70 screenshot after

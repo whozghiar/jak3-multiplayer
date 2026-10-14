@@ -1,0 +1,15 @@
+# Pose test, host side: drives a buggy (its pilot animations stream in on this machine only), then
+# accelerates. The guest compares the pose of its copy with log-pose and sees the dust.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52 vehicle 15
+58 log-pose
+60 log-pose
+60 screenshot pose
+62 log
+64 press x 2500
+65 log
+66 log-pose
+68 log

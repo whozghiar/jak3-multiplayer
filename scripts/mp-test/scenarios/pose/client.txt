@@ -1,0 +1,15 @@
+# Pose test, guest side: stands 7 m beside the host's buggy, logs the pose of the host's copy
+# (same bones as the host's own log-pose), then watches it drive off.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+55 goto-player 0 0 7
+56 face-player 0
+58 log-pose 0
+60 log-pose 0
+60 screenshot pose
+62 log
+65 screenshot dust
+66 log-pose 0
+68 log
