@@ -24,7 +24,8 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
   minimap.
 - **See each other:** every player appears with their name and health bar over their head, as a
   dot on the minimap, with Daxter on their shoulder, their gun, their shots and the vehicle they
-  drive, moving exactly as they move on their own screen, with their effects and sounds.
+  drive, in their own outfit, moving exactly as they move on their own screen, with their effects
+  and sounds.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
   with their movements, effects and sounds. A player who goes far from the others keeps a living
   world around them, which the players near them share. Enemies killed, crates broken and pickups
@@ -37,8 +38,11 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
   can turn it off).
 - **Cheats menu:** in the Mods menu (L3 + SELECT): refill ammo, restore health, dark eco and
   light eco, invincibility, teleport to a zone or to a player.
+- **Shared story:** a mission completed by one player is completed for everybody, with its
+  reward; a player who joins catches up with the others (the host can turn it off).
 - **Administration for the host:** kick or ban a player, teleport players to you, allow or forbid
-  cheats for guests and players hitting each other, share your time of day, stop the server.
+  cheats for guests and players hitting each other, share story progress and your time of day,
+  stop the server.
 
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
@@ -63,8 +67,8 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 > host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
 > mod.
 
-Each player keeps their own save and story progress: you play together in the same world, but
-missions are not shared.
+Each player keeps their own save, health and items. Story progress is shared: missions completed
+by anyone are completed for all.
 
 ## Download & Play via OpenGOAL Launcher (Players)
 

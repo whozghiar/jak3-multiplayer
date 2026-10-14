@@ -12,13 +12,13 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 | Layer | File | Role |
 |---|---|---|
 | Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
-| Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script. |
+| Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, left stick). |
 | Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason). |
-| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets and their hurtboxes, passenger seat, shared enemy deaths, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
+| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, crates and pickups. |
 | GAME | `.../multiplayer-menu.gc` | START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
-| Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/` | Runs several game instances on one PC with a script each, gathers logs and screenshots. |
+| Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/`, `compare_poses.py` | Runs several game instances on one PC with a script each, gathers logs and screenshots; compares an owner's bones with its copies'. |
 
 ### 1.1 Network
 
@@ -29,8 +29,8 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   oversized frames drop the peer. Message types: `HELLO` (protocol version, now 2), `WELCOME`
   (slot), `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`.
 - **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
-  health, flags, body segments, driven vehicle, passenger seat, name, color, level, continue
-  point) at 30 Hz.
+  health, flags, character and outfit, body segments, driven vehicle, passenger seat, name, color,
+  level, continue point) at 30 Hz.
 - **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
   player: `[u8 source][u32 source time][u16 count][states]`. Ids carry the owner's slot in the
   top byte and the owner's process pid below.
@@ -52,15 +52,17 @@ near it, and a guest far from every authority for itself and the guests near it 
 
 | What | Simulated by | Seen by the others as |
 |---|---|---|
-| The player, its pose, health | its player | an `mp-puppet` (Jak, or Daxter in `indax` mode) with the player's exact pose |
+| The player, its pose, outfit, health | its player | an `mp-puppet` (Jak in the player's outfit, or Daxter in `indax` mode) with the player's exact pose |
 | Daxter on the shoulder, the gun, the vehicle driven and its wheels | its player | replicas of those props, with their exact pose |
-| NPCs: the `enemy` family (citizens, guards, monsters, marauders...), vehicles and wheels near a player | that player's authority | replicas, with their exact pose for the 12 nearest; a player who is not an authority keeps its own NPCs asleep and its traffic off |
+| NPCs: the `enemy` family (citizens, guards, monsters, marauders...), vehicles and wheels near a player | that player's authority | replicas with their exact pose; a player who is not an authority keeps its own NPCs asleep and its traffic off |
 | One-shot effects (part-trackers) | where they start | the same effect started at the same place |
 | Continuous particle emitters and direct particle launches of a player, its props, the NPCs | their owner | the same emitter on the copy, at the same place on it |
 | Sounds of a player, its props, the NPCs (one-shot and lasting, such as engines) | their owner | the same sound at the copy, lasting sounds updated and stopped like the owner's |
 | Projectiles | the shooter's machine (the authority for NPCs) | a copy fired from the puppet or the replica |
 | Enemy deaths, broken crates, taken pickups | where they happen | the same entity dying or removed |
+| Story progress: closed task nodes (missions done, with their rewards) | where they close | the same nodes closed; a player who joins gets the others' and gives its own (1.5) |
 | Time of day | the host | followed by the guests |
+| World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player | each player's own: a lift must answer the player standing on it, so it is not driven from another machine |
 
 A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
 process's art group and joint geometry, since a process does not keep it) and plays the owner's
@@ -86,10 +88,14 @@ sends their hits.
 ### 1.4 Poses, emitters, sounds and authority
 
 - **Poses.** With each 15 Hz batch, a player sends the bones of its own model, of its props and of
-  the 12 NPCs nearest to another player within 40 m (`MP_POSE_BUDGET`), relative to each object's
-  frame (the root position and orientation of its state, without scale). A pose is left out when
-  its bones are not all fresh: drawn, at a level of detail that animates every joint, and for an
-  NPC its bone 0 still at its root. The copy's `joint-control` has `mp-pose-postbind` as its
+  every NPC it sends, relative to each object's frame (the root position and orientation of its
+  state, without scale). While an NPC is sent, its joint math runs in full whatever its level of
+  detail on the owner's screen (`force-math`, set by `mp-force-math` and cleared once it is no
+  longer sent), since another player may see it up close. An object its owner does not draw (a
+  hidden prop, a player during a teleport) sends no pose: its copy is hidden too (`log`: `poses
+  hidden`). A passenger's own model is hidden, so the seated model its machine draws is sent
+  instead. A drawn object whose bones are not all fresh would play the animation instead (`log`:
+  `poses skipped`, 0 in every scenario). The copy's `joint-control` has `mp-pose-postbind` as its
   `postbind-function`: `do-joint-math` computes the copy's bones from its own animation, then this
   function lays the owner's bones, interpolated, on the copy's frame (same bone count only). Blends,
   streamed animations, look-at and aiming joint mods, joint scales and ragdolls all come through.
@@ -111,6 +117,15 @@ sends their hits.
   not authorities and whose nearest authority it is), and drops the copies of another authority's
   NPCs standing nearer to itself than to that player.
 
+### 1.5 Story progress
+
+Progress in Jak 3 is the set of closed task nodes (`*game-info* sub-task-list`). Every closure
+goes through the node's `open!` method (which also closes the parents the node needs), wrapped in
+`multiplayer.gc`: the node index goes to the others in a `progress` event (a 256-node bitmap), and
+they close the same node with `open!`, rewards and on-close scripts included. When a player joins,
+every player already there sends it all its closed nodes, and it sends its own: everyone ends with
+the union. Host setting **Share story progress** (on by default).
+
 ## 2. Requirements and how they are met
 
 | Requirement | Implementation |
@@ -126,7 +141,7 @@ sends their hits.
 | Players hit each other, with a reaction | Section 1.3: an `mp-hurtbox` child of each puppet receives the local player's blows and shots; the victim plays the stock hit reaction, pushed away from the attacker. Host setting **Players can hit each other** (on by default). |
 | Game entities focus any player | Puppets are `process-focusable` in the player collide list with `collide-spec jak`, which `enemy::find-best-focus` considers. |
 | Players on the minimap in real time | Each puppet has a minimap icon in its player's color. |
-| Administration page when hosting | Options > Multiplayer > **Server administration**: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other, share time of day, stop the server. |
+| Administration page when hosting | Options > Multiplayer > **Server administration**: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other, share story progress, share time of day, stop the server. |
 
 ## 3. Vanilla touch points
 
@@ -135,11 +150,11 @@ Each is marked `MOD multiplayer`.
 | File | Change |
 |---|---|
 | `game/kernel/jak3/kmachine.cpp` | `InitMachine_PCPort` registers the `pc-mp-*` functions. |
-| `game/sce/libpad.cpp` | Pad 0 input forced by a test script. |
+| `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, left stick). |
 | `game/CMakeLists.txt`, `test/CMakeLists.txt` | The new C++ file and its test. |
 | `goal_src/jak3/dgos/game.gd` | The four mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o` and `jak-indax+0-ag.go`. |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1529` for the start menu labels. |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514` and `#x1520`-`#x1529` for the start menu labels. |
 | `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
 
 Wrapped at load time, each calling the stock version kept by `define-perm`:
@@ -154,6 +169,7 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `sparticle-launch-control` `spawn` | `engine/gfx/sprite/particles/sparticle-launcher.gc` | Every running particle group goes through it (`spawn-from-mat` and `spawn-from-cspace` too). |
 | `sp-launch-particles-var` | same file | Every particle launch; only the direct ones (no launch control) are noted. |
 | `sound-play-by-name`, `sound-play-by-spec`, `sound-stop` | `engine/sound/gsound.gc` | Every sound a process plays or stops. |
+| `game-task-node-info` `open!` | `engine/game/task/task-control.gc` | Every task node closure (story progress). |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -177,7 +193,8 @@ calls `mods-menu-update` first.
 
 ### 4.2 Puppets
 
-An `mp-puppet` uses the local player's Jak model (`target-skel-group`) or Daxter's
+An `mp-puppet` uses Jak's model in the remote player's outfit (sent in the character byte, picked
+like `target-skel-group` does, the local outfit when that model is not loaded here) or Daxter's
 (`skel-sidekick`), shows the body segments the remote player shows, and takes the remote player's
 exact pose (1.4). It also plays the remote player's animation by index, for the animation's
 effects and for the time before the first pose: a clip not loaded here falls back to the idle
@@ -194,9 +211,13 @@ where the player's attacks look. A model change (character, outfit) respawns the
   the player vehicles: city bikes and cars (types 0-6) and Spargus buggies (12-19).
 - **NPC vehicles:** a player presses triangle next to the replica of another authority's NPC
   vehicle, gets the same vehicle, and that authority removes its own (`vehicle-taken`).
-- **Ride (hold triangle 0.5 s):** with a second seat no other player uses. An invisible `mp-seat`
-  follows the driver's seat 1 and the player rides it with the stock `target-grab-ride` state.
-  Each machine draws the passenger in the driver's seat as it sees that vehicle.
+- **Ride (hold triangle 0.5 s):** with a second seat no other player uses, from the ground
+  (standing or crouched). An invisible `mp-seat` follows the driver's seat 1 and the player rides
+  it with the stock `target-grab-ride` state. Each machine draws the passenger in the driver's seat
+  as it sees that vehicle.
+- **Collision:** a vehicle's copy is a solid sphere centered low (0.5 m under its root, 2.2 m): a
+  sphere standing above the ground makes a player next to it crouch under its underside. A player's
+  hurtbox is off while it drives or rides, else it would sit inside the vehicle and stop it.
 
 ### 4.4 Sleeping NPCs
 
@@ -222,6 +243,9 @@ task compile-check                                        # first time in a work
 python scripts/mp-test/run_mp_test.py <scenario>
 ```
 
+`python scripts/mp-test/compare_poses.py` compares, after a `pose-all` run, the bones the host
+logged for its objects with those of their copies on the guest.
+
 The runner starts one game per script of `scripts/mp-test/scenarios/<scenario>/`, each with its
 own `--config-path` folder (a copy of the user's saves and settings, small window, side by side,
 controller ignored when unfocused) and the `MP_TEST_SCRIPT` environment variable. The debug boot
@@ -235,7 +259,7 @@ A script line is `<seconds> <command>`:
 |---|---|
 | `enable`, `name <w>`, `color <n>`, `character <n>` | Mod settings. |
 | `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
-| `press <button> <ms>`, `stick <lx> <ly> <ms>` | Force pad 0 (button names in PS2 order; stick 0-255, 128 centered). |
+| `press <button> <ms>`, `stick <lx> <ly> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; stick 0-255, 128 centered). |
 | `goto-player <slot> [x z]`, `face-player <slot>` | Stand next to a remote player (or x and z meters from it), turn to it. |
 | `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
 | `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
@@ -244,6 +268,8 @@ A script line is `<seconds> <command>`:
 | `log-pose [slot]` | Four bones of player `slot`'s puppet relative to its root, or of the own model without a slot: the owner's line and the other machine's line compare the pose with its copy. |
 | `log-part <index>` | Where entry `index` of `*part-id-table*` lives (which level heap). |
 | `log-me` | One line: own position, speed and state (fine-grained probes). |
+| `log-pose-own <npc\|daxter\|gun\|vehicle\|wheel>`, `log-pose-copy <slot> <skeleton name\|*>` | Four bones of one of our objects (the NPC nearest to player 1, Daxter, the gun, the vehicle driven, its first wheel), and of the copies of player `slot`'s objects with that skeleton (`*`: its NPC nearest to us), with the poses laid on each copy. |
+| `log-tasks`, `close-task` | Story progress: closed nodes, nodes closed after another player, the open ones; close the first open node. |
 
 Scenarios and what they verified (2026-10-14, Spargus, every one run again after the last change):
 
@@ -252,13 +278,15 @@ Scenarios and what they verified (2026-10-14, Spargus, every one run again after
 | `smoke` | Host, join, puppets, names, health bars | Both see each other; poses, sounds sent and applied both ways. |
 | `pvp` | A guest's punch on the host | Host health 8 to 5, pushed back 3.1 m, hit reaction seen by the guest; the guest stays in place (0.2 m). |
 | `pvp-probe` | The attacker's position and state every 0.1 s around the punch | The punch lunge stops on the host's hurtbox. |
-| `npc` | Host NPCs on the guest | 12 to 13 replicas drawn, 10 own NPCs asleep. |
-| `npc-hit` | A guest's punch on a host NPC | The host applies it to the citizen (`player 1 hit ... punch`), which strikes back: the guest loses 2 health. |
+| `npc` | Host NPCs on the guest | 13 replicas drawn, the guest's own NPCs (8 to 10 around it) asleep. |
+| `npc-hit` | A guest's punch on a host NPC | The host applies both blows to its citizen (`player 1 hit ... punch`); in an earlier run the citizen struck back and the guest lost 2 health. |
 | `props`, `combat` | Daxter, gun, shots, impacts, emitters | Daxter on the shoulder and the gun in the aiming pose on the remote puppet; 3 shots and 2 impacts replayed; the gun's emitters replayed (122). |
-| `vehicle` | A driven buggy, then stolen | Body and wheels replicated, its dust and engine sound replayed; the driver is ejected and sees the thief's buggy. |
-| `ride` | Passenger seat | The guest rides in the host's two-seat buggy. |
-| `crate` | A crate broken by the host | The guest goes from 48 to 47 crates. |
-| `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 321 emitters shown, 1046 sounds played on the guest. |
+| `vehicle` | A driven buggy, then stolen | Body and wheels replicated, its emitters (289 shown) and engine sound (932 updates played) on the guest; the driver is ejected and sees the thief's buggy. |
+| `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
+| `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
+| `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
+| `pose-all` | Every object type: NPC, Daxter, gun, buggy, wheels | `compare_poses.py`: Daxter 0.7 mm, gun 0.3 mm, buggy 0.4 mm; a walking NPC logged every frame on both sides, 53 frames paired: median 5.9 mm, largest 5.5 cm while its bones move 5.1 cm per frame (the two machines' frames are not in phase); every wheel copy gets its pose each batch; no pose skipped. |
+| `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host); back next to the host, asleep again. |
 
 | | |
@@ -274,15 +302,16 @@ public IP.
 
 ## 6. Known limits
 
-- Each player keeps its own story progress; missions and their scripted scenes are not shared.
-- Only the 12 NPCs nearest to another player get their exact pose; farther ones play the owner's
-  main animation, enough at that distance. A copy whose skeleton has a different bone count
-  (another outfit) keeps playing the animation.
-- Remote Jaks wear the local player's outfit.
-- An object's copy needs its art loaded on the viewer's machine: an NPC of a level only the owner
-  has loaded is not drawn.
-- At most 4 particle groups per copy, 16 emitters and 16 sounds per object and batch. Sounds of a
-  sound bank the viewer has not loaded stay silent there.
+- World objects that carry or block the player (lifts, platforms, doors) belong to each player's
+  own game (1.2). A mission's own scripted scenes play for the player who runs them; the others
+  get the outcome (1.5).
+- A copy is drawn with art loaded on the viewer's machine, like the world itself: levels load
+  around each player, so an object in a level the viewer has not loaded (far away) waits until it
+  is.
+- At most 64 NPCs per batch and 128 copies drawn, 4 particle groups per copy, 16 emitters and 16
+  sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
+- Bandwidth: about 1.3 KB per Jak pose and 0.6 KB per NPC pose, 15 times a second; a crowd of 40
+  NPCs is about 0.4 MB/s from the authority to each player.
 - Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
@@ -318,3 +347,12 @@ public IP.
   `log-pose`, `log-me`, `log-part`, `goto-player` with x and z offsets; face commands now set the
   player's heading (the punch lunged the other way, which looked like a bounce). Scenarios `pose`,
   `far`, `pvp-probe`.
+- **2026-10-14:** every NPC sent gets its exact pose (no budget), with full joint math while sent.
+  Shared story progress (task nodes, on join and live, host setting). Remote players in their own
+  outfit. Test commands `log-pose-own`, `log-pose-copy`, `log-tasks`, `close-task`; scenarios
+  `pose-all`, `progress`.
+- **2026-10-14:** a player standing next to another player's vehicle crouched under the underside
+  of its collision sphere and could not get in as passenger: the sphere is now centered low, and
+  getting in works crouched too. A passenger's hurtbox stopped the driver's vehicle: hurtboxes are
+  off in vehicles. The test pad now presses buttons at full pressure (a buggy's throttle reads X's
+  pressure; before, the test buggies were only pushed by the passenger's hurtbox).
