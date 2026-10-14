@@ -13,6 +13,7 @@
 75 log-copies 1
 80 log
 80 log-copies 1
+80 log-art-kinds
 80 log-levels
 80 log-shaders
 110 log

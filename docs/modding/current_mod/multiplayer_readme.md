@@ -209,6 +209,12 @@ the union. Host setting **Share story progress** (on by default).
     (`art-level` event: for each skeleton it sends, the level whose art array holds it). It all
     goes with the far level. In `far-city`, Haven's boats (`ctyport`) and citizens (`ctypepa`)
     are drawn in Spargus this way.
+  - *No code needed:* a copy runs none of its object's code; it only needs the skeleton-group
+    (the data a `defskelgroup` fills: art group name, joint geometry and animation, levels of
+    detail, bounds) and the art group. Each player also sends the description of every
+    skeleton-group it sends (`skel-def` event, three parts); when the code that defines a group
+    is in no level here, the group is rebuilt from it (`mp-apply-skel-def`, a pool of 32), and
+    the art group is loaded alone as above. `far-city-synth` builds every copy that way.
   - The player's own model is resident and drawn wherever it stands.
 - **Level heap below 256 MB.** The texture page dir links the shaders of each texture by address
   divided by 16 in 24 bits (`shader-ptr`): a level above 256 MB breaks the lists, and the next
@@ -395,8 +401,10 @@ A script line is `<seconds> <command>`:
 | `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded (`far #t`: loaded for a distant player), the distant player's level, its borrow levels, its host, the sandbox entries put back, and the cutscenes sent, shown and playing. |
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load distant players' levels (default 1); 0 for a counter-test. |
+| `synth-skels <0\|1>` | Copies use the skeleton-groups rebuilt from their sender's description, even when the code defining ours is loaded (the path of a group whose code is in no level here). |
+| `log-art-kinds` | Every kind of object (skeleton) another player announced: its group (ours or rebuilt), its art group, drawable here or not. |
 
-Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 142 checks passed, 0 failed):
+Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 156 checks passed, 0 failed, 21 scenarios):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -413,6 +421,7 @@ Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcan
 | `pose-all` | Every object type at the same moment: the player's model, NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each (122 for the player, on foot then driving), three runs: the player's model median 0.7 to 0.8 mm, largest 1.6 to 1.8 mm; a running NPC whose bones move 37 to 54 mm per frame, median 0.8 to 1.2 mm, largest 1.2 to 2.7 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). Two joints of the driver once read 1.5 m off: their matrix had `w` 0.9992 and the log read the translation alone, at 9.2 million units from the origin; the pose sent was right (traced in the runtime), the log now takes `w` in. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority, distant players and their levels | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there. The host loads the guest's `wascityb` in the free top of `wascitya`'s heap, not displayed (`far #t`, 2 entries put back by the sandbox); the guest loads the host's `wascitya` in `waswide`'s heap (10 put back) and, back next to the host, unloads that copy and loads `wascitya` as its own. No crash at any of these unloads; `log-shaders`: 0 broken links. The error "object #x147d21 is not a valid object" printed when the guest's `wascityb` unloads is the stock game's: it appears with `far-levels 0` too. |
+| `far-city-synth` | Objects whose code is in no level here | The same as `far-city`, the host building every copy from the skeleton-groups the guest describes (`synth-skels 1`): 9 groups rebuilt, every kind the guest announced drawable (`log-art-kinds`), every object it draws drawn. |
 | `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps, and draws the guest's guards, cars and bikes from them (1 to 6 depending on who passes by; `log-copies 1` shows each object, drawn or not, and whether its skeleton and art group are loaded here). Every object the guest draws is drawn here, the parked traffic the guest hides is hidden here too: the boats (`ctyport`) and citizens (`ctypepa`), whose levels do not fit, from their art groups loaded alone (`far art loaded 2, failed 0`) with the renderer keeping `ctyport` and `ctypepa`. Back in Spargus, the four levels unload cleanly. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
 | `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
@@ -439,11 +448,9 @@ public IP.
 ## 6. Known limits
 
 - A distant player's place (1.6): one place at a time (one far level, its borrow levels, art
-  groups loaded alone). An object whose skeleton is defined by code that is in none of the levels
-  loaded here cannot be drawn (art is loaded alone, code is not); none was met in testing. Our own
-  place keeps a level slot, and any load of ours lets the distant levels go first. Their sounds
-  stay silent (sound banks follow our place). Art groups are read from `out/jak3/obj`, which a
-  compiled install has.
+  groups loaded alone, skeleton-groups rebuilt). Our own place keeps a level slot, and any load
+  of ours lets the distant levels go first. Their sounds stay silent (sound banks follow our
+  place). Art groups are read from `out/jak3/obj`, which a compiled install has.
 - Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
   128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
@@ -455,6 +462,9 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-14:** skeleton-groups described by their sender (`skel-def` event) and rebuilt when
+  their code is in no level here: a copy needs no code. Scenario `far-city-synth`, test commands
+  `synth-skels`, `log-art-kinds`; every kind a distant player announced is checked drawable.
 - **2026-10-14:** art groups loaded alone for a distant player's objects whose levels do not fit
   (`art-level` event, `loado` into the far level's memory inside the sandbox, the renderer keeping
   their levels' data, `pc-mp-render-level`, 8 more renderer levels for Jak 3): every object a

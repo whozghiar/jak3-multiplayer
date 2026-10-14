@@ -336,7 +336,7 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         broken = grab(host, r"shader links \d+ broken (\d+)")
         c.check(scenario, "texture shader lists intact", bool(broken) and all(b == "0" for (b,) in broken), f"broken {broken}")
 
-    elif scenario == "far-city":
+    elif scenario in ("far-city", "far-city-synth"):
         far = grab(host, r"far level ctywide loads \d+ drops \d+ restored (\d+)")
         c.check(scenario, "the host loads Haven's master level", bool(far), f"restored by the sandbox {far[-1][0] if far else None}")
         borrows = grab(host, r"far borrows (\S+) (\S+) (\S+)")
@@ -358,6 +358,14 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 f"{sum(v[1] == '#t' for v in shown.values())} of {len(shown)} drawn "
                 f"({sorted(set(v[0] for v in shown.values()))}); hidden by the guest "
                 f"{len(steady) - len(shown)}; not drawn {missing}")
+        kinds = grab(host, r"kinds announced (\d+) drawable (\d+) groups rebuilt (\d+)")
+        c.check(scenario, "every kind of object the guest announced can be drawn here",
+                bool(kinds) and int(kinds[-1][0]) > 0 and kinds[-1][0] == kinds[-1][1],
+                f"{kinds[-1][1] if kinds else None} of {kinds[-1][0] if kinds else None} kinds drawable, "
+                f"{kinds[-1][2] if kinds else None} skeleton-groups rebuilt from the guest's descriptions")
+        if scenario == "far-city-synth":
+            c.check(scenario, "copies built from rebuilt skeleton-groups (code in no level here)",
+                    bool(kinds) and int(kinds[-1][2]) > 0, f"{kinds[-1][2] if kinds else None} groups rebuilt, all copies built from them")
         art = grab(host, r"far art loaded (\d+) failed (\d+)")
         c.check(scenario, "art groups loaded alone without failure", bool(art) and art[-1][1] == "0",
                 f"loaded {art[-1][0] if art else None}, failed {art[-1][1] if art else None}")

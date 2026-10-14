@@ -73,6 +73,9 @@
                   ;; last part (text = continue point, iarg 1 = scene count), iarg 2 = wait flag
   (levels 14)     ;; the levels of the sender's place: iarg 0 = index, iarg 1 = count, text = name
   (art-level 15)  ;; a skeleton the sender sends (text) has its art in level iarg 0-3 (16 chars)
+  (skel-def 16)   ;; a skeleton-group the sender sends, in 3 parts (iarg 0): 0 name, jgeo janim,
+                  ;; max-lod, longest edge, bounds; 1 art group name, mgeo, shadow and joints,
+                  ;; lod distances 0-3; 2 lod distances 4-5, global effects
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -1342,6 +1345,7 @@
 (define-extern mp-apply-scene (function mp-event none :behavior mp-manager))
 (define-extern mp-apply-levels (function mp-event none))
 (define-extern mp-apply-art-level (function mp-event none))
+(define-extern mp-apply-skel-def (function mp-event none))
 (define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
 (define-extern mp-replay-projectile (function mp-event none))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
@@ -1683,6 +1687,9 @@
          )
         (((mp-event-kind art-level))
          (mp-apply-art-level ev)
+         )
+        (((mp-event-kind skel-def))
+         (mp-apply-skel-def ev)
          )
         (((mp-event-kind steal))
          (if *target*

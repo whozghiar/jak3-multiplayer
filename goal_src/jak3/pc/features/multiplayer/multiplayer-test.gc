@@ -25,6 +25,8 @@
 ;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
 ;;   far-levels <0|1>                                        load distant players' levels (default 1)
+;;   synth-skels <0|1>                                       copies use the skeleton-groups rebuilt from descriptions
+;;   log-art-kinds                                           every skeleton another player announced: drawable here?
 ;;   log-shaders                                             texture shader lists intact, level heaps
 ;;   log-look <slot>                                         a player's color: model untinted, minimap, name marker
 ;;   log-copies <slot>                                       every object of a player received here, drawn or not
@@ -1073,6 +1075,29 @@
                (format 0 "[mp-test] look ~D no puppet~%" slot)
                )
              )
+           )
+         )
+        ((string= cmd "synth-skels")
+         (set! *mp-synth-skels* (!= (mp-test-int) 0))
+         )
+        ((string= cmd "log-art-kinds")
+         ;; every skeleton another player announced (art-level): can it be drawn here (its group,
+         ;; ours or rebuilt, and its art group)?
+         (let ((tbl *mp-art-in*)
+               (ok 0)
+               )
+           (dotimes (i (-> tbl count))
+             (let* ((name (symbol->string (-> tbl skel i)))
+                    (sg (the-as skeleton-group (mp-art-group-get name (the-as (pointer level) #f))))
+                    (art (and sg (type? sg skeleton-group) (mp-art-group-get (-> sg art-group-name) (the-as (pointer level) #f))))
+                    )
+               (format 0 "[mp-test] kind ~S group ~A rebuilt ~A art ~A~%" name (if sg #t #f) (if (mp-skel-def-get name) #t #f) (if art #t #f))
+               (if art
+                   (+! ok 1)
+                   )
+               )
+             )
+           (format 0 "[mp-test] kinds announced ~D drawable ~D groups rebuilt ~D~%" (-> tbl count) ok (-> *mp-skel-defs* rebuilt))
            )
          )
         ((string= cmd "far-levels")

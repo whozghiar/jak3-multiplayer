@@ -1,0 +1,22 @@
+# Distant player's objects whose code is in no level here, host side: the same as far-city, but the
+# host builds every copy of the guest's objects from the skeleton-group the guest describes
+# (synth-skels 1), as if the code defining it were in none of its levels.
+1 synth-skels 1
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52 log-levels
+52 log-shaders
+70 log-levels
+70 log-shaders
+70 log-copies 1
+75 log-copies 1
+80 log
+80 log-copies 1
+80 log-art-kinds
+80 log-levels
+80 log-shaders
+110 log
+110 log-levels
+110 log-shaders
