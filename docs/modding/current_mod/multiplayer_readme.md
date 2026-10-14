@@ -63,6 +63,8 @@ near it, and a guest far from every authority for itself and the guests near it 
 | Story progress: closed task nodes (missions done, with their rewards) | where they close | the same nodes closed; a player who joins gets the others' and gives its own (1.5) |
 | Time of day | the host | followed by the guests |
 | World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player (a lift must answer the player standing on it) | kept alike (1.6): cycles follow the host's clocks, doors open for any player in front of them, an elevator trip started on one machine runs on all |
+| Physics objects of the level (floating platforms, objects on physics) | the region's authority, with the weight of every player on them | each machine's own object of that entity, moved every frame where the authority has it, still carrying its player (1.6) |
+| Levels | every machine, around its own player | players in one place load the same levels (1.6) |
 | Cutscenes | where they start | the same cutscene, for the players of that region (1.6) |
 
 A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
@@ -95,9 +97,9 @@ sends their hits.
   longer sent), since another player may see it up close. An object its owner does not draw (a
   hidden prop, a player during a teleport) sends no pose: its copy is hidden too (`log`: `poses
   hidden`). A passenger's own model is hidden, so the seated model its machine draws is sent
-  instead. A drawn object whose bones are not all fresh plays the animation instead (`log`:
-  `poses skipped`): 0 in every scenario but `scene` (2 to 9 out of thousands: citizens a cutscene
-  freezes, their bones no longer computed) and once 2 in `world-objects`. The copy's `joint-control` has `mp-pose-postbind` as its
+  instead. An NPC whose joint math did not run lately (off the owner's screen, frozen by a
+  cutscene) gets its bones computed on the spot (`do-joint-math`) before they are sent. `log`
+  counts the poses left out of drawn objects (`poses skipped`): 0 in every scenario. The copy's `joint-control` has `mp-pose-postbind` as its
   `postbind-function`: `do-joint-math` computes the copy's bones from its own animation, then this
   function lays the owner's bones, interpolated, on the copy's frame (same bone count only). Blends,
   streamed animations, look-at and aiming joint mods, joint scales and ragdolls all come through.
@@ -149,10 +151,20 @@ the union. Host setting **Share story progress** (on by default).
   point go to the others (`scene` events), and a player of the same region (same NPC authority)
   with no cutscene playing starts the same one, with its commands. Gated by **Share story
   progress**.
-- **Levels.** Levels are not copied from machine to machine: each machine loads the levels its own
-  player's position calls for, and players of one region stand in the same levels. Loading one
-  more level is not safe: with no free bank of the level heap, the game crashes (seen in a test:
-  "could not find free small-edge bank in the level-group heap", then a crash).
+- **Physics objects.** A `rigid-body-object` of the level (not a vehicle) within 300 m of a player
+  goes with the authority's batch, named the same on every machine: its entity's aid, plus its
+  rank among the objects that entity's process spawned (the volcano's lava platforms are 5
+  children of one spawner entity). Another machine of that region sets its own object's rigid body
+  there at rest every frame (`rigid-body-control-method-28`, `reset-momentum!`), so it only moves
+  by its own physics for a frame, and it still carries the player standing on it. Floating
+  platforms take a player's weight from a `'ridden` message; on the authority, a remote player's
+  puppet standing on one sends it (with the target mask the handler checks set for the call).
+- **Levels.** Level loading follows each player's position: players in one place load the same
+  levels (`log-levels` lists the same five levels on both machines in `smoke` and `far`), a
+  player elsewhere loads those of its place. A machine does not load the levels of a player who is
+  elsewhere: with no free bank of the level heap the game stops on purpose (`break!` after "could
+  not find free small-edge bank in the level-group heap", seen in a test), and copies of a distant
+  player's objects are out of view anyway.
 - **Levels leaving.** A level that leaves kills its entities and their effects, then its memory is
   reused. Before that (`level` `deactivate`, wrapped), the copies drawn with its art, the
   part-trackers on copies playing its particle groups and the skeleton cache are dropped: they
@@ -311,10 +323,11 @@ A script line is `<seconds> <command>`:
 | `log-pose-own <npc\|daxter\|gun\|vehicle\|wheel>`, `log-pose-copy <slot> <skeleton name\|*>` | Four bones of one of our objects (the NPC nearest to player 1, Daxter, the gun, the vehicle driven, its first wheel), and of the copies of player `slot`'s objects with that skeleton (`*`: its NPC nearest to us), with the poses laid on each copy. |
 | `log-tasks`, `close-task [n]` | Story progress: closed nodes, nodes closed after another player, the open ones; close the first open node, n times. |
 | `log-sync` | Phase of a 4-second test cycle computed in the manager's context, stamped with the host's clock: a guest's must follow the host's. |
+| `goto-float`, `log-float` | Stand on the nearest floating platform (`rigid-body-platform`, volcano); print the one nearest to player 0 (guest) or to us (host): height, tilt, weight messages sent, states followed, stamped with the host's clock. |
 | `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, and the elevator trips sent and shown. |
 | `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded and the cutscenes sent, shown and playing. |
 
-Scenarios and what they verified (2026-10-14, Spargus, every one run again after the last change):
+Scenarios and what they verified (2026-10-14, Spargus and the volcano, every one run again after the last change, 19 of 19 passed):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -328,12 +341,14 @@ Scenarios and what they verified (2026-10-14, Spargus, every one run again after
 | `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
 | `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
-| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each: Daxter median 0.7 mm (largest 3.0 mm), gun 0.2 mm, buggy 0.5 mm (1.0 mm), wheel 0.0 mm; a running NPC whose bones move 37.5 to 47.6 mm per frame: median 3.0 to 4.3 mm, largest 2.5 to 5.0 cm, about one frame of its motion (the curve between two 15 Hz poses drawn as a straight blend, and the two machines' frames out of phase); no pose skipped. |
+| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each: Daxter median 0.7 to 0.8 mm (largest 7.8 mm), gun 0.2 mm, buggy 0.5 mm (1.0 mm), wheel 0.0 mm; a running NPC whose bones move 37.5 to 50.7 mm per frame: median 3.0 to 4.3 mm, largest 2.5 to 5.0 cm, about one frame of its motion (the curve between two 15 Hz poses drawn as a straight blend, and the two machines' frames out of phase); no pose skipped. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host); back next to the host, asleep again. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
 | `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
+| `float` | Physics objects | The volcano's lava platforms, 270 m from both players: at the same stamp, the guest's are within 7 cm in height and 0.002 in tilt of the host's (they were 2.25 s out of phase before). |
+| `float-weight` | A player standing on a remote-driven platform | The guest stands on a lava platform its machine moves where the host's is: carried 18 m in 2 s with it; each machine sends the other player's weight to its platform (counters); both slide into the lava as the platform sinks, as in the stock game. |
 
 | | |
 |---|---|
@@ -348,11 +363,8 @@ public IP.
 
 ## 6. Known limits
 
-- Levels follow each player's position, not the other machines' (1.6: loading one more level can
-  crash the game). Players of one region stand in the same levels; an object of a level only a
-  distant player has loaded is drawn once the viewer gets there.
-- Objects that react to a player's weight (floating platforms that tilt) react to the local player
-  only; their cycles and the doors and elevators are shared (1.6).
+- Levels follow each player's position (1.6): a machine never loads the levels of a player who is
+  elsewhere.
 - Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
   128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
@@ -397,6 +409,10 @@ public IP.
   Shared story progress (task nodes, on join and live, host setting). Remote players in their own
   outfit. Test commands `log-pose-own`, `log-pose-copy`, `log-tasks`, `close-task`; scenarios
   `pose-all`, `progress`.
+- **2026-10-14:** physics objects of the level follow their authority (named by entity and rank,
+  rigid body set every frame), floating platforms take remote players' weight; NPC bones
+  computed on the spot when stale instead of leaving the pose out. Scenarios `float`,
+  `float-weight`; `log-levels` in `smoke` and `far`.
 - **2026-10-14:** world objects kept alike: cycles follow the host's clocks (sync-info), doors open
   for remote players, elevator trips run on every machine; cutscenes shared within a region.
   Copies and part-trackers of a leaving level are dropped before it goes (two crashes at a level

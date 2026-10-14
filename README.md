@@ -41,8 +41,8 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 - **Shared story:** a mission completed by one player is completed for everybody, with its
   reward; a player who joins catches up with the others; cutscenes play for the players together
   (the host can turn it off).
-- **Same world:** doors open for whoever stands at them, elevators move for everyone, and moving
-  platforms are in the same place on every screen.
+- **Same world:** doors open for whoever stands at them, elevators move for everyone, moving and
+  floating platforms are in the same place on every screen, and they feel every player's weight.
 - **Administration for the host:** kick or ban a player, teleport players to you, allow or forbid
   cheats for guests and players hitting each other, share story progress and your time of day,
   stop the server.
