@@ -26,7 +26,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   7777); guests get slots 1 to 7. Every message from a guest goes to the host, which relays it.
 - **Transport:** TCP with `TCP_NODELAY`, non-blocking sockets pumped once per frame from GOAL
   (`pc-mp-update`), no thread. A frame is `[u16 length][u8 type][payload]`; malformed or
-  oversized frames drop the peer. Message types: `HELLO` (protocol version, now 2), `WELCOME`
+  oversized frames drop the peer. Message types: `HELLO` (protocol version, now 3), `WELCOME`
   (slot), `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`.
 - **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
   health, flags, character and outfit, body segments, driven vehicle, passenger seat, name, color,
@@ -34,10 +34,12 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 - **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
   player: `[u8 source][u32 source time][u16 count][states]`. Ids carry the owner's slot in the
   top byte and the owner's process pid below.
-- **Poses:** sent with each object batch, `[u8 source][u32 source time][u16 count]` then one entry
-  per object: `[u32 id][u16 bones][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
+- **Poses:** `[u8 source][u32 source time][u16 count]` then one entry per object:
+  `[u32 id][u16 bones, bit 15 = effects][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
   translation to 1 mm, per-axis scale, relative to the object's frame), each emitter 20 bytes,
-  each sound 40 bytes. Split over several frames of at most 16 KB. About 1.3 KB per Jak pose.
+  each sound 40 bytes. Split over several frames of at most 16 KB. Every object of a batch is sent
+  with its effects at 15 Hz; between batches, the player, its props and the NPCs within 40 m of
+  another player are sent every frame, bones only. About 1.3 KB per Jak pose, 0.6 KB per NPC.
 - **Events:** `mp-event` (80 bytes), routed by slot (`to = -1` for everyone). The kinds are
   defined in GOAL (`mp-event-kind`); the C++ side only stamps the sender.
 - **Timeouts:** 15 s of silence drops a peer, 8 s to connect. The pump runs from the per-frame
@@ -64,7 +66,7 @@ near it, and a guest far from every authority for itself and the guests near it 
 | Time of day | the host | followed by the guests |
 | World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player (a lift must answer the player standing on it) | kept alike (1.6): cycles follow the host's clocks, doors open for any player in front of them, an elevator trip started on one machine runs on all |
 | Physics objects of the level (floating platforms, objects on physics) | the region's authority, with the weight of every player on them | each machine's own object of that entity, moved every frame where the authority has it, still carrying its player (1.6) |
-| Levels | every machine, around its own player | players in one place load the same levels (1.6) |
+| Levels | every machine, around its own player | players in one place load the same levels; a player elsewhere is still drawn where it stands (1.6) |
 | Cutscenes | where they start | the same cutscene, for the players of that region (1.6) |
 
 A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-group from the
@@ -92,7 +94,10 @@ sends their hits.
 
 - **Poses.** With each 15 Hz batch, a player sends the bones of its own model, of its props and of
   every NPC it sends, relative to each object's frame (the root position and orientation of its
-  state, without scale). While an NPC is sent, its joint math runs in full whatever its level of
+  state, without scale). Between batches, every frame, it sends the bones again for its own model,
+  its props and the NPCs within 40 m of another player (`mp-send-near-poses`): their copies are
+  drawn from every frame of the owner's, not blended between poses 66 ms apart. The objects of a
+  batch are kept as handles, so one that died meanwhile is skipped. While an NPC is sent, its joint math runs in full whatever its level of
   detail on the owner's screen (`force-math`, set by `mp-force-math` and cleared once it is no
   longer sent), since another player may see it up close. An object its owner does not draw (a
   hidden prop, a player during a teleport) sends no pose: its copy is hidden too (`log`: `poses
@@ -161,14 +166,18 @@ the union. Host setting **Share story progress** (on by default).
   puppet standing on one sends it (with the target mask the handler checks set for the call).
 - **Levels.** Level loading follows each player's position: players in one place load the same
   levels (`log-levels` lists the same five levels on both machines in `smoke` and `far`), a
-  player elsewhere loads those of its place. A machine does not load the levels of a player who is
-  elsewhere: with no free bank of the level heap the game stops on purpose (`break!` after "could
-  not find free small-edge bank in the level-group heap", seen in a test), and copies of a distant
-  player's objects are out of view anyway.
+  player elsewhere loads those of its place. The level heap holds one place: 18 chunks, a large
+  level takes 12 of them, a city center the two middle ones (`load-begin`); loading the levels of
+  another place on top stops the game on purpose (`break!` after "could not find free small-edge
+  bank in the level-group heap", seen in a test). What a player sees of another place is drawn
+  anyway: the other player's model is resident and drawn wherever it stands (the guest 570 m away
+  in a level the host has not loaded is drawn on the host in `far`), the copies of its objects
+  whose art is loaded here too, over the low-detail view the game keeps of distant places.
 - **Levels leaving.** A level that leaves kills its entities and their effects, then its memory is
-  reused. Before that (`level` `deactivate`, wrapped), the copies drawn with its art, the
-  part-trackers on copies playing its particle groups and the skeleton cache are dropped: they
-  would point into freed memory (two crashes at a level unload in testing before this).
+  reused. Before that (`level` `deactivate`, wrapped; `unload!` calls it, also for a level only
+  loaded), the copies drawn with its art, the part-trackers on copies playing its particle groups
+  and the skeleton cache are dropped: they would point into freed memory (three crashes at a level
+  unload in testing before this, the last one from a level only loaded; none in 30 unloads since).
 
 ## 2. Requirements and how they are met
 
@@ -241,7 +250,8 @@ calls `mods-menu-update` first.
 
 ### 4.2 Puppets
 
-An `mp-puppet` uses Jak's model in the remote player's outfit (sent in the character byte, picked
+An `mp-puppet` is drawn wherever its player stands, even in a level not loaded here. It uses
+Jak's model in the remote player's outfit (sent in the character byte, picked
 like `target-skel-group` does, the local outfit when that model is not loaded here) or Daxter's
 (`skel-sidekick`), shows the body segments the remote player shows, and takes the remote player's
 exact pose (1.4). It also plays the remote player's animation by index, for the animation's
@@ -341,9 +351,9 @@ Scenarios and what they verified (2026-10-14, Spargus and the volcano, every one
 | `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
 | `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
-| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each: Daxter median 0.7 to 0.8 mm (largest 7.8 mm), gun 0.2 mm, buggy 0.5 mm (1.0 mm), wheel 0.0 mm; a running NPC whose bones move 37.5 to 50.7 mm per frame: median 3.0 to 4.3 mm, largest 2.5 to 5.0 cm, about one frame of its motion (the curve between two 15 Hz poses drawn as a straight blend, and the two machines' frames out of phase); no pose skipped. |
+| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each, two runs: a running NPC whose bones move 37 to 48 mm per frame, median 1.7 and 2.2 mm, largest 3.8 and 18.9 mm; Daxter 0.6 mm (largest 2.0 mm); gun 0.2 mm; buggy 0.5 to 0.6 mm (1.2 mm); wheel 0.0 mm; no pose skipped. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
-| `far` | Authority | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host); back next to the host, asleep again. |
+| `far` | Authority, distant players | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there, in a level the host has not loaded; back next to the host, asleep again. Same five levels on both machines when together. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
 | `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
@@ -363,13 +373,14 @@ public IP.
 
 ## 6. Known limits
 
-- Levels follow each player's position (1.6): a machine never loads the levels of a player who is
-  elsewhere.
+- The level heap holds one place (1.6): a machine loads the levels around its own player only,
+  and shows another place through the game's own low-detail view of it.
 - Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
   128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
-- Bandwidth: about 1.3 KB per Jak pose and 0.6 KB per NPC pose, 15 times a second; a crowd of 40
-  NPCs is about 0.4 MB/s from the authority to each player.
+- Bandwidth to each other player: about 200 KB/s for a player's model, Daxter and gun at 60
+  frames a second, plus 36 KB/s per NPC within 40 m of that player and 9 KB/s per NPC farther
+  (15 Hz); with a crowd of 10 NPCs nearby and 30 farther, about 0.85 MB/s.
 - Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
@@ -409,6 +420,10 @@ public IP.
   Shared story progress (task nodes, on join and live, host setting). Remote players in their own
   outfit. Test commands `log-pose-own`, `log-pose-copy`, `log-tasks`, `close-task`; scenarios
   `pose-all`, `progress`.
+- **2026-10-14:** poses sent every frame for the player, its props and the NPCs near another
+  player (the batch still carries every object and the effects at 15 Hz; protocol 3): a running
+  NPC's copy within about 2 mm of the owner (median). Remote players drawn wherever they stand. The level cleanup
+  also runs for a level only loaded (a crash at its unload).
 - **2026-10-14:** physics objects of the level follow their authority (named by entity and rank,
   rigid body set every frame), floating platforms take remote players' weight; NPC bones
   computed on the spot when stale instead of leaving the pose out. Scenarios `float`,
