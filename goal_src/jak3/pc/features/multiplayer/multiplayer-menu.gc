@@ -410,7 +410,7 @@
     (new 'static 'menu-generic-carousel-option
       :name (text-id progress-mp-color)
       :items (new 'static 'boxed-array :type text-id
-               (text-id progress-mp-color-natural)
+               (text-id progress-mp-color-white)
                (text-id progress-mp-color-red)
                (text-id progress-mp-color-blue)
                (text-id progress-mp-color-green)
@@ -419,7 +419,7 @@
                (text-id progress-mp-color-orange)
                (text-id progress-mp-color-cyan)
                (text-id progress-mp-color-pink)
-               (text-id progress-mp-color-shadow)
+               (text-id progress-mp-color-gray)
                )
       :get-item-index-fn (lambda () (-> *mp-config* color))
       :on-confirm (lambda ((index int) (the-progress progress))
@@ -492,6 +492,19 @@
                       (if val
                           (logior! *mp-world* (mp-world-flag cheats))
                           (logclear! *mp-world* (mp-world-flag cheats))
+                          )
+                      (none)
+                      )
+        )
+      (new 'static 'menu-generic-boolean-option
+        :name (text-id progress-mp-pvp)
+        :truthy-text (text-id progress-on)
+        :falsey-text (text-id progress-off)
+        :get-value-fn (lambda () (logtest? *mp-world* (mp-world-flag pvp)))
+        :on-confirm (lambda ((val symbol))
+                      (if val
+                          (logior! *mp-world* (mp-world-flag pvp))
+                          (logclear! *mp-world* (mp-world-flag pvp))
                           )
                       (none)
                       )

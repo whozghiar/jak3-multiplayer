@@ -279,8 +279,9 @@
   "150f": "Téléporter tout le monde vers moi",
   "1510": "Triches pour les invités",
   "1511": "Partager mon heure du jour",
+  "1513": "Les joueurs peuvent se frapper",
   "1512": "Arrêter le serveur",
-  "1520": "Naturel",
+  "1520": "Blanc",
   "1521": "Rouge",
   "1522": "Bleu",
   "1523": "Vert",
@@ -289,5 +290,5 @@
   "1526": "Orange",
   "1527": "Cyan",
   "1528": "Rose",
-  "1529": "Ombre"
+  "1529": "Gris"
 }

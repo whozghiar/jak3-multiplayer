@@ -1631,7 +1631,8 @@
   (progress-mp-allow-cheats #x1510)
   (progress-mp-sync-time #x1511)
   (progress-mp-stop #x1512)
-  (progress-mp-color-natural #x1520)
+  (progress-mp-pvp #x1513)
+  (progress-mp-color-white #x1520)
   (progress-mp-color-red #x1521)
   (progress-mp-color-blue #x1522)
   (progress-mp-color-green #x1523)
@@ -1640,7 +1641,7 @@
   (progress-mp-color-orange #x1526)
   (progress-mp-color-cyan #x1527)
   (progress-mp-color-pink #x1528)
-  (progress-mp-color-shadow #x1529)
+  (progress-mp-color-gray #x1529)
   )
 ;; ---text-id
 

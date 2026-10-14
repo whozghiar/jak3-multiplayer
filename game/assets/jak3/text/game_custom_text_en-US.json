@@ -279,8 +279,9 @@
   "150f": "Teleport everyone to me",
   "1510": "Cheats for guests",
   "1511": "Share my time of day",
+  "1513": "Players can hit each other",
   "1512": "Stop the server",
-  "1520": "Natural",
+  "1520": "White",
   "1521": "Red",
   "1522": "Blue",
   "1523": "Green",
@@ -289,5 +290,5 @@
   "1526": "Orange",
   "1527": "Cyan",
   "1528": "Pink",
-  "1529": "Shadow"
+  "1529": "Gray"
 }
