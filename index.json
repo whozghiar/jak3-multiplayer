@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceName": "Jak 3 Multiplayer Source",
+  "lastUpdated": "2026-10-14T21:00:55Z",
+  "mods": {
+    "multiplayer": {
+      "displayName": "Jak 3 Multiplayer",
+      "description": "A different way to play multiplayer (See FUNKY_DELIRE one)",
+      "authors": [
+        "whozghiar"
+      ],
+      "tags": [
+        "gameplay",
+        "custom-engine"
+      ],
+      "supportedGames": [
+        "jak3"
+      ],
+      "websiteUrl": "https://github.com/whozghiar/jak3-multiplayer",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "publishedDate": "2026-10-14T21:00:55Z",
+          "supportedGames": [
+            "jak3"
+          ],
+          "assets": {
+            "windows": "https://github.com/whozghiar/jak3-multiplayer/releases/download/multiplayer-v1.0.0/windows-multiplayer-v1.0.0.zip",
+            "linux": "https://github.com/whozghiar/jak3-multiplayer/releases/download/multiplayer-v1.0.0/linux-multiplayer-v1.0.0.zip"
+          },
+          "checksums": {
+            "windows": "7fd296075b6e81f37c8f87f8bbf4d2f00ee827920a1ba9631e0540debcdc0033",
+            "linux": "d810f7a3e98f551263deb3e951a5dd2b833e8aab9c358de5981548fa8ec9e3a2"
+          }
+        }
+      ]
+    }
+  },
+  "texturePacks": {}
+}
