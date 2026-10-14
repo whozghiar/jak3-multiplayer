@@ -4,6 +4,7 @@
 1 color 1
 38 host 0.0.0.0:7777
 55 log
+60 log-look 1
 62 log
 63 screenshot hit
 64 log

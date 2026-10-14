@@ -8,6 +8,7 @@
 58 log
 59 face-player 0
 60 log
+60 log-look 0
 61 press square 200
 62 log
 62 screenshot punch

@@ -6,8 +6,10 @@
 55 goto-player 0 7
 56 face-player 0
 57 log
+57 log-copies 0
 60 screenshot buggy
 62 goto-player 0 2
 63 press triangle 100
 66 log
+66 log-copies 0
 68 screenshot stolen

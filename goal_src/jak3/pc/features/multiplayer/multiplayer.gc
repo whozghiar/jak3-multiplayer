@@ -662,6 +662,7 @@
    (last-attack uint32)        ;; id of the last attack forwarded, so one blow counts once
    (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the player's model emits (mp-play-emitters)
    (fx-tracker handle MP_FX_TRACKERS)
+   (pose-time  int32)          ;; owner's time (tenths of a ms) of the pose laid last (test logs)
    )
   )
 
@@ -1490,6 +1491,39 @@
   (none)
   )
 
+;; Hits taken from other players and the reaction seen after each, for the test log.
+(deftype mp-hit-stats (structure)
+  ((taken   int32)
+   (reacted int32)          ;; hits followed by the stock hit reaction state (target-hit)
+   (watch?  symbol)         ;; the last hit's reaction is being watched
+   (seen?   symbol)         ;; ... and was seen
+   (pushed  float)          ;; how far the last hit pushed the player
+   (from    vector :inline) ;; where the player stood when hit
+   (time    time-frame)
+   )
+  )
+
+(define *mp-hit-stats* (new 'global 'mp-hit-stats))
+(set! (-> *mp-hit-stats* watch?) #f)
+
+(defun mp-watch-hit-reaction ()
+  "For 1.5 s after a hit taken from another player: note whether the player went through the stock
+   hit reaction (target-hit) and how far it was pushed."
+  (let ((hs *mp-hit-stats*))
+    (when (and (-> hs watch?) *target*)
+      (set! (-> hs pushed) (fmax (-> hs pushed) (vector-vector-xz-distance (-> *target* control trans) (-> hs from))))
+      (when (and (= (mp-target-state-name) 'target-hit) (not (-> hs seen?)))
+        (set! (-> hs seen?) #t)
+        (+! (-> hs reacted) 1)
+        )
+      (if (time-elapsed? (-> hs time) (seconds 1.5))
+          (set! (-> hs watch?) #f)
+          )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-take-hit mp-manager ((from vector) (damage float))
   "Take a hit dealt on another machine: the damage and the stock hit reaction, pushed away from
    `from` (backwards when #f). At most one every half second. The attack always carries a vector:
@@ -1527,6 +1561,15 @@
            )
           )
         )
+      )
+    ;; the reaction is watched for the test log (mp-watch-hit-reaction)
+    (let ((hs *mp-hit-stats*))
+      (+! (-> hs taken) 1)
+      (set! (-> hs watch?) #t)
+      (set! (-> hs seen?) #f)
+      (set! (-> hs pushed) 0.0)
+      (vector-copy! (-> hs from) (-> *target* control trans))
+      (set-time! (-> hs time))
       )
     )
   (none)
@@ -1975,6 +2018,7 @@
       )
     )
   (mp-world-update)
+  (mp-watch-hit-reaction)
   (mp-test-own-flush)
   (none)
   )
@@ -2031,6 +2075,15 @@
     )
   )
 
+;; Name markers drawn, for the test log (log-look): the color is shown there, not on the model.
+(deftype mp-marker-stats (structure)
+  ((drawn int32) ;; color squares drawn before a name
+   (color rgba)  ;; color of the last one
+   )
+  )
+
+(define *mp-marker-stats* (new 'global 'mp-marker-stats))
+
 (defun mp-draw-nameplate ((buf dma-buffer) (slot int))
   "Name and health bar over a remote player standing in a level loaded here."
   (let ((st (-> *mp-players* state slot))
@@ -2070,6 +2123,8 @@
           (let ((width (mp-draw-text buf *mp-temp-string* x (+ y -14) 0.45)))
             (draw-sprite2d-xy buf (- x (+ (/ width 2) 10)) (+ y -12) 7 7 (new 'static 'rgba :a #x80) #x3fffff)
             (draw-sprite2d-xy buf (- x (+ (/ width 2) 9)) (+ y -11) 5 5 (mp-color-rgba (-> st color)) #x3fffff)
+            (+! (-> *mp-marker-stats* drawn) 1)
+            (set! (-> *mp-marker-stats* color) (mp-color-rgba (-> st color)))
             )
           )
         )

@@ -6,7 +6,9 @@
 56 goto-player 0 4
 57 face-player 0
 58 log
+58 log-copies 0
 60 screenshot dax
 63 screenshot gun
 63 log
+63 log-copies 0
 70 screenshot after

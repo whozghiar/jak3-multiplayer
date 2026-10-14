@@ -18,7 +18,7 @@
 ;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
 ;;   log-pose [slot] | log-me                                bones of a player's model; own position
-;;   log-pose-own <npc|daxter|gun|vehicle|wheel> [frames]    bones of one of our objects, each frame
+;;   log-pose-own <player|npc|daxter|gun|vehicle|wheel> [frames] bones of our model or object, each frame
 ;;   log-pose-copy <slot> <skeleton name|*>                  bones of the copies of player slot's objects
 ;;   log-tasks | close-task [n]                              story progress; close the first open node(s)
 ;;   log-sync                                                phase of a test cycle (host clock sync)
@@ -26,6 +26,8 @@
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
 ;;   far-levels <0|1>                                        load distant players' levels (default 1)
 ;;   log-shaders                                             texture shader lists intact, level heaps
+;;   log-look <slot>                                         a player's color: model untinted, minimap, name marker
+;;   log-copies <slot>                                       every object of a player received here, drawn or not
 ;;   goto-float | log-float                                  floating platforms (volcano)
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
@@ -154,9 +156,13 @@
             label
             id
             i
-            (- (-> pos x) (-> base x))
-            (- (-> pos y) (-> base y))
-            (- (-> pos z) (-> base z))
+            ;; homogeneous: a few joints are sometimes computed with w a little off 1 (0.9992 seen on
+            ;; the driver's joints 48 and 64); at world coordinates of millions of units, reading
+            ;; their translation alone moves them by meters. The pose sent, relative to the object's
+            ;; frame, takes w in: so does this offset.
+            (- (-> pos x) (* (-> pos w) (-> base x)))
+            (- (-> pos y) (* (-> pos w) (-> base y)))
+            (- (-> pos z) (* (-> pos w) (-> base z)))
             )
           )
         )
@@ -191,10 +197,20 @@
       (let* ((kind (-> rq kind i))
              (proc (mp-test-own-object kind))
              )
-        (if proc
-            (mp-test-print-bones kind (logand (-> proc pid) #xffffff) proc (pc-mp-clock -1))
-            (format 0 "[mp-test] no own ~S~%" kind)
+        (cond
+          ((not proc)
+           (format 0 "[mp-test] no own ~S~%" kind)
+           )
+          ;; bones the batch would not send this frame (a level of detail that leaves some stale,
+          ;; not drawn): not what the copy shows, not compared
+          ((not (mp-pose-ready? proc (string= kind "npc")))
+           (format 0 "[mp-test] own ~S not sent this frame~%" kind)
+           )
+          (else
+            ;; the player's model is named #xffffff on both machines (its pose id)
+            (mp-test-print-bones kind (if (string= kind "player") #xffffff (logand (-> proc pid) #xffffff)) proc (pc-mp-clock -1))
             )
+          )
         ;; keep the requests with frames left, in order
         (when (> (-> rq frames i) 1)
           (copy-string<-string (-> rq kind kept) kind)
@@ -258,6 +274,51 @@
   (none)
   )
 
+(defun mp-test-list-copies ((slot int))
+  "Every object of player `slot` received here (log lists 8 at most): its skeleton and id, whether its
+   owner hides it, whether its copy is drawn and whether its skeleton and art group are in levels
+   loaded here."
+  (let ((ws *mp-world-state*)
+        (n 0)
+        )
+    (dotimes (i (-> *mp-actors-in* count))
+      (let ((st (-> *mp-actors-in* state i)))
+        (when (and (nonzero? (-> st id)) (= (the-as int (shr (-> st id) 24)) slot))
+          (let* ((idx (mp-replica-index (-> st id)))
+                 (rep (if (>= idx 0)
+                          (the-as process-drawable (handle->process (-> ws replica idx)))
+                          )
+                      )
+                 )
+            (string<-charp *mp-temp-string* (-> st skel))
+            (format
+              0
+              "[mp-test] copy ~D ~S id ~D owner-hides ~A drawn ~A art ~A~%"
+              slot
+              *mp-temp-string*
+              (logand (-> st id) #xffffff)
+              ;; the owner does not draw it (parked traffic...): its copy is hidden too
+              (logtest? (-> st flags) (mp-actor-flag hidden))
+              (and rep (nonzero? (-> rep draw)) (not (logtest? (-> rep draw status) (draw-control-status no-draw))))
+              ;; its skeleton and the art group it draws are both in levels loaded here (levels only
+              ;; loaded included), as mp-replica-spawn needs them
+              (let ((sg (the-as skeleton-group (mp-art-group-get *mp-temp-string* (the-as (pointer level) #f)))))
+                (if (and sg (type? sg skeleton-group) (mp-art-group-get (-> sg art-group-name) (the-as (pointer level) #f)))
+                    #t
+                    #f
+                    )
+                )
+              )
+            (+! n 1)
+            )
+          )
+        )
+      )
+    (format 0 "[mp-test] copies of ~D: ~D~%" slot n)
+    )
+  (none)
+  )
+
 (defun mp-test-own-object ((kind string))
   "One of the objects we send: the NPC nearest to player 1, Daxter, the gun, the vehicle driven or
    its first wheel."
@@ -286,6 +347,9 @@
      )
     ((not *target*)
      (the-as process-drawable #f)
+     )
+    ((string= kind "player")
+     *target*
      )
     ((string= kind "daxter")
      (the-as process-drawable (ppointer->process (-> *target* sidekick)))
@@ -334,6 +398,21 @@
         (best-dist (meters 1000))
         (found 0)
         )
+    ;; the player's own model: its puppet here
+    (when (string= name "player")
+      (let* ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+             (puppet (if (and manager (>= slot 0) (< slot MP_MAX_PLAYERS))
+                         (the-as mp-puppet (handle->process (-> manager puppets slot)))
+                         )
+                     )
+             )
+        (if puppet
+            (mp-test-print-bones name #xffffff puppet (-> puppet pose-time))
+            (format 0 "[mp-test] no puppet ~D~%" slot)
+            )
+        )
+      (return 0)
+      )
     (format (clear *mp-temp-string*) "skel-~S" name)
     (dotimes (i (-> ws replica-count))
       (let ((rep (the-as mp-replica (handle->process (-> ws replica i)))))
@@ -552,6 +631,13 @@
     (-> *mp-fx* total-effects-shown)
     (-> *mp-fx* total-shots-sent)
     (-> *mp-fx* total-shots-shown)
+    )
+  (format
+    0
+    "[mp-test] pvp hits taken ~D reacted ~D last pushed ~m~%"
+    (-> *mp-hit-stats* taken)
+    (-> *mp-hit-stats* reacted)
+    (-> *mp-hit-stats* pushed)
     )
   ;; the local props sent with the player
   (when (and *target* (nonzero? (-> *target* gun)))
@@ -942,6 +1028,51 @@
          (mp-test-word)
          (let ((name (new 'global 'string 32 (-> *mp-test* word))))
            (process-spawn scene-player :init scene-player-init name #t (the-as string #f) :name "scene-player")
+           )
+         )
+        ((string= cmd "log-copies")
+         (mp-test-list-copies (mp-test-int))
+         )
+        ((string= cmd "log-look")
+         ;; how player slot's color shows here: not on its model (color-mult 1, emissive 0), on its
+         ;; minimap icon and on the marker before its name
+         (let* ((slot (mp-test-int))
+                (manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+                (puppet (if (and manager (>= slot 0) (< slot MP_MAX_PLAYERS))
+                            (the-as mp-puppet (handle->process (-> manager puppets slot)))
+                            )
+                        )
+                (st (mp-remote-state slot))
+                )
+           (cond
+             ((and puppet st (nonzero? (-> puppet draw)))
+              (format
+                0
+                "[mp-test] look model color-mult ~,,3f ~,,3f ~,,3f emissive ~,,3f ~,,3f ~,,3f~%"
+                (-> puppet draw color-mult x)
+                (-> puppet draw color-mult y)
+                (-> puppet draw color-mult z)
+                (-> puppet draw color-emissive x)
+                (-> puppet draw color-emissive y)
+                (-> puppet draw color-emissive z)
+                )
+              (format
+                0
+                "[mp-test] look ~D player color #x~X minimap #x~X markers drawn ~D last #x~X~%"
+                slot
+                (mp-color-rgba (-> st color))
+                (if (-> puppet minimap)
+                    (-> puppet minimap class color)
+                    0
+                    )
+                (-> *mp-marker-stats* drawn)
+                (-> *mp-marker-stats* color)
+                )
+              )
+             (else
+               (format 0 "[mp-test] look ~D no puppet~%" slot)
+               )
+             )
            )
          )
         ((string= cmd "far-levels")

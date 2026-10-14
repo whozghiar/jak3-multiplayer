@@ -9,9 +9,11 @@
 58 log-pose-own npc 62
 58 log-pose-own daxter 62
 58 log-pose-own gun 62
+58 log-pose-own player 62
 60 log
 62 vehicle 15
 68 log-pose-own npc 62
 68 log-pose-own vehicle 62
 68 log-pose-own wheel 62
+68 log-pose-own player 62
 70 log

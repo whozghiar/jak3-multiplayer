@@ -21,7 +21,8 @@ from pathlib import Path
 
 HEAD = re.compile(r"\[mp-test\] (\S+) (\d+) bones (\d+) t (-?\d+(?:\.\d+)?)")
 BONE = re.compile(r"\[mp-test\] (\S+) (\d+) bone (\d+) offset (\S+) (\S+) (\S+)")
-PAIRS = (("npc", "*"), ("daxter", "sidekick"), ("gun", "gun"), ("vehicle", "v-toad"), ("wheel", "v-toad-wheel"))
+PAIRS = (("player", "player"), ("npc", "*"), ("daxter", "sidekick"), ("gun", "gun"), ("vehicle", "v-toad"),
+         ("wheel", "v-toad-wheel"))
 
 Sample = tuple[float, dict[int, tuple[float, ...]]]
 

@@ -67,6 +67,9 @@ def prepare_instance(folder: Path, index: int) -> None:
         text = re.sub(r"\(game-size [^)]*\)", f"(game-size {WINDOW_W} {WINDOW_H})", text)
         text = re.sub(r"\(ignore-controller-win-unfocused\? [^)]*\)",
                       "(ignore-controller-win-unfocused? #t)", text)
+        # no vsync: with the display asleep or the session locked, a frame swap waiting for the
+        # screen blocks the game (its frame limiter keeps 60 frames a second)
+        text = re.sub(r"\(vsync [^)]*\)", "(vsync #f)", text)
         pc.write_text(text, encoding="utf-8")
     display = settings / "display-settings.json"
     data = json.loads(display.read_text(encoding="utf-8")) if display.exists() else {"version": "1.2"}
@@ -99,6 +102,10 @@ def main() -> int:
         folder = out / name
         prepare_instance(folder, index)
         env = dict(os.environ, MP_TEST_SCRIPT=str(script))
+        # no real controller: the scripts drive pad 0 themselves (libpad), and a controller gone to
+        # sleep once hung every instance in SDL's controller detection
+        for backend in ("HIDAPI", "RAWINPUT", "WGI", "XINPUT", "DIRECTINPUT", "GAMEINPUT"):
+            env[f"SDL_JOYSTICK_{backend}"] = "0"
         log = open(folder / "gk.log", "w", encoding="utf-8", errors="replace")
         cmd = [str(GK), "-v", "--game", "jak3", "--config-path", str(folder),
                "--", "-boot", "-fakeiso", "-debug"]

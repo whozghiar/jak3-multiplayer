@@ -9,7 +9,10 @@
 52 log-shaders
 70 log-levels
 70 log-shaders
+70 log-copies 1
+75 log-copies 1
 80 log
+80 log-copies 1
 80 log-levels
 80 log-shaders
 110 log

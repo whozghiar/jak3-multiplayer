@@ -342,9 +342,18 @@ host's bones interpolated at its stamp. The host reads its bones from the manage
 reads them (the test hook runs after the frame's joint math, one frame later); a copy is stamped
 with the time of the pose laid on it.
 
+`python scripts/mp-test/check_results.py [scenario ...]` then checks what each scenario is meant
+to show, one PASS or FAIL line per check with the measured values (both instances ran to the end,
+no pose left out, the hit and its reaction, the color marker, the copies drawn, the poses within a
+few millimeters, the platforms within 10 cm, the cycles within a frame...). It exits with 1 when a
+check fails.
+
 The runner starts one game per script of `scripts/mp-test/scenarios/<scenario>/`, each with its
 own `--config-path` folder (a copy of the user's saves and settings, small window, side by side,
-controller ignored when unfocused) and the `MP_TEST_SCRIPT` environment variable. The debug boot
+controller ignored when unfocused, vsync off) and the `MP_TEST_SCRIPT` environment variable. Real
+controllers are left out (`SDL_JOYSTICK_<backend>=0`): the scripts drive pad 0 themselves, and a
+controller gone to sleep once hung every instance in SDL's controller detection, halfway through a
+round of scenarios. The debug boot
 loads save slot 1, so both games start in game at the same place. When the scripts are done, it
 stops them and writes `out/mp-test/<scenario>/summary.txt` (every `[mp-test]` and `[multiplayer]`
 line) and `screenshots/<instance>-<name>.png` (rendered by the game itself).
@@ -360,7 +369,9 @@ A script line is `<seconds> <command>`:
 | `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
 | `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
 | `gun`, `vehicle <type>`, `cheat <name>`, `zone <n>`, `continue <name>` | Gameplay helpers. |
-| `screenshot <name>`, `log` | Evidence: the log shows the session, the local player, the role (authority) and the own NPCs awake and asleep, every remote player and puppet, the objects sent, received and drawn, the poses sent and applied, the emitters and sounds sent and replayed, the effects and shots sent and replayed. |
+| `screenshot <name>`, `log` | Evidence: the log shows the session, the local player, the role (authority) and the own NPCs awake and asleep, every remote player and puppet, the objects sent, received and drawn, the poses sent and applied, the emitters and sounds sent and replayed, the effects and shots sent and replayed, the hits taken from players with the stock reaction seen after them (`target-hit`) and how far the last one pushed. |
+| `log-look <slot>` | How player `slot`'s color shows here: its model's color multiplier and emissive color (1 and 0: not tinted), its minimap icon's color, the color markers drawn before names. |
+| `log-copies <slot>` | Every object of player `slot` received here (`log` lists 8 at most): its skeleton and id, whether its owner hides it (its copy is hidden too), whether its copy is drawn, and whether its skeleton and art group are in levels loaded here. |
 | `log-pose [slot]` | Four bones of player `slot`'s puppet relative to its root, or of the own model without a slot: the owner's line and the other machine's line compare the pose with its copy. |
 | `log-part <index>` | Where entry `index` of `*part-id-table*` lives (which level heap). |
 | `log-me` | One line: own position, speed and state (fine-grained probes). |
@@ -373,12 +384,12 @@ A script line is `<seconds> <command>`:
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load distant players' levels (default 1); 0 for a counter-test. |
 
-Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change, 20 of 20 ended normally, no crash, `log-shaders` 0 broken links wherever it ran):
+Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 141 checks passed, 0 failed):
 
 | Scenario | Checks | Result |
 |---|---|---|
 | `smoke` | Host, join, puppets, names, health bars | Both see each other; poses, sounds sent and applied both ways. |
-| `pvp` | A guest's punch on the host | Host health 8 to 5, pushed back 3.1 m, hit reaction seen by the guest; the guest stays in place (0.2 m). |
+| `pvp` | A guest's punch on the host; the color marker | The host takes 1 hit and goes through the stock hit reaction (`target-hit`, counted by `log`), pushed back 3.04 m, health 8 to 5, seen at 5 by the guest. `log-look` on both machines: the other player's model not tinted (color multiplier 1, emissive 0), its minimap icon and the marker before its name in its color (about 1000 markers drawn). |
 | `pvp-probe` | The attacker's position and state every 0.1 s around the punch | The punch lunge stops on the host's hurtbox. |
 | `npc` | Host NPCs on the guest | 13 replicas drawn, the guest's own NPCs (8 to 10 around it) asleep. |
 | `npc-hit` | A guest's punch on a host NPC | The host applies both blows to its citizen (`player 1 hit ... punch`); in an earlier run the citizen struck back and the guest lost 2 health. |
@@ -387,10 +398,10 @@ Scenarios and what they verified (2026-10-14, Spargus, Haven City and the volcan
 | `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
 | `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
-| `pose-all` | Every object type at the same moment: NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each, two runs: a running NPC whose bones move 40 to 51 mm per frame, median 0.8 and 0.9 mm, largest 1.4 and 1.6 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). |
+| `pose-all` | Every object type at the same moment: the player's model, NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each (122 for the player, on foot then driving), three runs: the player's model median 0.7 to 0.8 mm, largest 1.6 to 1.8 mm; a running NPC whose bones move 37 to 54 mm per frame, median 0.8 to 1.2 mm, largest 1.2 to 2.7 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). Two joints of the driver once read 1.5 m off: their matrix had `w` 0.9992 and the log read the translation alone, at 9.2 million units from the origin; the pose sent was right (traced in the runtime), the log now takes `w` in. |
 | `progress` | Story progress | The node the host closed before the guest joined reaches it on join, the one closed later live: 3 closed nodes and the same open ones on both. |
 | `far` | Authority, distant players and their levels | Next to the host the guest shows its NPCs (10 own asleep); 570 m away it simulates its own (37 awake, 6 sent to the host) and the host draws it there. The host loads the guest's `wascityb` in the free top of `wascitya`'s heap, not displayed (`far #t`, 2 entries put back by the sandbox); the guest loads the host's `wascitya` in `waswide`'s heap (10 put back) and, back next to the host, unloads that copy and loads `wascitya` as its own. No crash at any of these unloads; `log-shaders`: 0 broken links. The error "object #x147d21 is not a valid object" printed when the guest's `wascityb` unloads is the stock game's: it appears with `far-levels 0` too. |
-| `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps: it draws 4 Crimson Guards and a Haven car of the guest, 6 of the 9 objects received (the barge is in `ctyport`, not a borrow level; a citizen's level waited for a level slot kept for our place). Back in Spargus, the four levels unload cleanly. |
+| `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus. The host loads `ctywide` in `wascitya`'s heap (2226 entries put back), then the guest's borrow levels `ctypesa`, `ctycara`, `ctycarb` in its borrow heaps, and draws the guest's guards, cars and bikes from them (1 to 6 depending on who passes by; `log-copies 1` shows each object, drawn or not, and whether its skeleton and art group are loaded here). Every object the guest draws whose art is loaded here is drawn, the parked traffic the guest hides is hidden here too; the barges (`ctyport`) and citizens (`ctypepa`, `ctypepb`) are not: those levels are not loaded, the host keeps a level slot for its own place. Back in Spargus, the four levels unload cleanly. |
 | `progress-late` | A guest 40 missions behind joins | It closes the 40 nodes on joining (1 to 42 closed, like the host), gets their rewards (health 8 to 10), new mission markers on its minimap, and plays on. |
 | `world-objects` | Cycles, doors, elevators | Test cycle: the guest's phase is the host's within 16 ms (one frame). The host stands at a door 200 m from the guest: the guest's copy of that door opens (it stays closed with the door wrapper off, the counter-test). The host rides the palace elevator: the trip starts on the host ("sent 1") and on the guest ("shown 1"). |
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
@@ -426,6 +437,12 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-14:** every scenario checked by `scripts/mp-test/check_results.py` (one PASS or FAIL
+  per feature). Test commands `log-look` (the color marker, model not tinted), `log-copies`
+  (every object received, drawn, art loaded here), `log` counts the hits taken from players and
+  the stock reaction after them; the player's own model compared at the same moment in
+  `pose-all` (its copy stamps the poses laid on it). Bone offsets in the test logs take the
+  matrix's `w` in.
 - **2026-10-14:** a distant player's place is loaded, not displayed: its level (or the master level
   of it) in the free top of one of our levels' heap, then its borrow levels, with a sandbox that
   keeps its code from taking the names of ours (`pc-mp-sandbox-*`), `levels` event, hook in
