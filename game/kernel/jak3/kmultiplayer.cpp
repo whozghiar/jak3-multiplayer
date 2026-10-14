@@ -947,7 +947,8 @@ void Session::store_actors(int source, const u8* data, size_t len, double recv) 
   if (len != 7 + count * sizeof(ActorState)) {
     return;
   }
-  note_actor_clock(source, time, recv);
+  double sent = time / kBatchTicksPerMs;
+  note_actor_clock(source, sent, recv);
   for (u16 i = 0; i < count; i++) {
     ActorState st;
     memcpy(&st, data + 7 + i * sizeof(ActorState), sizeof(st));
@@ -956,10 +957,10 @@ void Session::store_actors(int source, const u8* data, size_t len, double recv) 
     st.id = ((u32)source << 24) | (st.id & 0xffffff);
     auto& track = m_actors[st.id];
     track.source = source;
-    if (!track.snaps.empty() && time < track.snaps.back().first) {
+    if (!track.snaps.empty() && sent < track.snaps.back().first) {
       track.snaps.clear();
     }
-    track.snaps.emplace_back((double)time, st);
+    track.snaps.emplace_back(sent, st);
     while (track.snaps.size() > 4) {
       track.snaps.pop_front();
     }
@@ -973,7 +974,7 @@ void Session::send_actors(const ActorState* actors, int count, double now) {
   }
   u16 n = (u16)std::min(count, kMaxActors);
   std::vector<u8> payload(7 + n * sizeof(ActorState));
-  u32 time = (u32)now;
+  u32 time = (u32)(now * kBatchTicksPerMs);
   payload[0] = (u8)m_local_slot;
   memcpy(payload.data() + 1, &time, 4);
   memcpy(payload.data() + 5, &n, 2);
@@ -1025,9 +1026,9 @@ int Session::get_actors(double now, ActorState* out, int max) {
   return n;
 }
 
-void Session::note_actor_clock(int source, u32 time, double recv) {
+void Session::note_actor_clock(int source, double sent, double recv) {
   // same estimate as Remote::push, for the batches of one sender
-  double offset = recv - (double)time;
+  double offset = recv - sent;
   auto& known = m_actor_offset_known[source];
   auto& est = m_actor_offset[source];
   est = !known ? offset : std::min(offset, est + 1.0);
@@ -1112,7 +1113,7 @@ void Session::send_poses(double now) {
   if (m_local_slot < 0 || (m_mode != Mode::Host && m_mode != Mode::Client)) {
     return;
   }
-  u32 time = (u32)now;
+  u32 time = (u32)(now * kBatchTicksPerMs);
   size_t at = 0;
   while (at < entries.size()) {
     // as many entries as fit in one frame (one entry is at most ~5 KB)
@@ -1143,7 +1144,8 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
   u16 count;
   memcpy(&time, data + 1, 4);
   memcpy(&count, data + 5, 2);
-  note_actor_clock(source, time, recv);
+  double sent = time / kBatchTicksPerMs;
+  note_actor_clock(source, sent, recv);
   size_t at = 7;
   for (u16 i = 0; i < count; i++) {
     if (at + 8 > len) {
@@ -1177,21 +1179,21 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
     auto& track = m_poses[id];
     track.source = source;
     if (joints > 0) {
-      if (!track.joints.empty() && time < track.joints.back().first) {
+      if (!track.joints.empty() && sent < track.joints.back().first) {
         track.joints.clear();
       }
-      track.joints.emplace_back((double)time, std::move(bones));
+      track.joints.emplace_back(sent, std::move(bones));
       while (track.joints.size() > 16) {  // 100 ms back at 60 entries a second, and some slack
         track.joints.pop_front();
       }
     }
     if (effects) {
-      if (!track.snaps.empty() && time < track.snaps.back().first) {
+      if (!track.snaps.empty() && sent < track.snaps.back().first) {
         track.snaps.clear();
         track.consumed = -1;
         track.consumed_sounds = -1;
       }
-      track.snaps.emplace_back((double)time, std::move(snap));
+      track.snaps.emplace_back(sent, std::move(snap));
       while (track.snaps.size() > 4) {
         track.snaps.pop_front();
       }
@@ -1605,14 +1607,15 @@ u64 pc_mp_get_emitters(u32 id, u32 frame, u32 dest, u32 max) {
                                          std::min<int>((int)max, mp::kMaxPoseEmitters));
 }
 
-// (pc-mp-clock slot) -> ms: this machine's clock for -1, else the time player `slot`'s objects are
-// drawn at now, in that player's clock (evidence lines of the test logs are stamped with it).
+// (pc-mp-clock slot) -> tenths of a ms: this machine's clock for -1, else the time player `slot`'s
+// objects are drawn at now, in that player's clock (evidence lines of the test logs are stamped
+// with it).
 u64 pc_mp_clock(u32 slot) {
   int source = (s32)slot;
   if (source >= mp::kMaxPlayers) {
     source = -1;
   }
-  return (u64)(s64)mp::session().clock_of(source, mp::now_ms());
+  return (u64)(s64)(mp::session().clock_of(source, mp::now_ms()) * mp::kBatchTicksPerMs);
 }
 
 // (pc-mp-test-active?) -> #t when a test script drives this instance.

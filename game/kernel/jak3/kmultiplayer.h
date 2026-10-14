@@ -26,10 +26,14 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 3;
+constexpr u32 kProtocolVersion = 4;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
+// Object batches (ACTORS, POSES) carry the sender clock in tenths of a millisecond (wraps after
+// 119 hours): the receiver's clock estimate and the blend between poses a frame apart need better
+// than the millisecond.
+constexpr double kBatchTicksPerMs = 10.0;
 // Local state is sent at most this often (30 Hz).
 constexpr double kStateIntervalMs = 33.0;
 
@@ -257,7 +261,7 @@ class Session {
   void route_event(Event ev, int sender_slot);
   void store_actors(int source, const u8* data, size_t len, double recv_ms);
   void store_poses(int source, const u8* data, size_t len, double recv_ms);
-  void note_actor_clock(int source, u32 time, double recv_ms);
+  void note_actor_clock(int source, double sent_ms, double recv_ms);
   double drawn_time(int source, double now_ms) const;
   void drop(Peer& p, const std::string& reason);
   void refuse(Peer& p, const char* why);

@@ -18,7 +18,7 @@
 ;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
 ;;   log-pose [slot] | log-me                                bones of a player's model; own position
-;;   log-pose-own <npc|daxter|gun|vehicle|wheel>             bones of one of our objects
+;;   log-pose-own <npc|daxter|gun|vehicle|wheel> [frames]    bones of one of our objects, each frame
 ;;   log-pose-copy <slot> <skeleton name|*>                  bones of the copies of player slot's objects
 ;;   log-tasks | close-task [n]                              story progress; close the first open node(s)
 ;;   log-sync                                                phase of a test cycle (host clock sync)
@@ -132,7 +132,8 @@
 
 (defun mp-test-print-bones ((label string) (id int) (proc process-drawable) (stamp int))
   "Print four joints of `proc` (bones 3 and up: 0-2 are the root, align and prejoint) relative to its
-   bone 0, in world axes, stamped with `stamp`, the owner's time of these bones. The owner's object
+   bone 0, in world axes, stamped with `stamp`, the owner's time of these bones (pc-mp-clock, tenths
+   of a ms, printed in ms). The owner's object
    and its copy on another machine print the same values at the same stamp when the copy has the
    owner's pose (scripts/mp-test/compare_poses.py)."
   (when (and proc (nonzero? (-> proc node-list)))
@@ -140,7 +141,7 @@
            (n (-> nodes length))
            (base (-> nodes data 0 bone transform trans))
            )
-      (format 0 "[mp-test] ~S ~D bones ~D t ~D~%" label id n stamp)
+      (format 0 "[mp-test] ~S ~D bones ~D t ~D.~D~%" label id n (/ stamp 10) (mod stamp 10))
       (dotimes (k 4)
         (let* ((i (min (+ n -1) (+ 3 (/ (* (+ k 1) (max 0 (+ n -4))) 4))))
                (pos (-> nodes data i bone transform trans))
@@ -163,8 +164,9 @@
   )
 
 (deftype mp-test-own-requests (structure)
-  ((count int32)
-   (kind  string 8)
+  ((count  int32)
+   (kind   string 8)
+   (frames int32 8)  ;; frames left to print
    )
   )
 
@@ -176,9 +178,13 @@
 (define-extern mp-test-own-object (function string process-drawable))
 
 (defun mp-test-own-flush ()
-  "Print the bones of our objects asked by log-pose-own. Called by the manager, at the point of the
-   frame where the batch reads them (before this frame's joint math), so they match what is sent."
-  (let ((rq *mp-test-own*))
+  "Print the bones of our objects asked by log-pose-own, once per frame for as many frames as asked.
+   Called by the manager, at the point of the frame where the batch reads them (before this frame's
+   joint math), so they match what is sent. Every frame is printed, whatever the script's timing:
+   after a long frame the script runs several due lines at once and skips none of the game's frames."
+  (let ((rq *mp-test-own*)
+        (kept 0)
+        )
     (dotimes (i (-> rq count))
       (let* ((kind (-> rq kind i))
              (proc (mp-test-own-object kind))
@@ -187,9 +193,15 @@
             (mp-test-print-bones kind (logand (-> proc pid) #xffffff) proc (pc-mp-clock -1))
             (format 0 "[mp-test] no own ~S~%" kind)
             )
+        ;; keep the requests with frames left, in order
+        (when (> (-> rq frames i) 1)
+          (copy-string<-string (-> rq kind kept) kind)
+          (set! (-> rq frames kept) (+ (-> rq frames i) -1))
+          (+! kept 1)
+          )
         )
       )
-    (set! (-> rq count) 0)
+    (set! (-> rq count) kept)
     )
   (none)
   )
@@ -347,7 +359,7 @@
             (format
               0
               "[mp-test] sync t ~D phase ~f shift ~D~%"
-              (pc-mp-clock (if (= *mp-mode* (mp-mode client)) 0 -1))
+              (/ (pc-mp-clock (if (= *mp-mode* (mp-mode client)) 0 -1)) 10)
               phase
               (mp-sync-shift cycle)
               )
@@ -840,11 +852,13 @@
          (mp-test-log)
          )
         ((string= cmd "log-pose-own")
-         ;; printed by the manager this frame (mp-test-own-flush)
+         ;; printed by the manager from this frame on, `frames` frames (mp-test-own-flush)
          (mp-test-word)
          (let ((rq *mp-test-own*))
            (when (< (-> rq count) 8)
+             ;; the name first: reading the frame count overwrites the word
              (copy-string<-string (-> rq kind (-> rq count)) (-> *mp-test* word))
+             (set! (-> rq frames (-> rq count)) (max 1 (mp-test-int)))
              (+! (-> rq count) 1)
              )
            )
@@ -911,7 +925,7 @@
                  0
                  "[mp-test] float aid ~D t ~D height ~m tilt ~f weight sent ~D followed ~D~%"
                  (if (-> proc entity) (-> proc entity aid) 0)
-                 (pc-mp-clock (if (= *mp-mode* (mp-mode client)) 0 -1))
+                 (/ (pc-mp-clock (if (= *mp-mode* (mp-mode client)) 0 -1)) 10)
                  (-> proc root trans y)
                  (-> proc root quat y)
                  (-> *mp-riders* sent)

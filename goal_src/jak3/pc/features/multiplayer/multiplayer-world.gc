@@ -859,7 +859,7 @@
    (fx-tracker handle MP_FX_TRACKERS)
    (pose-count int32)              ;; poses laid on this copy, and the last count received
    (pose-last  int32)
-   (pose-time  int32)              ;; owner's time (ms) of the pose laid last (test logs)
+   (pose-time  int32)              ;; owner's time (tenths of a ms) of the pose laid last (test logs)
    (net    mp-actor-state :inline) ;; latest state from the owner
    )
   )
