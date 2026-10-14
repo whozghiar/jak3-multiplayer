@@ -26,7 +26,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 2;
+constexpr u32 kProtocolVersion = 3;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -159,14 +159,19 @@ constexpr int kMaxPoseJoints = 256;
 constexpr int kMaxPoseEmitters = 32;
 constexpr int kMaxPoseSounds = 32;
 
+// Bit 15 of an entry's joint count: the entry carries the object's effects (emitters and sounds,
+// with each batch). Entries sent between batches carry the bones only.
+constexpr u16 kPoseHasEffects = 0x8000;
+
 struct PoseSnap {
-  std::vector<PoseJoint> joints;
   std::vector<PoseEmitter> emitters;
   std::vector<PoseSound> sounds;
 };
 
-// Received poses of one object, oldest first, with the sender time of each.
+// Received poses of one object, oldest first, with the sender time of each: the bones (up to every
+// frame) and the effects (every batch) separately.
 struct PoseTrack {
+  std::deque<std::pair<double, std::vector<PoseJoint>>> joints;
   std::deque<std::pair<double, PoseSnap>> snaps;
   double last_seen = 0;
   double consumed = -1;         // sender time of the batch whose single launches were handed out
@@ -215,8 +220,9 @@ class Session {
   // Interpolated objects of the other players, at most `max`. Returns the count.
   int get_actors(double now_ms, ActorState* out, int max);
   // Queue the pose of one object: `count` world bone matrices, relative to `frame` (rigid, 16
-  // floats, GOAL layout). `count` may be 0 to send only emitters.
-  void add_pose(u32 id, const float* frame, const float* bones, int count);
+  // floats, GOAL layout). `count` may be 0 to send only effects. With `effects`, the entry also
+  // carries the object's emitters and sounds (add_emitter, add_sound) and replaces the last ones.
+  void add_pose(u32 id, const float* frame, const float* bones, int count, bool effects);
   // Queue an emitter of the object of the last add_pose. `origin` is a world matrix; `kind` holds
   // PoseEmitter::kind in its low byte and PoseEmitter::home above.
   void add_emitter(int kind, int index, int count, const float* origin);

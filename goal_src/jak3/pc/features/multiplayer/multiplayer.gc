@@ -757,7 +757,9 @@
             )
         )
     (when st
-      (let ((shown? (and (not (logtest? (-> st flags) (mp-flag hidden))) (mp-level-active? (-> st level)))))
+      ;; the player's model is resident: it is drawn wherever the player stands, even in a level
+      ;; not loaded here (seen from afar, over the low-detail view of that place)
+      (let ((shown? (not (logtest? (-> st flags) (mp-flag hidden)))))
         (when (-> self local?)
           ;; the passenger's own view: always shown, in the seat
           (set! shown? #t)

@@ -1038,13 +1038,13 @@ double Session::drawn_time(int source, double now) const {
   return now - m_actor_offset[source] - kInterpDelayMs;
 }
 
-void Session::add_pose(u32 id, const float* frame, const float* bones, int count) {
+void Session::add_pose(u32 id, const float* frame, const float* bones, int count, bool effects) {
   count = std::clamp(count, 0, kMaxPoseJoints);
   float inv[16];
   rigid_inverse(inv, frame);
   memcpy(m_pose_frame, frame, sizeof(m_pose_frame));
   std::vector<u8> entry(8 + count * sizeof(PoseJoint));
-  u16 joints = (u16)count;
+  u16 joints = (u16)count | (effects ? kPoseHasEffects : 0);
   memcpy(entry.data(), &id, 4);
   memcpy(entry.data() + 4, &joints, 2);
   for (int i = 0; i < count; i++) {
@@ -1058,8 +1058,8 @@ void Session::add_pose(u32 id, const float* frame, const float* bones, int count
 }
 
 void Session::add_emitter(int kind, int index, int count, const float* origin) {
-  if (m_pose_out.empty() || m_pose_out.back()[6] >= kMaxPoseEmitters || index < 0 ||
-      index > 0xffff) {
+  if (m_pose_out.empty() || !(m_pose_out.back()[5] & (kPoseHasEffects >> 8)) ||
+      m_pose_out.back()[6] >= kMaxPoseEmitters || index < 0 || index > 0xffff) {
     return;
   }
   auto& entry = m_pose_out.back();
@@ -1082,7 +1082,8 @@ void Session::add_emitter(int kind, int index, int count, const float* origin) {
 }
 
 void Session::add_sound(const SoundIO& snd) {
-  if (m_pose_out.empty() || m_pose_out.back()[7] >= kMaxPoseSounds) {
+  if (m_pose_out.empty() || !(m_pose_out.back()[5] & (kPoseHasEffects >> 8)) ||
+      m_pose_out.back()[7] >= kMaxPoseSounds) {
     return;
   }
   auto& entry = m_pose_out.back();
@@ -1149,9 +1150,11 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
       return;
     }
     u32 id;
-    u16 joints;
+    u16 raw;
     memcpy(&id, data + at, 4);
-    memcpy(&joints, data + at + 4, 2);
+    memcpy(&raw, data + at + 4, 2);
+    u16 joints = raw & ~kPoseHasEffects;
+    bool effects = raw & kPoseHasEffects;
     u8 emitters = data[at + 6];
     u8 sounds = data[at + 7];
     size_t size = 8 + joints * sizeof(PoseJoint) + emitters * sizeof(PoseEmitter) +
@@ -1159,12 +1162,12 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
     if (joints > kMaxPoseJoints || at + size > len) {
       return;
     }
+    std::vector<PoseJoint> bones(joints);
     PoseSnap snap;
-    snap.joints.resize(joints);
     snap.emitters.resize(emitters);
     snap.sounds.resize(sounds);
     const u8* body = data + at + 8;
-    memcpy(snap.joints.data(), body, joints * sizeof(PoseJoint));
+    memcpy(bones.data(), body, joints * sizeof(PoseJoint));
     body += joints * sizeof(PoseJoint);
     memcpy(snap.emitters.data(), body, emitters * sizeof(PoseEmitter));
     body += emitters * sizeof(PoseEmitter);
@@ -1173,14 +1176,25 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
     id = ((u32)source << 24) | (id & 0xffffff);  // the owner is the sender, whatever it claims
     auto& track = m_poses[id];
     track.source = source;
-    if (!track.snaps.empty() && time < track.snaps.back().first) {
-      track.snaps.clear();
-      track.consumed = -1;
-      track.consumed_sounds = -1;
+    if (joints > 0) {
+      if (!track.joints.empty() && time < track.joints.back().first) {
+        track.joints.clear();
+      }
+      track.joints.emplace_back((double)time, std::move(bones));
+      while (track.joints.size() > 16) {  // 100 ms back at 60 entries a second, and some slack
+        track.joints.pop_front();
+      }
     }
-    track.snaps.emplace_back((double)time, std::move(snap));
-    while (track.snaps.size() > 4) {
-      track.snaps.pop_front();
+    if (effects) {
+      if (!track.snaps.empty() && time < track.snaps.back().first) {
+        track.snaps.clear();
+        track.consumed = -1;
+        track.consumed_sounds = -1;
+      }
+      track.snaps.emplace_back((double)time, std::move(snap));
+      while (track.snaps.size() > 4) {
+        track.snaps.pop_front();
+      }
     }
     track.last_seen = recv;
   }
@@ -1191,13 +1205,13 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
 
 int Session::get_pose(u32 id, double now, const float* frame, float* out, int max) {
   auto it = m_poses.find(id);
-  if (it == m_poses.end() || now - it->second.last_seen > 1000.0 || it->second.snaps.empty()) {
+  if (it == m_poses.end() || now - it->second.last_seen > 1000.0 || it->second.joints.empty()) {
     return 0;
   }
-  const auto& snaps = it->second.snaps;
+  const auto& snaps = it->second.joints;
   double t = drawn_time(it->second.source, now);
-  const PoseSnap* a = &snaps.front().second;
-  const PoseSnap* b = a;
+  const std::vector<PoseJoint>* a = &snaps.front().second;
+  const std::vector<PoseJoint>* b = a;
   float f = 0;
   if (t >= snaps.back().first) {
     a = b = &snaps.back().second;
@@ -1210,14 +1224,14 @@ int Session::get_pose(u32 id, double now, const float* frame, float* out, int ma
     b = &snaps[i].second;
     f = (float)((t - snaps[i - 1].first) / std::max(1.0, snaps[i].first - snaps[i - 1].first));
   }
-  if (a->joints.size() != b->joints.size()) {
+  if (a->size() != b->size()) {
     a = b = f < 0.5f ? a : b;  // the skeleton changed: no blending across it
     f = 0;
   }
-  int n = std::min((int)a->joints.size(), max);
+  int n = std::min((int)a->size(), max);
   for (int i = 0; i < n; i++) {
     float rel[16];
-    decode_joint(rel, a->joints[i], b->joints[i], f);
+    decode_joint(rel, (*a)[i], (*b)[i], f);
     mat_mul(out + 16 * i, rel, frame);
   }
   return n;
@@ -1533,11 +1547,13 @@ u64 pc_mp_get_actors(u32 dest, u32 max) {
                                        std::min<int>((int)max, mp::kMaxActors * 2));
 }
 
-// (pc-mp-add-pose id frame bones count): queue the pose of one object this player simulates.
+// (pc-mp-add-pose id frame bones count): queue the pose of one object this player simulates;
+// bit 15 of count (mp::kPoseHasEffects): the entry carries its effects (add-emitter, add-sound).
 void pc_mp_add_pose(u32 id, u32 frame, u32 bones, u32 count) {
-  if (frame && (bones || count == 0)) {
+  int joints = (int)(count & 0x7fff);
+  if (frame && (bones || joints == 0)) {
     mp::session().add_pose(id, Ptr<float>(frame).c(), bones ? Ptr<float>(bones).c() : nullptr,
-                           (int)count);
+                           joints, (count & mp::kPoseHasEffects) != 0);
   }
 }
 

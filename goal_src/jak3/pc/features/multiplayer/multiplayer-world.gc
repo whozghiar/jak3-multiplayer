@@ -405,8 +405,10 @@
   ((bones       matrix MP_MAX_POSE_JOINTS :inline) ;; scratch: bones sent or received
    (frame       matrix :inline)
    (emitters    mp-emitter 32 :inline)
-   ;; objects of the batch being built (same order as *mp-actors-out*)
-   (proc        process-drawable MP_MAX_ACTORS)
+   ;; objects of the last batch (same order as *mp-actors-out*), and whether another player is
+   ;; near enough to get their bones every frame (mp-send-near-poses)
+   (obj         handle MP_MAX_ACTORS)
+   (near        symbol MP_MAX_ACTORS)
    ;; emitters used since the last batch by the objects we send (mp-note-emitter)
    (emit-count  int32)
    (emit-pid    int32 64)
@@ -489,7 +491,7 @@
               )
           (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
           (copyn-charp<-string (-> st skel) (-> sg name) 32)
-          (set! (-> *mp-pose* proc *mp-collect-count*) proc)
+          (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
           (+! *mp-collect-count* 1)
           (return #t)
           )
@@ -644,7 +646,7 @@
       (set! (-> st flags) (mp-actor-flag world))
       (set! (-> st seg-mask) (the-as uint 0))
       (set! (-> st skel 0) (the-as uint 0))
-      (set! (-> *mp-pose* proc *mp-collect-count*) proc)
+      (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
       (+! *mp-collect-count* 1)
       )
     )
@@ -739,6 +741,7 @@
   )
 
 (define-extern mp-send-poses (function none))
+(define-extern mp-send-near-poses (function none))
 (define-extern mp-poll-elevator (function process object))
 (define-extern mp-update-remote-riders (function none))
 
@@ -773,6 +776,10 @@
       (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
       (mp-send-poses)
       )
+    ;; between batches, the bones of what another player sees up close, every frame
+    (if (and (> (mp-player-count) 0) (!= (-> ws last-send) (mp-now)))
+        (mp-send-near-poses)
+        )
     )
   (none)
   )
@@ -1937,10 +1944,10 @@
     )
   )
 
-(defun mp-send-pose ((id uint) (proc process-drawable) (trans vector) (quat quaternion) (npc? symbol) (pose? symbol))
+(defun mp-send-pose ((id uint) (proc process-drawable) (trans vector) (quat quaternion) (npc? symbol) (pose? symbol) (effects? symbol))
   "Queue object `proc` in the pose batch: its bones relative to its frame (`trans` `quat`, as sent
-   in its state) when `pose?` and they are complete, and the emitters it used since the last batch.
-   Nothing is queued when there is neither."
+   in its state) when `pose?` and they are complete, and with `effects?` (the 15 Hz batch) the
+   emitters and sounds it used since the last batch (none is news too: its emitters stopped)."
   (let ((ps *mp-pose*)
         (pid (-> proc pid))
         (count 0)
@@ -1979,12 +1986,20 @@
         (set! count (-> nodes length))
         )
       )
-    (when (or (> count 0) (> emitters 0))
-      (pc-mp-add-pose id (mp-frame-of (-> ps frame) trans quat) (-> ps bones) count)
+    (when (or (> count 0) effects?)
+      (pc-mp-add-pose id (mp-frame-of (-> ps frame) trans quat) (-> ps bones) (if effects?
+                                                                                    (logior count #x8000)
+                                                                                    count
+                                                                                    )
+                      )
       (if (> count 0)
           (+! (-> ps poses-sent) 1)
           )
-      (dotimes (i (-> ps emit-count))
+      (dotimes (i (if effects?
+                      (-> ps emit-count)
+                      0
+                      )
+                  )
         (when (= (-> ps emit-pid i) pid)
           (let* ((group? (zero? (-> ps emit-kind i)))
                  (index (if group?
@@ -2011,7 +2026,11 @@
             )
           )
         )
-      (dotimes (i (-> ps snd-count))
+      (dotimes (i (if effects?
+                      (-> ps snd-count)
+                      0
+                      )
+                  )
         (when (= (-> ps snd-pid i) pid)
           (pc-mp-add-sound (-> ps snd-out i))
           (+! (-> ps sounds-sent) 1)
@@ -2020,6 +2039,20 @@
       )
     )
   (none)
+  )
+
+(defun mp-remote-distance ((pos vector))
+  "Distance from `pos` to the nearest other player."
+  (let ((best (meters 1000000)))
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (if st
+            (set! best (fmin best (vector-vector-distance pos (-> st trans))))
+            )
+        )
+      )
+    best
+    )
   )
 
 (defun mp-send-poses ()
@@ -2035,22 +2068,30 @@
          )
     (cond
       (seated
-        (mp-send-pose (the-as uint #xffffff) seated (-> seated root trans) (-> seated root quat) #f #t)
+        (mp-send-pose (the-as uint #xffffff) seated (-> seated root trans) (-> seated root quat) #f #t #t)
         )
       (*target*
-        (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t)
+        (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t #t)
         )
       )
     (dotimes (i *mp-collect-count*)
-      (let ((st (-> *mp-actors-out* state i)))
+      (let ((st (-> *mp-actors-out* state i))
+            (proc (the-as process-drawable (handle->process (-> ps obj i))))
+            )
+        ;; the props, and the NPCs within 40 m of another player, get their bones every frame
+        (set! (-> ps near i) (or (logtest? (-> st flags) (mp-actor-flag owned))
+                                 (< (mp-remote-distance (-> st trans)) (meters 40))
+                                 )
+              )
         ;; physics objects of the level have no copy, so no pose
-        (if (not (logtest? (-> st flags) (mp-actor-flag world)))
+        (if (and proc (not (logtest? (-> st flags) (mp-actor-flag world))))
             (mp-send-pose
               (-> st id)
-              (-> ps proc i)
+              proc
               (-> st trans)
               (-> st quat)
               (not (logtest? (-> st flags) (mp-actor-flag owned)))
+              #t
               #t
               )
             )
@@ -2059,6 +2100,55 @@
     (pc-mp-send-poses)
     (set! (-> ps emit-count) 0)
     (set! (-> ps snd-count) 0)
+    )
+  (none)
+  )
+
+(defun mp-send-near-poses ()
+  "Between two batches, every frame: the bones of the player, of its props and of the NPCs near
+   another player, without effects, so their copies are drawn from every frame of the owner's
+   (the batch's 15 Hz would leave the copy a straight blend between poses 66 ms apart)."
+  (let* ((ps *mp-pose*)
+         (manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+         (seated (if (and manager (>= *mp-ride-slot* 0))
+                     (the-as process-drawable (handle->process (-> manager self-puppet)))
+                     )
+                 )
+         (trans (new 'stack-no-clear 'vector))
+         (quat (new 'stack-no-clear 'quaternion))
+         )
+    (cond
+      (seated
+        (mp-send-pose (the-as uint #xffffff) seated (-> seated root trans) (-> seated root quat) #f #t #f)
+        )
+      (*target*
+        (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t #f)
+        )
+      )
+    (dotimes (i *mp-collect-count*)
+      (let ((st (-> *mp-actors-out* state i))
+            (proc (the-as process-drawable (handle->process (-> ps obj i))))
+            )
+        (when (and proc (-> ps near i) (not (logtest? (-> st flags) (mp-actor-flag world))) (nonzero? (-> proc root)))
+          ;; its frame now, computed as its state's (mp-add-actor, mp-add-prop)
+          (cond
+            ((and (logtest? (-> st flags) (mp-actor-flag prop)) (nonzero? (-> proc node-list)))
+             (let ((mat (-> proc node-list data 0 bone transform)))
+               (vector-copy! trans (-> mat trans))
+               (matrix->quaternion quat mat)
+               (quaternion-normalize! quat)
+               )
+             )
+            (else
+              (vector-copy! trans (-> proc root trans))
+              (quaternion-copy! quat (-> proc root quat))
+              )
+            )
+          (mp-send-pose (-> st id) proc trans quat (not (logtest? (-> st flags) (mp-actor-flag owned))) #t #f)
+          )
+        )
+      )
+    (pc-mp-send-poses)
     )
   (none)
   )
@@ -2821,8 +2911,9 @@
 
 (defmethod deactivate ((this level))
   "What this mod made from the level goes first (always: copies can remain after a session), then
-   the stock deactivation."
-  (if (or (= (-> this status) 'active) (= (-> this status) 'alive))
+   the stock deactivation. unload! calls it too, also for a level only loaded (not active), whose
+   art and particle groups copies may use as well."
+  (if (!= (-> this status) 'inactive)
       (mp-on-level-leaving this)
       )
   (*mp-stock-level-deactivate* this)

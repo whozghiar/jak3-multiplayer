@@ -556,7 +556,7 @@
             )
           (format
             0
-            "[mp-test] remote ~D flags #x~X anim ~D veh ~D puppet ~A~%"
+            "[mp-test] remote ~D flags #x~X anim ~D veh ~D puppet ~A drawn ~A~%"
             i
             (-> st flags)
             (-> st anim-index)
@@ -565,6 +565,13 @@
                 #t
                 #f
                 )
+            (let ((puppet (if manager
+                              (the-as mp-puppet (handle->process (-> manager puppets i)))
+                              )
+                          )
+                  )
+              (and puppet (not (logtest? (-> puppet draw status) (draw-control-status no-draw))))
+              )
             )
           )
         )

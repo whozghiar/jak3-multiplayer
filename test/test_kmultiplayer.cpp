@@ -107,7 +107,7 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   float bones[32];
   memcpy(bones, frame, sizeof(frame));
   mul(bones + 16, rel, frame);
-  client.add_pose(9, frame, bones, 2);
+  client.add_pose(9, frame, bones, 2, true);
   client.add_emitter(1, 1234, 3, bones + 16);
   mp::SoundIO snd{};
   memcpy(snd.name, "engine", 7);
@@ -142,6 +142,13 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   EXPECT_NEAR(sounds[0].pos[0], 8000.f, 4.f);
   EXPECT_NEAR(sounds[0].pos[2], 1200.f, 4.f);
   EXPECT_EQ(host.get_sounds(pose_id, now(), identity, sounds, 2), 0);  // played once
+  // A pose sent between batches (bones only) keeps the effects of the last batch.
+  client.add_pose(9, frame, bones, 2, false);
+  client.send_poses(now());
+  pump(10);
+  ASSERT_EQ(host.get_pose(pose_id, now(), identity, out, 8), 2);
+  ASSERT_EQ(host.get_emitters(pose_id, now(), identity, em, 2), 1);
+  EXPECT_EQ(em[0].index, 1234);
 
   // A banned client is disconnected with a reason and cannot come back.
   host.kick(1, true);
