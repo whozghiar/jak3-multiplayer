@@ -1,0 +1,15 @@
+# Smoke test, guest side: boot, join, go next to the host, punch it.
+1 enable
+1 name Guest
+1 color 2
+40 log
+40 screenshot boot
+48 join 127.0.0.1:7777
+60 log
+60 screenshot together
+62 goto-player 0
+64 face-player 0
+65 press square 300
+66 screenshot punch
+75 log
+75 screenshot after-punch

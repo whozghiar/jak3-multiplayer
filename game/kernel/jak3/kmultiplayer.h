@@ -139,6 +139,16 @@ class Session {
 // Session used by the kernel functions below.
 Session& session();
 
+// Automated tests (MP_TEST_SCRIPT, see scripts/mp-test/): buttons and left stick forced on pad 0
+// while active, read by scePadRead (game/sce/libpad.cpp).
+struct TestPad {
+  u32 buttons = 0;  // pad-buttons bits (select = bit 0 ... square = bit 15)
+  u8 lx = 128;      // left stick, 128 = centered
+  u8 ly = 128;
+  bool active = false;
+};
+extern TestPad g_test_pad;
+
 // Splits "ip:port". Returns false on a malformed address.
 bool parse_address(const std::string& address, std::string* ip, int* port);
 

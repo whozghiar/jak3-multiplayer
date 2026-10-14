@@ -1,0 +1,11 @@
+# Smoke test, host side: boot, host, then wait for the guest and record what is seen.
+1 enable
+1 name Host
+1 color 1
+40 log
+40 screenshot boot
+42 host 0.0.0.0:7777
+60 log
+60 screenshot together
+75 log
+75 screenshot after-punch

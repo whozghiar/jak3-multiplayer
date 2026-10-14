@@ -5,6 +5,7 @@
 #include "game/graphics/display.h"
 #include "game/graphics/gfx.h"
 #include "game/kernel/common/kernel_types.h"
+#include "game/kernel/jak3/kmultiplayer.h"
 #include "game/system/hid/input_bindings.h"
 
 /*!
@@ -91,6 +92,18 @@ int scePadRead(int port, int /*slot*/, u8* rdata) {
     cpad->button0 = 0;
     for (size_t i = 0; i < pad_data.value()->button_data.size(); i++) {
       cpad->button0 |= pad_data.value()->button_data.at(i) << i;
+    }
+  }
+
+  // MOD multiplayer -- input forced by an automated test script (kmultiplayer.cpp)
+  if (port == 0 && mp::g_test_pad.active) {
+    if (!pad_data) {
+      cpad->button0 = 0;
+    }
+    cpad->button0 |= mp::g_test_pad.buttons;
+    if (mp::g_test_pad.lx != 128 || mp::g_test_pad.ly != 128) {
+      cpad->leftx = mp::g_test_pad.lx;
+      cpad->lefty = mp::g_test_pad.ly;
     }
   }
 

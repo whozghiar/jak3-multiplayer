@@ -1575,11 +1575,18 @@
   (none)
   )
 
+;; Automated tests (multiplayer-test.gc), inert unless MP_TEST_SCRIPT is set.
+(define-extern pc-mp-test-active? (function symbol))
+(define-extern mp-test-update (function none))
+
 (defun mp-frame-hook ()
   "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
    then, when the mod is enabled, the network and the overlay. Network traffic must keep flowing
    while paused, or the other players would time out."
   (mods-menu-update)
+  (if (pc-mp-test-active?)
+      (mp-test-update)
+      )
   (cond
     ((mp-enabled?)
      (let ((was *mp-mode*))

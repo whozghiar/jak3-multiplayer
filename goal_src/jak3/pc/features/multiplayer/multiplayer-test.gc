@@ -1,0 +1,254 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; name: multiplayer-test.gc
+;; dgos: GAME
+;;
+;; Jak 3 multiplayer mod -- automated test commands. Inert unless the game was started with the
+;; MP_TEST_SCRIPT environment variable (scripts/mp-test/run_mp_test.py does it): the runtime then
+;; hands out one script line per due time (game/kernel/jak3/kmultiplayer.cpp), and
+;; `mp-test-update`, called every frame from the multiplayer hook, runs it.
+;;
+;; Commands (one per line, after the time in seconds):
+;;   enable | name <word> | color <n> | character <n>       mod settings, in memory and saved
+;;   host <ip:port> | join <ip:port> | leave                 session
+;;   continue <continue-point>                               go to a continue point
+;;   press <button> <ms> | stick <lx> <ly> <ms>              force pad 0 (0-255, 128 = center)
+;;   goto-player <slot> | face-player <slot>                 stand next to / face a remote player
+;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
+;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
+;; Every command and every `log` line is printed with the prefix "[mp-test]".
+
+(define-extern pc-mp-test-active? (function symbol))
+(define-extern pc-mp-test-poll (function string symbol))
+(define-extern pc-mp-test-screenshot (function string none))
+(define-extern pc-mp-test-pad (function int int int none))
+
+;; Test runner state (in a structure: a time-frame is 64 bits, a global symbol holds 32).
+(deftype mp-test-state (structure)
+  ((pad-until time-frame) ;; real-clock time the forced input is released, 0 = none
+   (line      string)     ;; command being run, consumed word by word
+   (word      string)     ;; last word read
+   )
+  )
+
+(define *mp-test* (new 'global 'mp-test-state))
+(set! (-> *mp-test* line) (new 'global 'string 128 (the-as string #f)))
+(set! (-> *mp-test* word) (new 'global 'string 64 (the-as string #f)))
+
+(defun mp-test-word ()
+  "Pop the next word of the command into (-> *mp-test* word). #f when none is left."
+  (string-get-arg!! (-> *mp-test* word) (-> *mp-test* line))
+  )
+
+(defun mp-test-int ()
+  "Pop the next word as an integer (0 when missing)."
+  (if (mp-test-word)
+      (string->int (-> *mp-test* word))
+      0
+      )
+  )
+
+(defun mp-test-button ((name string))
+  "pad-buttons bit for a button name (the order of the PS2 pad, select = bit 0)."
+  (let ((names (new 'static 'boxed-array :type string
+                 "select" "l3" "r3" "start" "up" "right" "down" "left"
+                 "l2" "r2" "l1" "r1" "triangle" "circle" "x" "square"
+                 )
+               )
+        )
+    (dotimes (i (-> names length))
+      (if (string= name (-> names i))
+          (return (ash 1 i))
+          )
+      )
+    )
+  0
+  )
+
+(defun mp-test-log ()
+  "Print the multiplayer state: session, local player, every remote player and its puppet."
+  (format 0 "[mp-test] log mode ~D slot ~D players ~D~%" *mp-mode* *mp-local-slot* (+ 1 (mp-player-count)))
+  (when *target*
+    ;; format takes at most 8 arguments (destination and format string included)
+    (format
+      0
+      "[mp-test] local pos ~m ~m ~m hp ~f state ~A~%"
+      (-> *target* control trans x)
+      (-> *target* control trans y)
+      (-> *target* control trans z)
+      (-> *target* fact health)
+      (mp-target-state-name)
+      )
+    (format
+      0
+      "[mp-test] local indax ~A pilot ~A level ~A~%"
+      (focus-test? *target* indax)
+      (focus-test? *target* pilot)
+      (if (-> *target* current-level)
+          (-> *target* current-level name)
+          #f
+          )
+      )
+    )
+  (let ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+    (format 0 "[mp-test] manager ~A~%" (if manager #t #f))
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (when st
+          (string<-charp *mp-temp-string* (-> st name))
+          (format
+            0
+            "[mp-test] remote ~D ~S pos ~m ~m ~m hp ~f~%"
+            i
+            *mp-temp-string*
+            (-> st trans x)
+            (-> st trans y)
+            (-> st trans z)
+            (-> st health)
+            )
+          (format
+            0
+            "[mp-test] remote ~D flags #x~X anim ~D veh ~D puppet ~A~%"
+            i
+            (-> st flags)
+            (-> st anim-index)
+            (-> st veh-type)
+            (if (and manager (handle->process (-> manager puppets i)))
+                #t
+                #f
+                )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-test-face-player ((slot int))
+  "Turn the player toward a remote player."
+  (let ((st (mp-remote-state slot)))
+    (when (and st *target*)
+      (let ((dir (vector-! (new 'stack-no-clear 'vector) (-> st trans) (-> *target* control trans))))
+        (set! (-> dir y) 0.0)
+        (when (< 1.0 (vector-length dir))
+          (vector-normalize! dir 1.0)
+          (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
+          (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-test-run ()
+  "Run the command in (-> *mp-test* line)."
+  (format 0 "[mp-test] run ~S~%" (-> *mp-test* line))
+  (when (mp-test-word)
+    (let ((cmd (-> *mp-test* word)))
+      (cond
+        ((string= cmd "enable")
+         (mp-set-enabled! #t)
+         )
+        ((string= cmd "name")
+         (mp-test-word)
+         (copy-string<-string *mp-name* (-> *mp-test* word))
+         (mp-config-save!)
+         )
+        ((string= cmd "color")
+         (set! (-> *mp-config* color) (mp-test-int))
+         (mp-config-save!)
+         )
+        ((string= cmd "character")
+         (set! (-> *mp-config* character) (mp-test-int))
+         (mp-config-save!)
+         )
+        ((string= cmd "host")
+         (mp-test-word)
+         (copy-string<-string *mp-address* (-> *mp-test* word))
+         (mp-host!)
+         )
+        ((string= cmd "join")
+         (mp-test-word)
+         (copy-string<-string *mp-address* (-> *mp-test* word))
+         (mp-join!)
+         )
+        ((string= cmd "leave")
+         (mp-leave!)
+         )
+        ((string= cmd "continue")
+         (mp-test-word)
+         (let ((cp (get-continue-by-name *game-info* (-> *mp-test* word))))
+           (if (and cp *target*)
+               (send-event *target* 'continue cp)
+               (format 0 "[mp-test] cannot continue to ~S~%" (-> *mp-test* word))
+               )
+           )
+         )
+        ((string= cmd "press")
+         (mp-test-word)
+         (let ((bit (mp-test-button (-> *mp-test* word))))
+           (pc-mp-test-pad bit 128 128)
+           (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
+           )
+         )
+        ((string= cmd "stick")
+         (let* ((lx (mp-test-int))
+                (ly (mp-test-int))
+                )
+           (pc-mp-test-pad 0 lx ly)
+           (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
+           )
+         )
+        ((string= cmd "goto-player")
+         (let ((slot (mp-test-int)))
+           (set! *mp-request-teleport* slot)
+           )
+         )
+        ((string= cmd "face-player")
+         (mp-test-face-player (mp-test-int))
+         )
+        ((string= cmd "cheat")
+         (mp-test-word)
+         (let ((which (-> *mp-test* word)))
+           (cond
+             ((string= which "ammo") (mp-cheat-ammo))
+             ((string= which "health") (mp-cheat-health))
+             ((string= which "dark") (mp-cheat-dark-eco))
+             ((string= which "light") (mp-cheat-light-eco))
+             ((string= which "invuln") (set! *mp-invulnerable* (not *mp-invulnerable*)))
+             )
+           )
+         )
+        ((string= cmd "zone")
+         (mp-teleport-zone (mp-test-int))
+         )
+        ((string= cmd "screenshot")
+         (mp-test-word)
+         (pc-mp-test-screenshot (-> *mp-test* word))
+         )
+        ((string= cmd "log")
+         (mp-test-log)
+         )
+        (else
+          (format 0 "[mp-test] unknown command ~S~%" cmd)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-test-update ()
+  "Release forced input when its time is over, then run the due script commands."
+  (when (and (nonzero? (-> *mp-test* pad-until)) (>= (mp-now) (-> *mp-test* pad-until)))
+    (pc-mp-test-pad 0 128 128)
+    (set! (-> *mp-test* pad-until) 0)
+    )
+  (while (pc-mp-test-poll (-> *mp-test* line))
+    (mp-test-run)
+    )
+  (none)
+  )

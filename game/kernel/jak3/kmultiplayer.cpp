@@ -30,6 +30,7 @@
 #include "common/util/FileUtil.h"
 #include "common/util/string_util.h"
 
+#include "game/graphics/screenshot.h"
 #include "game/kernel/common/Ptr.h"
 #include "game/kernel/common/kscheme.h"
 #include "game/kernel/jak3/kscheme.h"
@@ -769,6 +770,55 @@ Session& session() {
   return s;
 }
 
+TestPad g_test_pad;
+
+// ---------------------------------------------------------------------------------------------
+// Test scripts: MP_TEST_SCRIPT names a file of "<seconds> <command...>" lines. GOAL polls the
+// next due command every frame (multiplayer-test.gc) and runs it; the runner is
+// scripts/mp-test/run_mp_test.py.
+// ---------------------------------------------------------------------------------------------
+
+namespace test {
+struct Step {
+  double at_ms;
+  std::string command;
+};
+
+struct Script {
+  std::vector<Step> steps;
+  size_t next = 0;
+  double start_ms = -1;
+  bool loaded = false;
+
+  Script() {
+    const char* path = getenv("MP_TEST_SCRIPT");
+    if (!path || !fs::exists(path)) {
+      return;
+    }
+    for (auto& line : str_util::split_string(file_util::read_text_file(std::string(path)))) {
+      auto trimmed = str_util::trim(line);
+      if (trimmed.empty() || trimmed[0] == '#') {
+        continue;
+      }
+      auto space = trimmed.find(' ');
+      try {
+        steps.push_back({std::stod(trimmed.substr(0, space)) * 1000.0,
+                         space == std::string::npos ? "" : str_util::trim(trimmed.substr(space))});
+      } catch (...) {
+        lg::warn("[mp-test] ignored line: {}", line);
+      }
+    }
+    loaded = true;
+    lg::info("[mp-test] script {} with {} steps", path, steps.size());
+  }
+};
+
+Script& script() {
+  static Script s;
+  return s;
+}
+}  // namespace test
+
 }  // namespace mp
 
 // ---------------------------------------------------------------------------------------------
@@ -908,9 +958,59 @@ void pc_mp_config_save(u32 src) {
                                  address, cfg->character, cfg->color, cfg->enabled));
 }
 
+// (pc-mp-test-active?) -> #t when a test script drives this instance.
+u64 pc_mp_test_active() {
+  return to_symbol(mp::test::script().loaded);
+}
+
+// (pc-mp-test-poll dest) -> #t with the next due script command copied into dest.
+u64 pc_mp_test_poll(u32 dest) {
+  auto& s = mp::test::script();
+  if (!s.loaded || !dest || s.next >= s.steps.size()) {
+    return to_symbol(false);
+  }
+  double now = mp::now_ms();
+  if (s.start_ms < 0) {
+    s.start_ms = now;
+  }
+  if (now - s.start_ms < s.steps[s.next].at_ms) {
+    return to_symbol(false);
+  }
+  auto* str = Ptr<String>(dest).c();
+  const auto& cmd = s.steps[s.next++].command;
+  size_t n = std::min<size_t>(cmd.size(), str->len > 0 ? str->len - 1 : 0);
+  memcpy(str->data(), cmd.data(), n);
+  str->data()[n] = 0;
+  return to_symbol(true);
+}
+
+// (pc-mp-test-screenshot name) saves the next frame as <config>/screenshots/<name>.png.
+void pc_mp_test_screenshot(u32 name) {
+  auto label = goal_string(name);
+  g_screen_shot_settings->width = 1280;
+  g_screen_shot_settings->height = 720;
+  g_screen_shot_settings->msaa = 2;
+  mp::copy_cstr(g_screen_shot_settings->name, sizeof(g_screen_shot_settings->name), label);
+  g_want_screenshot = true;
+  lg::info("[mp-test] screenshot {}", label);
+}
+
+// (pc-mp-test-pad buttons lx ly) forces pad 0 input until called with 0 128 128.
+void pc_mp_test_pad(u32 buttons, u32 lx, u32 ly) {
+  auto& pad = mp::g_test_pad;
+  pad.buttons = buttons & 0xffff;
+  pad.lx = (u8)std::min<u32>(lx, 255);
+  pad.ly = (u8)std::min<u32>(ly, 255);
+  pad.active = pad.buttons != 0 || pad.lx != 128 || pad.ly != 128;
+}
+
 }  // namespace
 
 void init_multiplayer_functions() {
+  make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
+  make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
+  make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);
+  make_function_symbol_from_c("pc-mp-test-pad", (void*)pc_mp_test_pad);
   make_function_symbol_from_c("pc-mp-host", (void*)pc_mp_host);
   make_function_symbol_from_c("pc-mp-join", (void*)pc_mp_join);
   make_function_symbol_from_c("pc-mp-leave", (void*)pc_mp_leave);
