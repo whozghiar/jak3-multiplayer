@@ -510,6 +510,19 @@
                       )
         )
       (new 'static 'menu-generic-boolean-option
+        :name (text-id progress-mp-share-progress)
+        :truthy-text (text-id progress-on)
+        :falsey-text (text-id progress-off)
+        :get-value-fn (lambda () (logtest? *mp-world* (mp-world-flag progress)))
+        :on-confirm (lambda ((val symbol))
+                      (if val
+                          (logior! *mp-world* (mp-world-flag progress))
+                          (logclear! *mp-world* (mp-world-flag progress))
+                          )
+                      (none)
+                      )
+        )
+      (new 'static 'menu-generic-boolean-option
         :name (text-id progress-mp-sync-time)
         :truthy-text (text-id progress-on)
         :falsey-text (text-id progress-off)

@@ -47,7 +47,7 @@ struct PlayerState {
   u32 flags;            // 108 mp-flag bits (GOAL)
   s16 anim_index;       // 112 index of the animation in the art group, -1 = none
   s16 veh_type;         // 114 vehicle-type of the driven vehicle, -1 = on foot
-  s8 character;         // 116 0 = Jak, 1 = Daxter
+  s8 character;         // 116 low 4 bits: 0 = Jak, 1 = Daxter; high 4 bits: outfit
   s8 color;             // 117 color index
   s8 seat_count;        // 118 seats of the driven vehicle
   s8 ride_slot;         // 119 slot of the driver this player rides with, -1 = none

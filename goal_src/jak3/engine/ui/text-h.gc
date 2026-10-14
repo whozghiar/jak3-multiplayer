@@ -1632,6 +1632,7 @@
   (progress-mp-sync-time #x1511)
   (progress-mp-stop #x1512)
   (progress-mp-pvp #x1513)
+  (progress-mp-share-progress #x1514)
   (progress-mp-color-white #x1520)
   (progress-mp-color-red #x1521)
   (progress-mp-color-blue #x1522)

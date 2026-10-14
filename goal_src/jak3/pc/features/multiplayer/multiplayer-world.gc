@@ -16,7 +16,7 @@
 ;;     its own actors asleep, hidden and intangible);
 ;;   - every player's props: Daxter on the shoulder, the gun, the vehicle driven and its wheels.
 ;;
-;; With each batch go the full poses of the player and of its props and nearest NPCs (every bone,
+;; With each batch go the full poses of the player, of its props and of every NPC sent (every bone,
 ;; so blends, streamed animations, joint mods and ragdolls look the same everywhere), and the
 ;; particle emitters and sounds each of them used (see "Poses and emitters" below).
 ;;
@@ -90,8 +90,9 @@
    (authority-want  symbol)     ;; role the situation asks for, applied after 2 s
    (authority-since time-frame)
    (served-count   int32)       ;; players whose NPCs we simulate, for the batch being built
-   (served-remote  symbol 8)
    (served-pos     vector 8 :inline)
+   (forced-count   int32)       ;; NPCs whose force-math we set (mp-force-math)
+   (forced         handle 128)
    )
   )
 
@@ -247,7 +248,6 @@
         (let ((pos (mp-player-pos i)))
           (when (and pos (= (mp-provider-of i) *mp-local-slot*))
             (vector-copy! (-> ws served-pos (-> ws served-count)) pos)
-            (set! (-> ws served-remote (-> ws served-count)) (!= i *mp-local-slot*))
             (+! (-> ws served-count) 1)
             )
           )
@@ -257,16 +257,13 @@
   (none)
   )
 
-(defun mp-served-distance ((pos vector) (remote? symbol))
-  "Distance from `pos` to the nearest player whose NPCs we simulate (only the other players when
-   `remote?`)."
+(defun mp-served-distance ((pos vector))
+  "Distance from `pos` to the nearest player whose NPCs we simulate."
   (let ((ws *mp-world-state*)
         (best (meters 1000000))
         )
     (dotimes (i (-> ws served-count))
-      (if (or (not remote?) (-> ws served-remote i))
-          (set! best (fmin best (vector-vector-distance pos (-> ws served-pos i))))
-          )
+      (set! best (fmin best (vector-vector-distance pos (-> ws served-pos i))))
       )
     best
     )
@@ -365,7 +362,6 @@
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_MAX_POSE_JOINTS 256)
-(defconstant MP_POSE_BUDGET 12) ;; NPC poses per batch, the nearest to another player first
 
 ;; One emitter to draw on a copy, in world space. 80 bytes, mirrors mp::EmitterOut.
 (deftype mp-emitter (structure)
@@ -397,10 +393,8 @@
   ((bones       matrix MP_MAX_POSE_JOINTS :inline) ;; scratch: bones sent or received
    (frame       matrix :inline)
    (emitters    mp-emitter 16 :inline)
-   ;; objects of the batch being built (same order as *mp-actors-out*) and their distance to
-   ;; the nearest other player we simulate NPCs for
+   ;; objects of the batch being built (same order as *mp-actors-out*)
    (proc        process-drawable MP_MAX_ACTORS)
-   (dist        float MP_MAX_ACTORS)
    ;; emitters used since the last batch by the objects we send (mp-note-emitter)
    (emit-count  int32)
    (emit-pid    int32 32)
@@ -414,6 +408,9 @@
    (part-next   int32)
    ;; counters for the test log
    (poses-sent     int32)
+   (poses-skipped  int32)  ;; poses left out of drawn objects (bones not all fresh): the copy plays
+                           ;; the animation
+   (poses-hidden   int32)  ;; objects their owner does not draw (hidden, or a moment while teleporting)
    (poses-applied  int32)
    (emitters-sent  int32)
    (emitters-shown int32)
@@ -481,7 +478,6 @@
           (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
           (copyn-charp<-string (-> st skel) (-> sg name) 32)
           (set! (-> *mp-pose* proc *mp-collect-count*) proc)
-          (set! (-> *mp-pose* dist *mp-collect-count*) (mp-served-distance (-> proc root trans) #t))
           (+! *mp-collect-count* 1)
           (return #t)
           )
@@ -491,6 +487,55 @@
   #f
   )
 
+(defun mp-force-math ((proc process-drawable))
+  "Have `proc` compute every bone each frame, whatever its level of detail on this screen: the
+   players who see its copy up close need its whole pose. Undone by mp-release-math once it is no
+   longer sent."
+  (let ((ws *mp-world-state*))
+    (when (and (nonzero? (-> proc skel))
+               (not (logtest? (-> proc skel status) (joint-control-status force-math)))
+               (< (-> ws forced-count) 128)
+               )
+      (logior! (-> proc skel status) (joint-control-status force-math))
+      (set! (-> ws forced (-> ws forced-count)) (process->handle proc))
+      (+! (-> ws forced-count) 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-release-math ((all? symbol))
+  "Clear the force-math we set on NPCs that are no longer in the batch (on every one when `all?`)."
+  (let ((ws *mp-world-state*)
+        (n 0)
+        )
+    (dotimes (i (-> ws forced-count))
+      (let ((proc (the-as process-drawable (handle->process (-> ws forced i))))
+            (keep? #f)
+            )
+        (when (and proc (not all?))
+          (dotimes (j *mp-collect-count*)
+            (if (= (logand (-> proc pid) #xffffff) (the-as int (-> *mp-actors-out* state j id)))
+                (set! keep? #t)
+                )
+            )
+          )
+        (cond
+          (keep?
+            (set! (-> ws forced n) (-> ws forced i))
+            (+! n 1)
+            )
+          (proc
+            (logclear! (-> proc skel status) (joint-control-status force-math))
+            )
+          )
+        )
+      )
+    (set! (-> ws forced-count) n)
+    )
+  (none)
+  )
+
 (defun mp-collect-actor ((proc process-drawable))
   "iterate-process-tree callback (authority): add `proc` when it is an NPC within 100 m of a player
    whose NPCs we simulate."
@@ -498,13 +543,15 @@
     (let ((kind (mp-actor-kind proc)))
       (when (and (> kind 0)
                  (not (mp-driven-vehicle? proc))
-                 (< (mp-served-distance (-> proc root trans) #f) (meters 100))
+                 (< (mp-served-distance (-> proc root trans)) (meters 100))
                  )
-        (mp-add-actor proc (if (= kind 1)
-                               (mp-actor-flag)
-                               (mp-actor-flag vehicle)
-                               )
-                      )
+        (if (mp-add-actor proc (if (= kind 1)
+                                   (mp-actor-flag)
+                                   (mp-actor-flag vehicle)
+                                   )
+                          )
+            (mp-force-math proc)
+            )
         )
       )
     )
@@ -593,6 +640,7 @@
             *null-kernel-context*
             )
           )
+      (mp-release-math #f)
       (set! (-> *mp-actors-out* count) *mp-collect-count*)
       (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
       (mp-send-poses)
@@ -674,6 +722,8 @@
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
    (fx-group   int32 4)            ;; particle groups the owner's object emits (mp-play-emitters)
    (fx-tracker handle 4)
+   (pose-count int32)              ;; poses laid on this copy, and the last count received
+   (pose-last  int32)
    (net    mp-actor-state :inline) ;; latest state from the owner
    )
   )
@@ -828,8 +878,10 @@
             )
       (set! (-> prim prim-core collide-with) (collide-spec))
       (set! (-> prim prim-core action) (collide-action solid))
+      ;; a vehicle's sphere is centered low: the underside of a sphere standing above the ground
+      ;; is a ceiling that makes a player next to it crouch
       (if vehicle?
-          (set-vector! (-> prim local-sphere) 0.0 (meters 1) 0.0 (meters 2.5))
+          (set-vector! (-> prim local-sphere) 0.0 (meters -0.5) 0.0 (meters 2.2))
           (set-vector! (-> prim local-sphere) 0.0 (meters 1) 0.0 (meters 0.8))
           )
       (set! (-> cshape total-prims) (the-as uint 1))
@@ -1150,8 +1202,10 @@
 (define-extern mp-sounds-housekeeping (function symbol none))
 
 (defbehavior mp-world-client-stop mp-manager ()
-  "Back to a normal world: replicas gone (and their sounds), our NPCs and traffic back."
+  "Back to a normal world: replicas gone (and their sounds), our NPCs and traffic back, their
+   joint math as stock."
   (mp-sounds-housekeeping #t)
+  (mp-release-math #t)
   (mp-replicas-clear)
   (mp-world-wake)
   (none)
@@ -1174,6 +1228,7 @@
       (set! *mp-authority* #f)
       (if (or (> (-> *mp-world-state* replica-count) 0)
               (> (-> *mp-world-state* suppressed-count) 0)
+              (> (-> *mp-world-state* forced-count) 0)
               (-> *mp-world-state* traffic-off?)
               )
           (mp-world-client-stop)
@@ -1483,8 +1538,8 @@
 ;; A copy plays the owner's animation by index, which misses blended channels, animations streamed
 ;; on the owner's machine (vehicle seats, scripted moves), joint mods (look-at, aiming) and
 ;; ragdolls. So each batch also carries the owner's bones, relative to the object's frame (its
-;; root position and orientation, as sent in its state): the player's, its props', and those of the
-;; NPCs nearest to another player (MP_POSE_BUDGET of them). The copy computes its own bones from
+;; root position and orientation, as sent in its state): the player's, its props', and every NPC's
+;; sent (whose joint math runs in full while it is sent, mp-force-math). The copy computes its own bones from
 ;; its animation, then mp-pose-postbind (its joint-control postbind-function) lays the owner's on
 ;; its frame, interpolated by the runtime like the rest of its state. The animation still runs: it
 ;; plays the animation's effects (footsteps, sounds) and stands in until a pose arrives.
@@ -1747,6 +1802,13 @@
           (+! emitters 1)
           )
       )
+    (when (and pose? (not (mp-pose-ready? proc npc?)))
+      ;; not drawn by its owner, for good or for a moment (a teleport): nothing to copy
+      (if (and (nonzero? (-> proc draw)) (logtest? (-> proc draw status) (draw-control-status no-draw no-draw-temp)))
+          (+! (-> ps poses-hidden) 1)
+          (+! (-> ps poses-skipped) 1)
+          )
+      )
     (when (and pose? (mp-pose-ready? proc npc?))
       (let ((nodes (-> proc node-list)))
         (dotimes (i (-> nodes length))
@@ -1799,43 +1861,33 @@
   )
 
 (defun mp-send-poses ()
-  "Queue and send the poses of this batch: the player, its props, the MP_POSE_BUDGET NPCs nearest
-   to another player within 40 m (the other NPCs send only their emitters), then forget the
-   emitters noted since the last batch."
-  (let ((ps *mp-pose*))
-    (when *target*
-      (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t)
+  "Queue and send the poses of this batch: the player, its props and every NPC sent, each with the
+   emitters and sounds it used; then forget the emitters and sounds noted since the last batch."
+  (let* ((ps *mp-pose*)
+         (manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+         ;; a passenger's own model is hidden: the model this player sees in the seat is sent instead
+         (seated (if (and manager (>= *mp-ride-slot* 0))
+                     (the-as process-drawable (handle->process (-> manager self-puppet)))
+                     )
+                 )
+         )
+    (cond
+      (seated
+        (mp-send-pose (the-as uint #xffffff) seated (-> seated root trans) (-> seated root quat) #f #t)
+        )
+      (*target*
+        (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t)
+        )
       )
     (dotimes (i *mp-collect-count*)
       (let ((st (-> *mp-actors-out* state i)))
-        (when (logtest? (-> st flags) (mp-actor-flag owned))
-          (mp-send-pose (-> st id) (-> ps proc i) (-> st trans) (-> st quat) #f #t)
-          (set! (-> ps dist i) -1.0) ;; done
-          )
-        )
-      )
-    (dotimes (k MP_POSE_BUDGET)
-      (let ((best -1)
-            (best-dist (meters 40))
-            )
-        (dotimes (i *mp-collect-count*)
-          (when (and (>= (-> ps dist i) 0.0) (< (-> ps dist i) best-dist))
-            (set! best i)
-            (set! best-dist (-> ps dist i))
-            )
-          )
-        (when (>= best 0)
-          (let ((st (-> *mp-actors-out* state best)))
-            (mp-send-pose (-> st id) (-> ps proc best) (-> st trans) (-> st quat) #t #t)
-            (set! (-> ps dist best) -1.0)
-            )
-          )
-        )
-      )
-    (dotimes (i *mp-collect-count*)
-      (when (>= (-> ps dist i) 0.0)
-        (let ((st (-> *mp-actors-out* state i)))
-          (mp-send-pose (-> st id) (-> ps proc i) (-> st trans) (-> st quat) #t #f)
+        (mp-send-pose
+          (-> st id)
+          (-> ps proc i)
+          (-> st trans)
+          (-> st quat)
+          (not (logtest? (-> st flags) (mp-actor-flag owned)))
+          #t
           )
         )
       )
@@ -1875,11 +1927,17 @@
                         )
                       )
                )
+          (if (type? pp mp-replica)
+              (set! (-> (the-as mp-replica pp) pose-last) count)
+              )
           (when (and (> count 0) (= count (-> nodes length)))
             (dotimes (i count)
               (matrix-copy! (-> nodes data i bone transform) (-> ps bones i))
               )
             (+! (-> ps poses-applied) 1)
+            (if (type? pp mp-replica)
+                (+! (-> (the-as mp-replica pp) pose-count) 1)
+                )
             )
           )
         )

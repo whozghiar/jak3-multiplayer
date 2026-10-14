@@ -65,6 +65,7 @@
                   ;; duration, fvec = position
   (projectile 10) ;; to everyone: a projectile was fired; text = its type, fvec = position, iarg 0-2
                   ;; = velocity (float bits), iarg 3 = owner pid, -1 for the sender's player
+  (progress 11)   ;; story progress: text = bitmap of the closed task nodes iarg 0 .. iarg 0 + 255
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -74,6 +75,7 @@
   (cheats 0)    ;; guests may use the cheats of the Mods menu
   (sync-time 1) ;; guests follow the host's time of day
   (pvp 2)       ;; players can hit each other
+  (progress 3)  ;; players share their story progress (closed task nodes)
   )
 
 ;; One player's state. 192 bytes, mirrors mp::PlayerState.
@@ -90,7 +92,7 @@
    (flags      mp-flag)
    (anim-index int16)
    (veh-type   int16)
-   (character  int8)
+   (character  int8)       ;; low 4 bits: 0 Jak, 1 Daxter; high 4 bits: outfit (target-geo - 3)
    (color      int8)
    (seat-count int8)
    (ride-slot  int8)
@@ -167,7 +169,7 @@
 (define *mp-mode* (mp-mode offline))
 (define *mp-local-slot* -1)
 ;; Host: the settings sent to guests. Guest: the settings received from the host.
-(define *mp-world* (mp-world-flag cheats sync-time pvp))
+(define *mp-world* (mp-world-flag cheats sync-time pvp progress))
 ;; Invincibility cheat (Mods menu).
 (define *mp-invulnerable* #f)
 ;; #t while this player simulates the NPCs around it (always for the host), see mp-update-authority
@@ -381,12 +383,43 @@
   (the-as skeleton-group #f)
   )
 
-(defun mp-character-skel ((daxter? symbol))
-  "The model of a character: Daxter (resident in GAME) or Jak in the player's current outfit."
-  (if daxter?
-      (the-as skeleton-group (art-group-get-by-name *level* "skel-sidekick" (the-as (pointer level) #f)))
-      (target-skel-group)
+(defun mp-character-skel ((daxter? symbol) (outfit int))
+  "The model of a character: Daxter (resident in GAME), or Jak in `outfit` (target-geo - 3: 1 Jak 2,
+   2 old Jak 2, 3 Jak 3, as target-skel-group picks them), else in the local player's outfit when
+   that model is not loaded here."
+  (cond
+    (daxter?
+     (the-as skeleton-group (art-group-get-by-name *level* "skel-sidekick" (the-as (pointer level) #f)))
+     )
+    (else
+      (let ((sg (case outfit
+                  ((1) (art-group-get-by-name *level* "skel-jchar-normal" (the-as (pointer level) #f)))
+                  ((2) (art-group-get-by-name *level* "skel-jchar-old" (the-as (pointer level) #f)))
+                  ((3) (art-group-get-by-name *level* "skel-jchar-c" (the-as (pointer level) #f)))
+                  (else (the-as art-group #f))
+                  )
+                )
+            )
+        (if (and sg (type? sg skeleton-group))
+            (the-as skeleton-group sg)
+            (target-skel-group)
+            )
+        )
       )
+    )
+  )
+
+(defun mp-local-outfit ()
+  "The local player's outfit as sent in the character byte (target-geo - 3, 0 when unknown)."
+  (if (and *target* (>= (the-as int (-> *target* ext-geo)) 4))
+      (+ (the-as int (-> *target* ext-geo)) -3)
+      0
+      )
+  )
+
+(defun mp-state-outfit ((st mp-player-state))
+  "Outfit of a remote player, from its character byte."
+  (logand (shr (the-as int (-> st character)) 4) 15)
   )
 
 (defun mp-send-event ((kind mp-event-kind) (to int) (arg0 int) (f float))
@@ -483,7 +516,7 @@
   "Describe the local player in *mp-local*. Runs every frame from the hook, even paused."
   (let ((st *mp-local*))
     (copyn-charp<-string (-> st name) *mp-name* 16)
-    (set! (-> st character) (-> *mp-config* character))
+    (set! (-> st character) (logior (logand (-> *mp-config* character) 15) (shl (mp-local-outfit) 4)))
     (set! (-> st color) (-> *mp-config* color))
     (set! (-> st flags) (mp-flag))
     (set! (-> st anim-index) -1)
@@ -577,6 +610,8 @@
   (none)
   )
 
+(define-extern mp-send-all-progress (function int none)) ;; below, "Shared story progress"
+
 (defun mp-read-remote-states ()
   "Copy every remote player's interpolated state into *mp-players*, announcing joins and leaves."
   (dotimes (i MP_MAX_PLAYERS)
@@ -584,6 +619,10 @@
           (now (pc-mp-get-player i (-> *mp-players* state i)))
           )
       (set! (-> *mp-players* valid i) now)
+      ;; a player who joins gets our story progress (and sends us theirs)
+      (if (and now (not was) (mp-online?) (logtest? *mp-world* (mp-world-flag progress)))
+          (mp-send-all-progress i)
+          )
       ;; no announcement once the session is over: the reason it ended stays on screen
       (when (and (!= was now) (mp-online?))
         (string<-charp *mp-temp-string* (-> *mp-players* state i name))
@@ -605,6 +644,7 @@
 (deftype mp-puppet (process-focusable)
   ((slot       int32)          ;; player slot shown
    (daxter?    symbol)         ;; #t: Daxter model, else Jak
+   (outfit     int32)          ;; Jak's outfit (mp-character-skel)
    (local?     symbol)         ;; #t: shows the local player sitting as a passenger
    (skel-group skeleton-group) ;; model in use, to notice an outfit change
    (minimap    connection-minimap)
@@ -856,13 +896,18 @@
     (let ((puppet (the-as mp-puppet (ppointer->process (-> self parent)))))
       (when puppet
         (move-to-point! (-> self root) (-> puppet root trans))
-        ;; no hit while the player is not drawn or not hittable
-        (set! (-> self root root-prim prim-core collide-as)
-              (if (logtest? (-> puppet focus-status) (focus-status disable dead))
-                  (collide-spec)
-                  (collide-spec bot civilian)
-                  )
-              )
+        ;; no hit while the player is not drawn or not hittable, nor while it sits in a vehicle:
+        ;; the sphere would be inside the vehicle and stop it (the vehicle's copy takes the hits)
+        (let ((st (mp-remote-state (-> puppet slot))))
+          (set! (-> self root root-prim prim-core collide-as)
+                (if (or (logtest? (-> puppet focus-status) (focus-status disable dead))
+                        (and st (logtest? (-> st flags) (mp-flag driving riding)))
+                        )
+                    (collide-spec)
+                    (collide-spec bot civilian)
+                    )
+                )
+          )
         )
       )
     )
@@ -1018,7 +1063,19 @@
         )
     )
   ;; the manager only spawns a puppet when this model is available
-  (let ((sg (mp-character-skel daxter?)))
+  (set! (-> self outfit) (let ((st (if local?
+                                       *mp-local*
+                                       (mp-remote-state slot)
+                                       )
+                                   )
+                               )
+                           (if st
+                               (mp-state-outfit st)
+                               0
+                               )
+                           )
+        )
+  (let ((sg (mp-character-skel daxter? (-> self outfit))))
     (set! (-> self skel-group) sg)
     (initialize-skeleton self sg (the-as pair 0))
     )
@@ -1148,6 +1205,117 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
+;; Shared story progress
+;; ------------------------------------------------------------------------------------------------
+
+;; Story progress is the set of closed task nodes (*game-info* sub-task-list). Every closure goes
+;; through the node's `open!` method (it closes the parents a node needs too), wrapped below: the
+;; others close the same node, with the same rewards. A player who joins gets every node closed by
+;; the others, and sends its own, so all end with the union. The host can turn it off.
+
+(define *mp-progress-replaying* #f) ;; closing nodes another player closed: do not send them back
+(define *mp-progress-received* 0)   ;; nodes closed because another player did, for the test log
+
+(defun mp-send-progress ((to int) (first int) (only int))
+  "Send to player `to` (-1: everyone) the closed task nodes among first .. first + 255, as a bitmap;
+   only node `only` when it is not -1."
+  (let ((ev (new 'stack 'mp-event))
+        (nodes (-> *game-info* sub-task-list))
+        )
+    (set! (-> ev kind) (mp-event-kind progress))
+    (set! (-> ev to) to)
+    (set! (-> ev iarg 0) first)
+    (dotimes (i 32)
+      (set! (-> ev text i) (the-as uint 0))
+      )
+    (dotimes (i 256)
+      (let ((n (+ first i)))
+        (when (and (> n 0)
+                   (< n (-> nodes length))
+                   (or (= only -1) (= n only))
+                   (logtest? (-> nodes n flags) (game-task-node-flag closed))
+                   )
+          (set! (-> ev text (/ i 8)) (logior (-> ev text (/ i 8)) (the-as uint (ash 1 (logand i 7)))))
+          )
+        )
+      )
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defun mp-send-all-progress ((to int))
+  "Send every closed task node to player `to`."
+  (let ((first 0))
+    (while (< first (-> *game-info* sub-task-list length))
+      (mp-send-progress to first -1)
+      (+! first 256)
+      )
+    )
+  (none)
+  )
+
+(defun mp-on-task-closed ((node game-task-node-info))
+  "A task node closed here: the other players close it too, unless they told us to."
+  (when (and (mp-online?) (logtest? *mp-world* (mp-world-flag progress)) (not *mp-progress-replaying*))
+    (let ((index (get-idx-in-task-list node)))
+      (if (> index 0)
+          (mp-send-progress -1 index index)
+          )
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-progress ((ev mp-event))
+  "Close the task nodes another player has closed, as if done here (rewards included)."
+  (when (logtest? *mp-world* (mp-world-flag progress))
+    (let ((nodes (-> *game-info* sub-task-list))
+          (first (-> ev iarg 0))
+          (count 0)
+          )
+      (set! *mp-progress-replaying* #t)
+      (dotimes (i 256)
+        (let ((n (+ first i)))
+          (when (and (> n 0)
+                     (< n (-> nodes length))
+                     (logtest? (-> ev text (/ i 8)) (ash 1 (logand i 7)))
+                     (not (logtest? (-> nodes n flags) (game-task-node-flag closed)))
+                     )
+            (open! (-> nodes n) 'event)
+            (+! count 1)
+            )
+          )
+        )
+      (set! *mp-progress-replaying* #f)
+      (when (> count 0)
+        (+! *mp-progress-received* count)
+        (format 0 "[multiplayer] ~D task node(s) closed after player ~D~%" count (-> ev from))
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- wrap the stock task node closure (engine/game/task/task-control.gc).
+(define-perm *mp-stock-task-node-open!* (function game-task-node-info symbol int)
+  (the-as (function game-task-node-info symbol int) (method-of-type game-task-node-info open!))
+  )
+
+(defmethod open! ((this game-task-node-info) (arg0 symbol))
+  "Stock behavior (closes the node and the parents it needs); the other players close it too
+   (multiplayer mod, no-op offline)."
+  (let* ((was-closed? (logtest? (-> this flags) (game-task-node-flag closed)))
+         (result (*mp-stock-task-node-open!* this arg0))
+         )
+    (if (and (not was-closed?) (logtest? (-> this flags) (game-task-node-flag closed)))
+        (mp-on-task-closed this)
+        )
+    result
+    )
+  )
+
+;; ------------------------------------------------------------------------------------------------
 ;; Manager process
 ;; ------------------------------------------------------------------------------------------------
 
@@ -1193,7 +1361,7 @@
       (when (and proc
                  (or (not st)
                      (!= (-> proc daxter?) (logtest? (-> st flags) (mp-flag indax)))
-                     (!= (-> proc skel-group) (mp-character-skel (-> proc daxter?)))
+                     (!= (-> proc skel-group) (mp-character-skel (-> proc daxter?) (mp-state-outfit st)))
                      )
                  )
         (deactivate proc)
@@ -1202,7 +1370,7 @@
         )
       (when (and st
                  (not proc)
-                 (mp-character-skel (logtest? (-> st flags) (mp-flag indax)))
+                 (mp-character-skel (logtest? (-> st flags) (mp-flag indax)) (mp-state-outfit st))
                  (time-elapsed? (-> self spawn-retry) (seconds 1))
                  )
         (let ((new-proc (process-spawn
@@ -1227,7 +1395,7 @@
   ;; the passenger sees its own model in the seat (its real one is hidden while riding)
   (let ((proc (handle->process (-> self self-puppet))))
     (cond
-      ((and (>= *mp-ride-slot* 0) (not proc) (mp-character-skel (= (-> *mp-config* character) 1)))
+      ((and (>= *mp-ride-slot* 0) (not proc) (mp-character-skel (= (-> *mp-config* character) 1) (mp-local-outfit)))
        (let ((new-proc (process-spawn
                          mp-puppet
                          *mp-local-slot*
@@ -1386,6 +1554,9 @@
         (((mp-event-kind kill-entity))
          (mp-apply-remote-kill (the-as uint (-> ev iarg 0)))
          )
+        (((mp-event-kind progress))
+         (mp-apply-progress ev)
+         )
         (((mp-event-kind steal))
          (if *target*
              (mp-on-stolen)
@@ -1519,7 +1690,8 @@
             ;; Daxter's mode has its own grab states: back to Jak for the ride
             (send-event *target* 'end-mode 'indax)
             )
-           ((= state 'target-stance)
+           ;; on the ground, standing or crouched (next to a vehicle the player may crouch)
+           ((and (not (focus-test? *target* in-air hit grabbed pilot dead)) (!= state 'target-grab-ride))
             (let ((seat (process-spawn mp-seat (-> self ride-want) :name "mp-seat" :to self)))
               (when seat
                 (set! (-> self seat) (ppointer->handle seat))

@@ -1,0 +1,12 @@
+# Shared story progress, host side: closes the first open task node before the guest joins (sent
+# on join), then another one while connected (sent live).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+40 log-tasks
+41 close-task
+42 log-tasks
+60 close-task
+62 log-tasks
+70 log-tasks

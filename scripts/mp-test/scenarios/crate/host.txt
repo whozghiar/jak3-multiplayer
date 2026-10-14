@@ -5,6 +5,7 @@
 38 host 0.0.0.0:7777
 55 log-crates
 56 goto-crate
+56.8 log-crates
 57 press square 200
 58 press square 200
 60 log-crates

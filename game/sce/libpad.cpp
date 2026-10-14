@@ -101,6 +101,13 @@ int scePadRead(int port, int /*slot*/, u8* rdata) {
       cpad->button0 = 0;
     }
     cpad->button0 |= mp::g_test_pad.buttons;
+    // full pressure on the pressed buttons that have one (a buggy's throttle reads X's pressure)
+    constexpr int kPressureBit[12] = {5, 7, 4, 6, 12, 13, 14, 15, 10, 11, 8, 9};
+    for (int i = 0; i < 12; i++) {
+      if (mp::g_test_pad.buttons & (1u << kPressureBit[i])) {
+        cpad->abutton[i] = 255;
+      }
+    }
     if (mp::g_test_pad.lx != 128 || mp::g_test_pad.ly != 128) {
       cpad->leftx = mp::g_test_pad.lx;
       cpad->lefty = mp::g_test_pad.ly;

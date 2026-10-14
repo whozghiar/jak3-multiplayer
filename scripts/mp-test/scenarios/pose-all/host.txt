@@ -1,0 +1,73 @@
+# Pose of every object type, host side: Daxter and the gun out, standing among NPCs; then in a
+# buggy. Each log-pose-own line has its log-pose-copy twin on the guest; the NPC is sampled every
+# frame on both sides, to pair samples of the same moment (the copy is drawn 100 ms later).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+52 gun
+58 log-pose-own npc
+58 log-pose-own daxter
+58 log-pose-own gun
+58.100 log-pose-own npc
+58.117 log-pose-own npc
+58.133 log-pose-own npc
+58.150 log-pose-own npc
+58.167 log-pose-own npc
+58.183 log-pose-own npc
+58.200 log-pose-own npc
+58.217 log-pose-own npc
+58.233 log-pose-own npc
+58.250 log-pose-own npc
+58.267 log-pose-own npc
+58.283 log-pose-own npc
+58.300 log-pose-own npc
+58.317 log-pose-own npc
+58.333 log-pose-own npc
+58.350 log-pose-own npc
+58.367 log-pose-own npc
+58.383 log-pose-own npc
+58.400 log-pose-own npc
+58.417 log-pose-own npc
+58.433 log-pose-own npc
+58.450 log-pose-own npc
+58.467 log-pose-own npc
+58.483 log-pose-own npc
+58.500 log-pose-own npc
+58.517 log-pose-own npc
+58.533 log-pose-own npc
+58.550 log-pose-own npc
+58.567 log-pose-own npc
+58.583 log-pose-own npc
+58.600 log-pose-own npc
+58.617 log-pose-own npc
+58.633 log-pose-own npc
+58.650 log-pose-own npc
+58.667 log-pose-own npc
+58.683 log-pose-own npc
+58.700 log-pose-own npc
+58.717 log-pose-own npc
+58.733 log-pose-own npc
+58.750 log-pose-own npc
+58.767 log-pose-own npc
+58.783 log-pose-own npc
+58.800 log-pose-own npc
+58.817 log-pose-own npc
+58.833 log-pose-own npc
+58.850 log-pose-own npc
+58.867 log-pose-own npc
+58.883 log-pose-own npc
+58.900 log-pose-own npc
+58.917 log-pose-own npc
+58.933 log-pose-own npc
+58.950 log-pose-own npc
+58.967 log-pose-own npc
+58.983 log-pose-own npc
+59.000 log-pose-own npc
+60 log
+62 vehicle 15
+68 log-pose-own vehicle
+68 log-pose-own wheel
+68 log-pose-own npc
+69 log-pose-own wheel
+70 log

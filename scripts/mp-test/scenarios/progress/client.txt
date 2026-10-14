@@ -1,0 +1,10 @@
+# Shared story progress, guest side: same save as the host; gets the node the host closed before
+# the join, then the one closed live.
+1 enable
+1 name Guest
+1 color 2
+40 log-tasks
+45 join 127.0.0.1:7777
+55 log-tasks
+66 log-tasks
+72 log-tasks
