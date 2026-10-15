@@ -170,11 +170,13 @@ touching every part of a vehicle for several frames counts once, as stock code c
   the NPCs it sends within 60 m of another player as on screen (`mp-keep-seen-npcs`). When the
   roles change (a guest meets or leaves the host), what the player sees would still change at once:
   its own NPCs put to sleep, the copies of NPCs their owner hides or stops sending removed. So
-  nothing drawn on our screen within 60 m (`mp-in-our-view?`) goes while there: an own NPC sleeps
-  once out of view (60 s at most after the switch); a copy its owner hides or no longer sends
-  stays where it is, intangible, until out of view (`linger-since`, 2 minutes at most). Only a
-  copy whose art leaves with its level goes at once. Measured on the guest
-  (`vanished-near`, `log-vanished`): what was on its screen within 40 m and vanished alive.
+  nothing drawn on our screen within 60 m (`mp-in-our-view?`) goes at once: an own NPC, still
+  alive, sleeps once out of view (60 s at most after the switch); a copy its owner hides or no
+  longer sends stays where it is, intangible, 3 s (a late state brings it back), then fades out
+  over 1 s (`mp-replica-fade`: `force-fade`, as debris fade), unless our player looks away first
+  (`linger-since`). Only a copy whose art leaves with its level goes at once. Measured on the
+  guest (`log-vanished`): what was on its screen within 40 m and vanished alive at once
+  (`vanished-near`), and what faded out instead (`faded-near`).
 
 ### 1.5 Story progress
 
@@ -189,11 +191,14 @@ the union. Host setting **Share story progress** (on by default).
 
 - **Cycles.** Moving platforms, wheels, lights and every other object on a cycle compute their
   phase from their process's clock (`sync-info`), and each machine's clocks started at its own
-  boot. The host sends its clocks with the world settings every 2 s (`*mp-synced-clocks*`); on a
-  guest, the `sync-info` methods (`get-norm!` of the three cycle types, `get-current-phase-no-mod`,
-  `get-timeframe-offset!`, `sync-now!`) see the object's offset shifted by the host's lead minus
-  100 ms, put back after the call. The cycles show the host's phase as its copies are drawn, and no
-  timer of the game moves.
+  boot. The host sends its clocks with the world settings every 2 s (`*mp-synced-clocks*`), and
+  the time it read them (`pc-mp-clock`); on a guest, the `sync-info` methods (`get-norm!` of the
+  three cycle types, `get-current-phase-no-mod`, `get-timeframe-offset!`, `sync-now!`) see the
+  object's offset shifted by the host's lead at the time the host's copies are drawn here
+  (`mp-apply-clocks`: the host's clocks moved on by the host time from their reading to
+  `pc-mp-clock` of the host, which carries the network's delay), put back after the call. The
+  cycles show the host's phase as its copies are drawn, whatever the delay (a fixed 100 ms before:
+  30 to 34 ms off under 50 ms of delay and 30 of jitter, 3 ms now), and no timer of the game moves.
 - **Doors.** `com-airlock` decides to open in `want-cross-airlock?`, for the local player only. The
   wrapper also opens it for a remote player standing where the local one would (in front, within
   its distances and heights, the door allowed to open by its script), so a door is open on every
@@ -442,8 +447,12 @@ task compile-check                                        # first time in a work
 ### 5.2 Automated sessions
 
 ```bash
-python scripts/mp-test/run_mp_test.py <scenario>
+python scripts/mp-test/run_mp_test.py <scenario> [--latency <ms>[:<jitter ms>]]
 ```
+
+`--latency` holds what each instance receives that long, plus up to the jitter, before reading it,
+in order (`MP_TEST_LATENCY`, `Peer::receive` in `kmultiplayer.cpp`): both instances run on one
+machine, this stands in for the network between two.
 
 `python scripts/mp-test/compare_poses.py` compares, after a `pose-all` run, the bones the host
 logged for its objects with those of their copies on the guest at the same moment: both log every
@@ -476,6 +485,7 @@ A script line is `<seconds> <command>`:
 | `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
 | `press <button> <ms>`, `stick <lx> <ly> <ms>`, `stick-r <rx> <ry> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; sticks 0-255, 128 centered; the right stick turns the camera). |
 | `goto-player <slot> [x z]`, `face-player <slot>`, `goto-behind <slot> <m>` | Stand next to a remote player (or x and z meters from it), turn to it; stand that far behind it, out of its view. |
+| `goto-own <prefix>`, `kill-own <prefix>` | Stand 8 m from one of our NPCs we send whose skeleton starts with `prefix` (`h-bike`, `barge`), facing it; give the first such vehicle a blow from our player that leaves it no hit points (it crashes and blows up as the game makes it). |
 | `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
 | `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
 | `gun`, `vehicle <type>`, `cheat <name>`, `zone <n>`, `continue <name>` | Gameplay helpers. |
@@ -503,10 +513,10 @@ A script line is `<seconds> <command>`:
 | `log-join`, `try-save` | Joining the host's world: stage, world sent or loaded and its size, saves refused, continue point, title screen or in game, language, distance to the host; an auto-save, as a checkpoint asks it. |
 | `log-coop`, `log-weather` | Co-op: authority, steps held and released, leash returns, the player waited for, distance to the host; the weather (clouds, fog, special, the override). |
 | `log-gone`, `trace-gone` | On the authority: the NPCs it sent, shown, that left the game or were hidden within 40 m of another player without dying (count; each, with why). |
-| `log-vanished`, `trace-vanish` | What vanished on our screen within 40 m while alive: own NPCs put to sleep, copies removed or hidden (count; each, with why). |
+| `log-vanished`, `trace-vanish` | What vanished on our screen within 40 m while alive: own NPCs put to sleep, copies removed or hidden at once (count; each, with why), and copies that faded out instead; each copy that dies here (`copy died <skeleton> [vehicle]`). |
 | `log-path <skeleton> <frames>` | An object's root every frame: on its owner each state it sends, on a viewer each state drawn, stamped with the owner's clock (`compare_poses.py` compares the copy's path with the owner's). |
 
-Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 245 checks passed, 1 failed, 34 scenarios; the failure, `world-objects`' cycle phase at 29 ms against a 17 ms bound, two samples stamped 10 to 14 ms late, passed run again with 16 ms):
+Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 253 checks passed, 1 failed, 35 scenarios, no crash; the failure, `v1-city-combat` checking a vehicle's copy dying, no vehicle destroyed in that run, was dropped for that scenario (`v1-city-dark1-host` destroys one for sure) and the run again passed 6 of 6):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -533,9 +543,10 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `elevator-alone` | Another player's elevator trip | The host rides the palace elevator up while the guest stays in the street 25 m away: the guest's elevator rises with it (34.6 m to 242.9 m, placed from the host's states), its scripts set aside for the trip and back after; the guest's continue point stays `wascity-start` and no palace level loads for it. Before: the elevator stayed at the bottom (paused out of view) and, arriving, its scripts changed the guest's continue point and levels. |
 | `drive` | Smoothness of a driven vehicle | The host drives a buggy 80 m straight; the guest, 8 m away, logs its copy's root every frame: 351 samples, the copy within 0.1 cm of the host's path (median), 0.2 cm for 95 %, 0.4 cm at most; its speed changes 0.21 m/s per frame, the host's own 0.23 m/s (the copy moves as evenly as the original). |
 | `npc-watch` | NPCs under another player's eyes | The host stands still at Haven's port, the guest 30 m behind it, out of the host's view, for 90 s, showing the host's NPCs (13 copies): none of the NPCs the host sends near the guest leaves or is hidden alive (`log-gone` 0). |
-| `npc-handoff` | NPCs when players meet or part | At the port, the host goes to the slums (the guest simulates its own NPCs), then comes back next to the guest (the guest shows the host's again), while the guest turns its camera around every 8 s: nothing vanishes on the guest's screen within 40 m (`log-vanished` 0; 12 copies shown again at the end). The same script on `multiplayer-v1.0.0` (with the same count): 9, 3 and 5 vanished in three runs, own NPCs put to sleep in view when the host came back, copies of the host's NPCs hidden in view when it left; 0, 0 and 0 on the current version. |
+| `npc-handoff` | NPCs when players meet or part | At the port, the host goes to the slums (the guest simulates its own NPCs), then comes back next to the guest (the guest shows the host's again), while the guest turns its camera around every 8 s: nothing vanishes at once on the guest's screen within 40 m (`log-vanished` 0). The same script on `multiplayer-v1.0.0` (with the same count): 9, 3 and 5 vanished in three runs, own NPCs put to sleep in view when the host came back, copies of the host's NPCs hidden in view when it left. Now, three runs: 0, 0 and 0 vanished; in the third, 3 guards' copies the host left in view faded out instead. |
 | `v1-vehicle-hit` | The hoverboard zap's crash, reproduced | The `vehicle-hit` script without waits. On `multiplayer-v1.0.0`: the host crashes in `board-zap-track` (`vector<-cspace!`), as in the test session. Now: the zaps and blows applied (96 hits on the buggy, its wheels and a wastelander), no crash. |
-| `v1-city-combat`, `v1-city-yellow3` | The gun crashes, reproduced | The `city-combat` script without waits, and the gyro burster (yellow 3) alone at the port's guards. On `multiplayer-v1.0.0`: the guest crashes in both, while firing the plasmite RPG (red 3) and the gyro burster: the copy of a barge its shots destroyed plays a character's death effect, a call to address 0 from `mp-replica-update`. Now: the same blows applied (60 hits on barges; 143 on barges, a car, citizens and a guard), no crash. The peace maker (dark 1) did not crash `multiplayer-v1.0.0` in these scripts nor alone at the port or in Spargus; it destroys vehicles the same way. |
+| `v1-city-combat`, `v1-city-yellow3` | The gun crashes, reproduced | The `city-combat` script without waits, and the gyro burster (yellow 3) alone at the port's guards. On `multiplayer-v1.0.0`: the guest crashes in both, while firing the plasmite RPG (red 3) and the gyro burster: the copy of a barge its shots destroyed plays a character's death effect, a call to address 0 from `mp-replica-update`. Now: the same blows applied (60 hits on barges and a car's copy dying on the guest; 133 hits on barges, a bike, citizens and a guard), no crash. |
+| `v1-city-dark1-host` | The peace maker crash, reproduced | At the port the host fires the peace maker (dark 1) at its own bikes, car and barge (`goto-own`) while the guest stands by. On `multiplayer-v1.0.0`: the guest crashes (one run of two; in the other no vehicle was destroyed), the same call to address 0 from `mp-replica-update`: a bike's copy dying. Now: a vehicle's copy dies on the guest (`copy died ... vehicle`; the script ends with `kill-own`, one of the host's vehicles destroyed for sure), no crash. Fired by the guest, the peace maker of `multiplayer-v1.0.0` hits no copy (its copies were not focusable), hence no crash in that direction. |
 | `join-world` | A guest with another save joins | The guest, in Haven with 3 more story steps than the host, joins: it loads the host's world (42928 bytes, 3.7 s), comes out at the host's checkpoint in Spargus 1.5 m from the host, with the host's progress (1 node); the host's progress is unchanged (the guest's 3 not merged); its language is kept; an auto-save is refused (`no save in another player's world`). |
 | `join-title` | Joining from the title screen | The guest goes back to the title screen, joins from there: the host's world loads, the guest appears 1.5 m from the host at its checkpoint, with its progress (screenshots: the title screen, then next to the host). |
 | `coop` | Co-op mode | The host hosts in co-op: the guest never simulates NPCs; sent 202 m away, it is back 1.5 m from the host within 3 s (leash). Standing 59 m away, it is told "Host waits for you here" while a story step the host reached is held; coming next to the host, the step closes on both (2 nodes each). The guest follows the host's weather (clouds 0.25, fog 0.5, its own random weather stopped). |
@@ -543,6 +554,19 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
 | `float` | Physics objects | The volcano's lava platforms, 270 m from both players: at the same stamp, the guest's are within 7 cm in height and 0.002 in tilt of the host's (they were 2.25 s out of phase before). |
 | `float-weight` | A player standing on a remote-driven platform | The guest stands on a lava platform its machine moves where the host's is: carried 18 m in 2 s with it; each machine sends the other player's weight to its platform (counters); both slide into the lava as the platform sinks, as in the stock game. |
+
+Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
+plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
+passed, 0 failed, no crash):
+
+| Scenario | Under 50 ms + 30 ms of jitter |
+|---|---|
+| `smoke`, `pvp`, `vehicle`, `coop`, `join-world` | Every check of the scenario passes: puppets and hits, the steal prompt, the leash, held story steps and the host's weather, the host's world loaded and the guest 1.5 m from the host. |
+| `drive` | The buggy's copy within 0.1 cm of the owner's path (median), 0.2 cm at most, over 102 m; its speed changes 0.10 m/s per frame, the owner's 0.24. |
+| `pose-all` | Copies within 0.8 mm (player), 0.9 mm (NPC), 0.7 mm (Daxter) of the owner's pose (median), 2.1 mm at most. |
+| `guns`, `city-combat`, `v1-city-dark1-host` | No crash; 219 and 170 shot copies drawn; a vehicle's copy dies on the guest. |
+| `npc-handoff` | Nothing vanishes at once on the guest's screen; 2 copies left in view faded out. |
+| `world-objects`, `float`, `float-weight`, `elevator-alone` | Cycles within 2 ms of the host's (30 to 34 ms before the clock fix); lava platforms within 7.6 cm; the elevator rides up and gives its scripts back. |
 
 | | |
 |---|---|
@@ -583,12 +607,11 @@ public IP.
 - Bandwidth to each other player: about 200 KB/s for a player's model, Daxter and gun at 60
   frames a second, plus 36 KB/s per NPC within 40 m of that player and 9 KB/s per NPC farther
   (15 Hz); with a crowd of 10 NPCs nearby and 30 farther, about 0.85 MB/s.
-- A copy its owner no longer simulates stays where it is, frozen and intangible, while the player
-  looks at it (2 minutes at most); an own NPC in view stays awake up to 60 s after another
-  player's NPCs are shown: meanwhile both are seen.
-- The peace maker (dark 1) crash of the test session was not reproduced on `multiplayer-v1.0.0`
-  (two scripts, at the port and in Spargus); it destroys vehicles like the two guns whose crash
-  was reproduced and fixed.
+- A copy its owner no longer simulates holds 3 s where it is, then fades out over 1 s, when the
+  player looks at it; an own NPC in view stays awake up to 60 s after another player's NPCs are
+  shown: meanwhile both are seen.
+- The scenarios run two instances on one machine; `--latency` delays what each receives (one
+  way, with jitter), not a real link's losses or bandwidth limits.
 - Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
@@ -622,13 +645,20 @@ public IP.
   - *Reproductions on the version played.* `multiplayer-v1.0.0` rebuilt with its own sources:
     the hoverboard zap crashes the host (`board-zap-track`); the gyro burster and the plasmite RPG
     crash the guest in Haven (the copy of a barge they destroyed played a character's death
-    effect). Scenarios `v1-vehicle-hit`, `v1-city-combat`, `v1-city-yellow3` run the same scripts
-    on the current version: no crash.
+    effect), and so does the host's peace maker destroying its bikes. Scenarios `v1-vehicle-hit`,
+    `v1-city-combat`, `v1-city-yellow3`, `v1-city-dark1-host` run the same scripts on the current
+    version: no crash, vehicles' copies dying (`copy died`).
   - *NPCs vanishing.* Reproduced on `multiplayer-v1.0.0` (`npc-handoff`: 9, 3 and 5 on the
     guest's screen): own NPCs put to sleep and copies hidden or removed in view when the roles
-    change. Nothing in view goes now (1.4): 0, 0 and 0. Measures `log-vanished` and `log-gone`
-    (hidden NPCs counted too), test commands `stick-r`, `goto-behind`, `trace-gone`,
-    `trace-vanish`; `npc-watch` with the guest out of the host's view.
+    change. Nothing in view goes at once now (1.4): 0, 0 and 0, a copy left in view fading out.
+    Measures `log-vanished` and `log-gone` (hidden NPCs counted too), test commands `stick-r`,
+    `goto-behind`, `goto-own`, `trace-gone`, `trace-vanish`; `npc-watch` with the guest out of
+    the host's view.
+  - *Network.* `run_mp_test.py --latency <ms>:<jitter>`: what each instance receives is held
+    that long, in order, as over a link between two machines (15 scenarios pass, 5.2). Under 50 ms and
+    30 ms of jitter, cycles were 30 to 34 ms off the host's: their clock shift now follows the
+    host's copies (1.6), 3 ms. A copy's `linger-since` is set at its start (process memory is
+    reused). Test command `kill-own`.
 - **2026-10-14:** every kind of object of a place checked, not only those passing by: test
   commands `announce-all-kinds` and `log-kinds-coverage` (`pc-mp-art-file-exists`), art and
   skeleton tables raised to 160 kinds (24 of 24 in Haven, 65 of 65 in Spargus). Test command

@@ -110,6 +110,7 @@
    (replica-id     uint32 MP_MAX_REPLICAS)
    (replica        handle MP_MAX_REPLICAS)
    (vanished-near  int32)        ;; what vanished on our screen within 40 m, alive (test log)
+   (faded-near     int32)        ;; copies that faded out on our screen within 40 m instead (test log)
    (suppressed-count int32)
    (suppressed     handle 256)
    (skel-count     int32)
@@ -1016,6 +1017,11 @@
 
 (define-extern mp-replica-vanished (function process-drawable string none))
 
+(define *mp-trace-vanish* #f) ;; trace-vanish: log each copy that vanished, faded or died near us
+
+(defconstant MP_LINGER_HOLD (seconds 3)) ;; a copy left in our view holds this long (a late state)
+(defconstant MP_LINGER_TIME (seconds 4)) ;; then fades out until this, as debris do
+
 (defun mp-in-our-view? ((proc process-drawable))
   "#t when `proc` is drawn on our screen within 60 m of our player: whatever it does there, our
    player sees it."
@@ -1036,7 +1042,7 @@
   ((id     uint32)
    (dying? symbol)
    (linger-since time-frame)       ;; when it began to stay in our view after its owner hid it or
-                                   ;; stopped sending it (0: not lingering)
+                                   ;; stopped sending it (0: not lingering): it holds, then fades out
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
    (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the owner's object emits (mp-play-emitters)
    (fx-tracker handle MP_FX_TRACKERS)
@@ -1115,6 +1121,25 @@
   (none)
   )
 
+(defbehavior mp-replica-fade mp-replica ()
+  "A copy lingering in our view (linger-since) fades out after MP_LINGER_HOLD, down to nothing at
+   MP_LINGER_TIME (force-fade, as debris fade); a copy shown again is drawn whole."
+  (cond
+    ((nonzero? (-> self linger-since))
+     (let ((fade (- 128 (/ (* (- (- (mp-now) (-> self linger-since)) MP_LINGER_HOLD) 128) (- MP_LINGER_TIME MP_LINGER_HOLD)))))
+       (when (< fade 128)
+         (logior! (-> self draw status) (draw-control-status force-fade))
+         (set! (-> self draw force-fade) (the-as uint (max 0 fade)))
+         )
+       )
+     )
+    (else
+      (logclear! (-> self draw status) (draw-control-status force-fade))
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-replica-update mp-replica ()
   "Apply the host's latest state: place, scale, visibility, body variant, animation, death, and the
    kind weapons see (process mask, dead)."
@@ -1155,11 +1180,12 @@
       )
     (cond
       ;; hidden by its owner (back to the traffic pool, gone inactive) while in our view: it stays,
-      ;; intangible, until our player looks away (2 minutes at most), not vanishing under its eyes
+      ;; intangible, then fades out (mp-replica-fade) unless our player looks away first, instead of
+      ;; vanishing under its eyes
       ((and (logtest? (-> st flags) (mp-actor-flag hidden))
             (not (logtest? (-> st flags) (mp-actor-flag dead)))
             (mp-in-our-view? self)
-            (or (zero? (-> self linger-since)) (< (- (mp-now) (-> self linger-since)) (seconds 120)))
+            (or (zero? (-> self linger-since)) (< (- (mp-now) (-> self linger-since)) MP_LINGER_TIME))
             )
        (if (zero? (-> self linger-since))
            (set! (-> self linger-since) (mp-now))
@@ -1180,6 +1206,7 @@
             )
         )
       )
+    (mp-replica-fade)
     ;; 0 means the host's NPC does not use body segments: keep the default
     (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
         (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
@@ -1205,6 +1232,11 @@
     ;; up); its explosion comes with the effects replayed, its parts with its state.
     (when (and (logtest? (-> st flags) (mp-actor-flag dead)) (not (-> self dying?)))
       (set! (-> self dying?) #t)
+      (if *mp-trace-vanish*
+          (format 0 "[mp-test] copy died ~S~S~%" (string<-charp *mp-temp-string* (-> st skel))
+                  (if (logtest? (-> st flags) (mp-actor-flag vehicle)) " vehicle" "")
+                  )
+          )
       (set! (-> self root root-prim prim-core collide-as) (collide-spec))
       (when (and (nonzero? (-> self skel effect)) (not (logtest? (-> st flags) (mp-actor-flag vehicle))))
         (logior! (-> self skel effect flags) (effect-control-flag ecf1))
@@ -1323,6 +1355,7 @@
   (set! (-> self level) lev)
   (set! (-> self id) (-> st id))
   (set! (-> self dying?) #f)
+  (set! (-> self linger-since) 0)
   (set! (-> self focus-status) (focus-status))
   (mem-copy! (the-as pointer (-> self net)) (the-as pointer st) (size-of mp-actor-state))
   (let ((vehicle? (logtest? (-> st flags) (mp-actor-flag vehicle)))
@@ -1383,7 +1416,6 @@
   -1
   )
 
-(define *mp-trace-vanish* #f) ;; trace-vanish: log each copy counted in vanished-near
 
 (defun mp-replica-vanished ((proc process-drawable) (why string))
   "Test log: copy `proc` is removed or hidden: count it when it was on our screen within 40 m of our
@@ -1398,16 +1430,26 @@
                (logtest? (-> rep draw status) (draw-control-status on-screen))
                (< (vector-vector-distance (-> rep root trans) (-> *target* control trans)) (meters 40))
                )
-      (+! (-> *mp-world-state* vanished-near) 1)
-      (if *mp-trace-vanish*
-          (format
-            0
-            "[mp-test] vanished ~S ~S ~,,1m~%"
-            (string<-charp *mp-temp-string* (-> rep net skel))
-            why
-            (vector-vector-distance (-> rep root trans) (-> *target* control trans))
+      (let ((faded? (and (logtest? (-> rep draw status) (draw-control-status force-fade))
+                         (< (-> rep draw force-fade) (the-as uint 8))
+                         )
+                    )
             )
-          )
+        (if faded?
+            (+! (-> *mp-world-state* faded-near) 1)
+            (+! (-> *mp-world-state* vanished-near) 1)
+            )
+        (if *mp-trace-vanish*
+            (format
+              0
+              "[mp-test] ~S ~S ~S ~,,1m~%"
+              (if faded? "faded" "vanished")
+              (string<-charp *mp-temp-string* (-> rep net skel))
+              why
+              (vector-vector-distance (-> rep root trans) (-> *target* control trans))
+              )
+            )
+        )
       )
     )
   (none)
@@ -1497,6 +1539,7 @@
   "A copy of shot `st`: an intangible point that plays the owner's emitters and sounds."
   (set! (-> self id) (-> st id))
   (set! (-> self dying?) #f)
+  (set! (-> self linger-since) 0)
   (set! (-> self focus-status) (focus-status))
   (mem-copy! (the-as pointer (-> self net)) (the-as pointer st) (size-of mp-actor-state))
   (let ((cshape (new 'process 'collide-shape self (collide-list-enum usually-hit-by-player))))
@@ -1848,12 +1891,12 @@
                (+! i 1)
                )
               ;; its owner no longer sends it (it left, or the owner went away) while it is in
-              ;; our view: it stays where it was, intangible, until our player looks away (2
-              ;; minutes at most)
+              ;; our view: it stays where it was, intangible, then fades out (mp-replica-fade)
+              ;; unless our player looks away first
               ((and (not (-> proc dying?))
                     (not (logtest? (-> proc net flags) (mp-actor-flag dead)))
                     (mp-in-our-view? proc)
-                    (or (zero? (-> proc linger-since)) (< (- (mp-now) (-> proc linger-since)) (seconds 120)))
+                    (or (zero? (-> proc linger-since)) (< (- (mp-now) (-> proc linger-since)) MP_LINGER_TIME))
                     )
                (when (zero? (-> proc linger-since))
                  (set! (-> proc linger-since) (mp-now))

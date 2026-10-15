@@ -1951,17 +1951,20 @@
 
 ;; Objects that move on a cycle (platforms, wheels, lights...) take their phase from their
 ;; process's clock (sync-info, engine/util/sync-info.gc), and every machine's clocks started at its
-;; own boot. The host sends its clocks with the world settings; a guest shifts the phase of every
-;; cycle by the difference (multiplayer-world.gc wraps the sync-info methods), minus 100 ms so the
-;; cycles match the host's state as its copies are drawn. The clocks themselves are left alone:
-;; every timer of the game keeps its meaning.
+;; own boot. The host sends its clocks with the world settings, and its time (pc-mp-clock); a guest
+;; shifts the phase of every cycle (multiplayer-world.gc wraps the sync-info methods) to the host's
+;; clocks at the time its copies are drawn (pc-mp-clock of the host): cycles and copies match
+;; whatever the network's delay. The clocks themselves are left alone: every timer of the game
+;; keeps its meaning.
 (define *mp-synced-clocks* (new 'static 'boxed-array :type int32 1 2 6 7 8 9 10 11))
 
 (deftype mp-clock-sync (structure)
   ((known? symbol)    ;; the host's clocks arrived
-   (shift  int32 22)  ;; per *display* clock: host frame counter - ours - 100 ms
+   (shift  int32 22)  ;; per *display* clock: host frame counter when its copies are drawn - ours
    )
   )
+
+(define-extern pc-mp-clock (function int int))
 
 (define *mp-clock-sync* (new 'global 'mp-clock-sync))
 (set! (-> *mp-clock-sync* known?) #f)
@@ -1982,27 +1985,41 @@
         (set! (-> clocks i) (the-as int (-> *display* clock (-> *mp-synced-clocks* i) frame-counter)))
         )
       )
+    ;; when they were read, in tenths of a ms of our clock (low 32 bits)
+    (set! (-> ev iarg 1) (the-as int (pc-mp-clock -1)))
     (pc-mp-send-event ev)
     )
   (none)
   )
 
+(defun mp-wrap-32 ((diff int))
+  "A difference of two 32-bit counters, taken modulo 2^32 into -2^31..2^31."
+  (cond
+    ((>= diff #x80000000) (- diff #x100000000))
+    ((< diff (- #x80000000)) (+ diff #x100000000))
+    (else diff)
+    )
+  )
+
 (defun mp-apply-clocks ((ev mp-event))
-  "Guest: the shift between the host's clocks (in `ev`) and ours, drawn 100 ms behind."
-  (let ((clocks (the-as (pointer int32) (-> ev text))))
+  "Guest: the shift between the host's clocks (in `ev`) and ours, at the time the host's copies are
+   drawn here: the host's clocks moved on from when it read them by the host time between then and
+   the time its copies are drawn now (pc-mp-clock of the host, which already takes the network's
+   delay and our interpolation into account)."
+  (let ((clocks (the-as (pointer int32) (-> ev text)))
+        ;; tenths of a ms; 300 clock ticks a second are 3 ticks per 100 tenths
+        (ahead (/ (* (mp-wrap-32 (- (logand (pc-mp-clock (-> ev from)) #xffffffff) (logand (-> ev iarg 1) #xffffffff))) 3)
+                  100
+                  )
+               )
+        )
     (dotimes (i (-> *mp-synced-clocks* length))
-      (let* ((index (-> *mp-synced-clocks* i))
-             ;; 32-bit frame counters: the difference is taken modulo 2^32
-             (diff (- (logand (-> clocks i) #xffffffff)
-                      (logand (-> *display* clock index frame-counter) #xffffffff)
-                      )
-                   )
-             )
-        (cond
-          ((>= diff #x80000000) (set! diff (- diff #x100000000)))
-          ((< diff (- #x80000000)) (set! diff (+ diff #x100000000)))
-          )
-        (set! (-> *mp-clock-sync* shift index) (+ diff (- (seconds 0.1))))
+      (let ((index (-> *mp-synced-clocks* i)))
+        (set! (-> *mp-clock-sync* shift index)
+              (+ (mp-wrap-32 (- (logand (-> clocks i) #xffffffff) (logand (-> *display* clock index frame-counter) #xffffffff)))
+                 ahead
+                 )
+              )
         )
       )
     )

@@ -468,15 +468,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 [r for (r,) in roles][-2:] == ["simulates", "shows"], f"{[r for (r,) in roles]}")
         w = counter(client, r"world sent \d+ received (\d+) replicas (\d+)")
         c.check(scenario, "the host's NPCs shown again", bool(w) and w[-1][1] >= 1, f"replicas {w[-1][1] if w else None}")
-        gone = [int(v) for (v,) in grab(client, r"copies vanished near us (\d+)")]
+        gone = grab(client, r"copies vanished near us (\d+) faded (\d+)")
         each = [f"{a} {b}" for (a, b) in grab(client, r"\[mp-test\] vanished (\S+) (\S+)")]
-        c.check(scenario, "nothing vanishes on the guest's screen", bool(gone) and gone[-1] == 0, f"{gone} {each[:6]}")
+        c.check(scenario, "nothing vanishes at once on the guest's screen (copies left there fade out)",
+                bool(gone) and gone[-1][0] == "0", f"vanished {[int(a) for (a, b) in gone]}, faded {gone[-1][1] if gone else None} {each[:6]}")
 
     elif scenario.startswith("v1-"):
         # scripts that crashed multiplayer-v1.0.0 (its sources put back): the same blows, no crash
-        hits = grab(host, r"\[multiplayer\] player 1 hit #<(\S+) ")
-        c.check(scenario, "the host applies the guest's blows to its vehicles", len(hits) >= 1,
-                f"{len(hits)} hits ({', '.join(sorted(set(h for (h,) in hits)))})")
+        if scenario == "v1-city-dark1-host":
+            own = grab(host, r"\[mp-test\] goto-own (\S+)")
+            c.check(scenario, "the host fires the peace maker at its own traffic", len(own) >= 1, f"{[o for (o,) in own]}")
+        else:
+            hits = grab(host, r"\[multiplayer\] player 1 hit #<(\S+) ")
+            c.check(scenario, "the host applies the guest's blows to its vehicles", len(hits) >= 1,
+                    f"{len(hits)} hits ({', '.join(sorted(set(h for (h,) in hits)))})")
+        if scenario == "v1-city-dark1-host":
+            died = [d for (d,) in grab(client, r"\[mp-test\] copy died (\S+ vehicle)")]
+            c.check(scenario, "a vehicle's copy dies on the guest (what crashed v1.0.0)", len(died) >= 1, f"{died[:4]}")
         crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
         c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
 

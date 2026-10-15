@@ -17,6 +17,7 @@
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
 ;;   goto-player <slot> [x z] | face-player <slot>           stand next to / face a remote player
 ;;   goto-behind <slot> <meters>                             stand behind a remote player, out of its view
+;;   goto-own <prefix> | kill-own <prefix>                   stand 8 m from one of our NPCs we send; destroy that vehicle
 ;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
 ;;   gun [pickup-type] | board | vehicle <type>              every gun mod (26-37 picks one); hoverboard; a vehicle
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
@@ -1041,7 +1042,9 @@
          )
         ((string= cmd "log-vanished")
          ;; copies of other players' NPCs removed or hidden alive within 40 m of us
-         (format 0 "[mp-test] copies vanished near us ~D~%" (-> *mp-world-state* vanished-near))
+         (format 0 "[mp-test] copies vanished near us ~D faded ~D~%" (-> *mp-world-state* vanished-near)
+                 (-> *mp-world-state* faded-near)
+                 )
          )
         ((string= cmd "trace-vanish")
          (set! *mp-trace-vanish* #t)
@@ -1071,6 +1074,70 @@
         ((string= cmd "goto-npc")
          (mp-test-word)
          (mp-test-goto-npc (-> *mp-test* word))
+         )
+        ((string= cmd "kill-own")
+         ;; kill-own <prefix>: the first of our vehicles we send whose skeleton starts with prefix
+         ;; takes a blow from our player that leaves it no hit points: it crashes and blows up as
+         ;; the game makes it
+         (mp-test-word)
+         (let ((done? #f))
+           (dotimes (i (-> *mp-actors-out* count))
+             (let ((st (-> *mp-actors-out* state i))
+                   (proc (handle->process (-> *mp-pose* obj i)))
+                   )
+               (when (and (not done?)
+                          proc
+                          *target*
+                          (= (mp-actor-kind proc) 2)
+                          (mp-test-skel-prefix? (-> st skel) (-> *mp-test* word))
+                          )
+                 (send-event
+                   proc
+                   'attack
+                   :from *target*
+                   #f
+                   (static-attack-info
+                     :mask (vehicle-impulse-factor)
+                     ((id (new-attack-id))
+                      (mode 'explode)
+                      (damage 100.0)
+                      (attacker (process->handle *target*))
+                      (vehicle-damage-factor 1.0)
+                      (vehicle-impulse-factor 1.0)
+                      )
+                     )
+                   )
+                 (format 0 "[mp-test] kill-own ~S~%" (string<-charp *mp-temp-string* (-> st skel)))
+                 (set! done? #t)
+                 )
+               )
+             )
+           )
+         )
+        ((string= cmd "goto-own")
+         ;; goto-own <prefix>: stand 8 m from the first of our NPCs we send whose skeleton (without
+         ;; "skel-") starts with prefix, facing it
+         (mp-test-word)
+         (let ((done? #f))
+         (dotimes (i (-> *mp-actors-out* count))
+           (let ((st (-> *mp-actors-out* state i)))
+             (when (and (not done?) *target* (mp-test-skel-prefix? (-> st skel) (-> *mp-test* word)))
+               (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans)))
+                     (dir (new 'stack-no-clear 'vector))
+                     )
+                 (+! (-> pos z) (meters -8))
+                 (move-to-point! (-> *target* control) pos)
+                 (set-vector! dir 0.0 0.0 1.0 1.0)
+                 (quaternion-look-at! (-> *target* control quat) dir *up-vector*)
+                 (quaternion-copy! (-> *target* control quat-for-control) (-> *target* control quat))
+                 (quaternion-copy! (-> *target* control dir-targ) (-> *target* control quat))
+                 (format 0 "[mp-test] goto-own ~S~%" (string<-charp *mp-temp-string* (-> st skel)))
+                 (set! done? #t)
+                 )
+               )
+             )
+           )
+           )
          )
         ((string= cmd "goto-actor")
          ;; stand 3 m from the n-th NPC received from the host, facing it

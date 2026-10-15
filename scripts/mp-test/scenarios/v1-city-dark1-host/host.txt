@@ -1,0 +1,26 @@
+# Reproduction on multiplayer-v1.0.0 (bf43da5a3, its sources put back for the run): in Haven City's
+# port the host fires the peace maker (dark 1) at its own traffic while the guest stands near: the
+# vehicles it destroys die on the guest too; at the end one of its vehicles is destroyed for sure
+# (kill-own, not in v1.0.0). Fixed times (no wait-player): the same script runs on both versions.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+40 continue ctyport-start
+60 log-copies 1
+62 goto-own h-bike
+64 gun 35
+65 press r1 2000
+70 goto-own h-car
+72 press r1 2000
+78 goto-own h-bike
+80 press r1 2000
+86 goto-own barge
+88 press r1 2000
+94 goto-own h-car
+96 press r1 2000
+102 goto-own h-bike
+104 press r1 2000
+108 kill-own h-
+110 log
+120 log

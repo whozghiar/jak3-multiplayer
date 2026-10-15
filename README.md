@@ -39,8 +39,8 @@ host's world together as Jak or Daxter, in free roam or in co-op.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
   with their movements, effects and sounds, and they react to every player's shots. A player who
   goes far from the others keeps a living world around them, which the players near them share.
-  When players meet or part, the people and vehicles in front of you do not vanish: they leave
-  once you look away. Enemies killed, crates broken and pickups taken disappear for everybody.
+  When players meet or part, the people and vehicles in front of you do not vanish at once: they
+  leave when you look away, or fade out. Enemies killed, crates broken and pickups taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
   triangle to ride next to them when it has two seats. Guests can also take the host's traffic
   vehicles. The prompt shows the button, like the game's own.

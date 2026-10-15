@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "kmultiplayer.h"
@@ -133,6 +134,24 @@ constexpr double kTimeoutMs = 15000.0;         // silence before a peer is consi
 constexpr double kConnectTimeoutMs = 8000.0;
 constexpr size_t kMaxEvents = 256;
 
+// Test only: MP_TEST_LATENCY="<ms>[:<jitter ms>]" holds what arrives that long (plus up to the
+// jitter) before it is read, in order, as a real network delivers it. Off when unset.
+static void test_latency(double* ms, double* jitter) {
+  static double s_ms = -1, s_jitter = 0;
+  if (s_ms < 0) {
+    s_ms = 0;
+    if (const char* v = std::getenv("MP_TEST_LATENCY")) {
+      s_ms = std::atof(v);
+      if (const char* c = std::strchr(v, ':')) {
+        s_jitter = std::atof(c + 1);
+      }
+      lg::info("[multiplayer] test latency {} ms, jitter {} ms", s_ms, s_jitter);
+    }
+  }
+  *ms = s_ms;
+  *jitter = s_jitter;
+}
+
 struct Session::Peer {
   sock_t fd = kNoSock;
   std::string ip;
@@ -176,15 +195,32 @@ struct Session::Peer {
     }
   }
 
+  // Bytes received under a test latency, with the time they may be read (test_latency).
+  std::deque<std::pair<double, std::vector<u8>>> held;
+
   // Reads everything available. Returns false when the connection is closed.
   bool receive(double now_ms) {
     u8 buf[16384];
+    double latency, jitter;
+    test_latency(&latency, &jitter);
     while (true) {
       int n = recv(fd, (char*)buf, sizeof(buf), 0);
       if (n > 0) {
-        in.insert(in.end(), buf, buf + n);
+        if (latency > 0) {
+          double at = now_ms + latency + jitter * (std::rand() / (double)RAND_MAX);
+          if (!held.empty()) {
+            at = std::max(at, held.back().first);  // in order, as TCP delivers
+          }
+          held.emplace_back(at, std::vector<u8>(buf, buf + n));
+        } else {
+          in.insert(in.end(), buf, buf + n);
+        }
         last_recv = now_ms;
       } else if (n < 0 && would_block(sock_error())) {
+        while (!held.empty() && held.front().first <= now_ms) {
+          in.insert(in.end(), held.front().second.begin(), held.front().second.end());
+          held.pop_front();
+        }
         return true;
       } else {
         return false;

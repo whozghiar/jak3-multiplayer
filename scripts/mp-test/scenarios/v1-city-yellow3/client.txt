@@ -3,6 +3,7 @@
 1 enable
 1 name Guest
 1 color 2
+1 trace-vanish
 40 continue ctyport-start
 45 join 127.0.0.1:7777
 52 goto-player 0

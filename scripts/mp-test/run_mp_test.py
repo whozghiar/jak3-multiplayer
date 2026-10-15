@@ -81,6 +81,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("scenario")
     parser.add_argument("--extra-seconds", type=float, default=5.0)
+    parser.add_argument("--latency", default="",
+                        help="one-way delay of what each instance receives, '<ms>[:<jitter ms>]' (MP_TEST_LATENCY)")
     args = parser.parse_args()
 
     scenario = SCENARIOS / args.scenario
@@ -102,6 +104,8 @@ def main() -> int:
         folder = out / name
         prepare_instance(folder, index)
         env = dict(os.environ, MP_TEST_SCRIPT=str(script))
+        if args.latency:
+            env["MP_TEST_LATENCY"] = args.latency
         # no real controller: the scripts drive pad 0 themselves (libpad), and a controller gone to
         # sleep once hung every instance in SDL's controller detection
         for backend in ("HIDAPI", "RAWINPUT", "WGI", "XINPUT", "DIRECTINPUT", "GAMEINPUT"):
