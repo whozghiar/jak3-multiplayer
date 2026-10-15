@@ -1,0 +1,9 @@
+# A guard hit by another player's shots, host side: at Haven City's port with its guards. Logs each
+# blow the guest's copies took and the state the real guard goes to (its reaction).
+1 enable
+1 name Host
+1 color 1
+20 continue ctyport-start
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+100 log

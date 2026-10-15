@@ -1,0 +1,11 @@
+# The laser sight in motion, guest side: stands 8 m from the host and logs the laser sight its copy
+# of the host's gun draws each frame (log-laser).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 8
+53 face-player 0
+56 log-laser 900
+70 log

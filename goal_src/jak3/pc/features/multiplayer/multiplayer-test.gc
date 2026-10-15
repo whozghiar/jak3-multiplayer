@@ -13,7 +13,7 @@
 ;;   enable | name <word> | color <n> | character <n>       mod settings, in memory and saved
 ;;   host <ip:port> | join <ip:port> | leave                 session
 ;;   continue <continue-point>                               go to a continue point
-;;   press <button> <ms> | stick <lx> <ly> <ms>              force pad 0 (0-255, 128 = center)
+;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
 ;;   goto-player <slot> [x z] | face-player <slot>           stand next to / face a remote player
 ;;   goto-behind <slot> <meters>                             stand behind a remote player, out of its view
@@ -25,7 +25,8 @@
 ;;   log-pose-own <player|npc|daxter|gun|vehicle|wheel> [frames] bones of our model or object, each frame
 ;;   log-pose-copy <slot> <skeleton name|*>                  bones of the copies of player slot's objects
 ;;   log-tasks | close-task [n]                              story progress; close the first open node(s)
-;;   log-path <skeleton> <frames>                            an object's root each frame, owner and viewer
+;;   log-path <skeleton|shot> <frames>                       an object's (every shot's) root each frame, owner and viewer
+;;   log-laser <frames>                                      the gun's laser sight each frame, owner and viewer
 ;;   wait-joined | wait-player <slot>                        the script waits: in the host's world; player in game
 ;;   mode <0|1> | title                                      game mode when hosting (free roam, co-op); title screen
 ;;   log-join | try-save                                     joining the host's world; an auto-save (refused there)
@@ -256,12 +257,17 @@
   )
 
 (defun mp-test-note-path ((own? symbol) (st mp-actor-state))
-  "Print the root of `st` when its skeleton is the one log-path asked for (its own states on the
-   owner, the interpolated ones on a viewer)."
-  (when (and (> (-> *mp-test-path* frames) 0) (string-charp= (-> *mp-test-path* skel) (-> st skel)))
+  "Print the root of `st` when its skeleton is the one log-path asked for, or it is a shot and
+   log-path asked for shots (its own states on the owner, the interpolated ones on a viewer), with
+   its id (one shot from another)."
+  (when (and (> (-> *mp-test-path* frames) 0)
+             (or (string-charp= (-> *mp-test-path* skel) (-> st skel))
+                 (and (string= (-> *mp-test-path* skel) "skel-shot") (logtest? (-> st flags) (mp-actor-flag shot)))
+                 )
+             )
     (format
       0
-      "[mp-test] path ~S t ~D.~D pos ~m ~m ~m~%"
+      "[mp-test] path ~S t ~D.~D pos ~m ~m ~m"
       (if own? "own" "copy")
       (/ (pc-mp-clock (if own? -1 (the-as int (shr (-> st id) 24)))) 10)
       (mod (pc-mp-clock (if own? -1 (the-as int (shr (-> st id) 24)))) 10)
@@ -269,7 +275,35 @@
       (-> st trans y)
       (-> st trans z)
       )
+    (format 0 " id ~D~%" (logand (-> st id) #xffffff))
     )
+  (none)
+  )
+
+(define *mp-test-laser-frames* 0) ;; log-laser: frames left to log the laser sight
+
+(defun mp-test-print-laser ((own? symbol) (slot int) (from vector) (to vector))
+  "One laser sight sample: where it starts and ends, stamped with its owner's clock."
+  (format
+    0
+    "[mp-test] laser ~S t ~D.~D from ~m ~m ~m"
+    (if own? "own" "copy")
+    (/ (pc-mp-clock slot) 10)
+    (mod (pc-mp-clock slot) 10)
+    (-> from x)
+    (-> from y)
+    (-> from z)
+    )
+  (format 0 " to ~m ~m ~m~%" (-> to x) (-> to y) (-> to z))
+  (none)
+  )
+
+(defun mp-test-note-laser ((proc process-drawable) (from vector) (to vector))
+  "The laser sight of a copy of another player's gun, as drawn here (mp-draw-laser), when log-laser
+   runs."
+  (if (> *mp-test-laser-frames* 0)
+      (mp-test-print-laser #f (the-as int (shr (-> (the-as mp-replica proc) id) 24)) from to)
+      )
   (none)
   )
 
@@ -279,6 +313,13 @@
    joint math), so they match what is sent. Every frame is printed, whatever the script's timing:
    after a long frame the script runs several due lines at once and skips none of the game's frames.
    log-path counts its frames here too (the manager runs once a frame)."
+  ;; our own laser sight, as the game computes it (gun-info-method-9: laser-point, laser-hit-point)
+  (when (> *mp-test-laser-frames* 0)
+    (+! *mp-test-laser-frames* -1)
+    (if (and *target* (nonzero? (-> *target* gun)) (-> *target* gun laser-active?))
+        (mp-test-print-laser #t -1 (-> *target* gun laser-point) (-> *target* gun laser-hit-point))
+        )
+    )
   (if (> (-> *mp-test-path* frames) 0)
       (+! (-> *mp-test-path* frames) -1)
       )
@@ -858,15 +899,15 @@
   #t
   )
 
-(defun mp-test-goto-npc ((prefix string))
-  "Stand 1.5 m from the first NPC received whose skeleton starts with `prefix`, facing it."
+(defun mp-test-goto-npc ((prefix string) (dist float))
+  "Stand `dist` from the first NPC received whose skeleton starts with `prefix`, facing it."
   (dotimes (i (-> *mp-actors-in* count))
     (let ((st (-> *mp-actors-in* state i)))
       (when (and *target* (mp-test-skel-prefix? (-> st skel) prefix))
         (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans)))
               (dir (new 'stack-no-clear 'vector))
               )
-          (+! (-> pos z) (meters -1.5))
+          (+! (-> pos z) (- dist))
           (move-to-point! (-> *target* control) pos)
           (vector-! dir (-> st trans) pos)
           (set! (-> dir y) 0.0)
@@ -963,10 +1004,24 @@
            )
          )
         ((string= cmd "press")
+         ;; press <button> <ms> [lx ly]: the button held, with the left stick when given (moving
+         ;; while firing)
          (mp-test-word)
-         (let ((bit (mp-test-button (-> *mp-test* word))))
-           (pc-mp-test-pad bit 128 128 128 128)
-           (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
+         (let* ((bit (mp-test-button (-> *mp-test* word)))
+                (ms (mp-test-int))
+                (lx (if (mp-test-word)
+                        (string->int (-> *mp-test* word))
+                        128
+                        )
+                    )
+                (ly (if (mp-test-word)
+                        (string->int (-> *mp-test* word))
+                        128
+                        )
+                    )
+                )
+           (pc-mp-test-pad bit lx ly 128 128)
+           (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* ms 300) 1000)))
            )
          )
         ((string= cmd "stick")
@@ -1072,8 +1127,17 @@
            )
          )
         ((string= cmd "goto-npc")
+         ;; goto-npc <prefix> [meters]: 1.5 m from it unless given
          (mp-test-word)
-         (mp-test-goto-npc (-> *mp-test* word))
+         (let ((prefix (copy-string<-string *mp-temp-string* (-> *mp-test* word)))
+               (dist (mp-test-int))
+               )
+           (mp-test-goto-npc prefix (if (> dist 0)
+                                        (meters (the float dist))
+                                        (meters 1.5)
+                                        )
+                             )
+           )
          )
         ((string= cmd "kill-own")
          ;; kill-own <prefix>: the first of our vehicles we send whose skeleton starts with prefix
@@ -1248,6 +1312,10 @@
          (set! (-> *mp-test-wait* since) 0)
          (set! (-> *mp-test-wait* kind) 'player)
          (pc-mp-test-pause #t)
+         )
+        ((string= cmd "log-laser")
+         ;; log-laser <frames>: the gun's laser sight each frame, ours and the copies'
+         (set! *mp-test-laser-frames* (mp-test-int))
          )
         ((string= cmd "log-path")
          ;; log-path <skeleton> <frames>: the object's root every frame (owner and viewers alike)

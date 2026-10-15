@@ -786,6 +786,22 @@
   #f
   )
 
+(defun mp-pack-laser ((st mp-actor-state))
+  "Our gun's state `st`: the laser sight as our gun draws it (gun-info-method-9), where it starts
+   from the gun's root (the state's trans) in mm and its direction in 1/32767, after the skeleton
+   name (\"skel-gun\", bytes 16 to 27 of skel): the aim, not the barrel (mp-draw-laser)."
+  (let ((v (the-as (pointer int16) (&-> st skel 16)))
+        (off (vector-! (new 'stack-no-clear 'vector) (-> *target* gun laser-point) (-> st trans)))
+        (dir (vector-normalize-copy! (new 'stack-no-clear 'vector) (-> *target* gun laser-dir) 1.0))
+        )
+    (dotimes (k 3)
+      (set! (-> v k) (the int (fmax -32767.0 (fmin 32767.0 (/ (-> off data k) 4.096)))))
+      (set! (-> v (+ k 3)) (the int (* 32767.0 (-> dir data k))))
+      )
+    )
+  (none)
+  )
+
 (defun mp-collect-props ()
   "Add the local player's props: Daxter on the shoulder, the gun (with its laser sight on or off),
    the hoverboard, the vehicle driven and its wheels, and its shots in flight."
@@ -800,12 +816,13 @@
         (when gun
           (mp-add-prop (the-as process-drawable gun))
           (let ((st (-> *mp-actors-out* state (max 0 (+ *mp-collect-count* -1)))))
-            (if (and (= (-> st id) (the-as uint (logand (-> gun pid) #xffffff)))
-                     (-> *target* gun laser-active?)
-                     (-> *target* gun active?)
-                     )
-                (logior! (-> st flags) (mp-actor-flag laser))
-                )
+            (when (and (= (-> st id) (the-as uint (logand (-> gun pid) #xffffff)))
+                       (-> *target* gun laser-active?)
+                       (-> *target* gun active?)
+                       )
+              (logior! (-> st flags) (mp-actor-flag laser))
+              (mp-pack-laser st)
+              )
             )
           )
         )
@@ -852,6 +869,7 @@
 (define-extern mp-elevators-unmute (function symbol none))
 (define-extern mp-test-note-path (function symbol mp-actor-state none)) ;; multiplayer-test.gc
 (define-extern mp-test-note-gone (function mp-actor-state process-drawable none)) ;; multiplayer-test.gc
+(define-extern mp-test-note-laser (function process-drawable vector vector none)) ;; multiplayer-test.gc
 (define-extern mp-poll-elevator (function process object))
 (define-extern mp-drive-elevator (function mp-actor-state none))
 (define-extern mp-update-remote-riders (function none))
@@ -975,26 +993,35 @@
         )
     (when (and proc attacker)
       (format 0 "[multiplayer] player ~D hit ~A (~A, ~f)~%" (-> ev from) proc mode (-> ev fvec w))
-      (send-event
-        proc
-        'attack
-        :from attacker
-        #f
-        (static-attack-info
-          :mask (vehicle-impulse-factor)
-          ((id (mp-local-attack-id (-> ev from) (the-as uint (-> ev pad))))
-           (mode mode)
-           (damage (-> ev fvec w))
-           (penetrate-using (the-as penetrate (logior (shl (the-as uint (-> ev iarg 3)) 32)
-                                                      (logand (the-as uint (-> ev iarg 2)) #xffffffff)
-                                                      )
-                                    )
-                            )
-           (attacker (process->handle attacker))
-           (vehicle-damage-factor 1.0)
-           (vehicle-impulse-factor 1.0)
-           )
-          )
+      ;; the object's answer and the state it goes to: its reaction (log)
+      (let ((took (send-event
+                    proc
+                    'attack
+                    :from attacker
+                    #f
+                    (static-attack-info
+                      :mask (vehicle-impulse-factor)
+                      ((id (mp-local-attack-id (-> ev from) (the-as uint (-> ev pad))))
+                       (mode mode)
+                       (damage (-> ev fvec w))
+                       (penetrate-using (the-as penetrate (logior (shl (the-as uint (-> ev iarg 3)) 32)
+                                                                  (logand (the-as uint (-> ev iarg 2)) #xffffffff)
+                                                                  )
+                                                )
+                                        )
+                       (attacker (process->handle attacker))
+                       (vehicle-damage-factor 1.0)
+                       (vehicle-impulse-factor 1.0)
+                       )
+                      )
+                    )
+                  )
+            )
+        (format 0 "[multiplayer]   taken ~A, then ~A~%" (if took #t #f) (if (-> proc next-state)
+                                                                            (-> proc next-state name)
+                                                                            'none
+                                                                            )
+                )
         )
       )
     )
@@ -1249,8 +1276,9 @@
 
 (defun mp-draw-laser ((proc process-drawable))
   "The laser sight of the copy of another player's gun, drawn as the owner's gun draws it
-   (gun-info-method-9, engine/target/gun/gun-util.gc): from the gun's laser joint (14) along its
-   barrel (joint 13, the owner's fire direction when no target is tracked), ending on what it meets.
+   (gun-info-method-9, engine/target/gun/gun-util.gc): from where the owner's starts, along the
+   owner's aim (both sent with the gun's state), ending on what it meets; from the laser joint (14)
+   along the barrel (joint 13) when they did not come.
    The owner's own laser particles are not replayed (mp-play-emitters): they take their direction
    from the drawing machine's globals."
   (when (and (nonzero? (-> proc node-list))
@@ -1261,7 +1289,21 @@
     (let ((from (vector<-cspace! (new 'stack-no-clear 'vector) (-> proc node-list data 14)))
           (dir (vector-normalize-copy! (new 'stack-no-clear 'vector) (-> proc node-list data 13 bone transform fvec) 1.0))
           (cq (new 'stack-no-clear 'collide-query))
+          (sent (the-as (pointer int16) (&-> (the-as mp-replica proc) net skel 16)))
           )
+      ;; the owner's own sight when it sent it (mp-collect-props): its start from the gun's root and
+      ;; its direction (the aim, auto-aim included); else the barrel
+      (when (or (nonzero? (-> sent 3)) (nonzero? (-> sent 4)) (nonzero? (-> sent 5)))
+        (set-vector!
+          from
+          (+ (-> proc root trans x) (* 4.096 (the float (-> sent 0))))
+          (+ (-> proc root trans y) (* 4.096 (the float (-> sent 1))))
+          (+ (-> proc root trans z) (* 4.096 (the float (-> sent 2))))
+          1.0
+          )
+        (set-vector! dir (the float (-> sent 3)) (the float (-> sent 4)) (the float (-> sent 5)) 0.0)
+        (vector-normalize! dir 1.0)
+        )
       (vector+float*! (-> cq start-pos) from dir -8192.0)
       (vector-float*! (-> cq move-dist) dir 163840.0)
       (let ((v1-13 cq))
@@ -1269,8 +1311,22 @@
         (set! (-> v1-13 collide-with)
               (collide-spec backgnd bot crate civilian enemy obstacle vehicle-sphere hit-by-others-list pusher shield)
               )
+        ;; the owner's sight passes through its own player (gun-info-method-9 ignores it): ours
+        ;; through that player's puppet and hurtbox (the gun's copy has no collision)
         (set! (-> v1-13 ignore-process0) proc)
         (set! (-> v1-13 ignore-process1) #f)
+        (let ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+              (slot (the-as int (shr (-> (the-as mp-replica proc) id) 24)))
+              )
+          (when (and manager (< slot MP_MAX_PLAYERS))
+            (let ((puppet (the-as mp-puppet (handle->process (-> manager puppets slot)))))
+              (when puppet
+                (set! (-> v1-13 ignore-process0) puppet)
+                (set! (-> v1-13 ignore-process1) (handle->process (-> puppet hurtbox)))
+                )
+              )
+            )
+          )
         (set! (-> v1-13 ignore-pat)
               (new 'static 'pat-surface :noentity #x1 :nojak #x1 :probe #x1 :noproj #x1 :noendlessfall #x1 :board #x1)
               )
@@ -1291,6 +1347,7 @@
             )
           )
         )
+      (mp-test-note-laser proc from (-> cq start-pos))
       ;; the beam: thinner as the camera comes close, as the owner's
       (let* ((beam (-> *part-id-table* 207))
              (timer (get-field-spec-by-id beam (sp-field-id spt-timer)))
@@ -2900,6 +2957,10 @@
               (vector-copy! (-> out trans) trans)
               (set! (-> out trans w) (-> st trans w))
               (quaternion-copy! (-> out quat) quat)
+              ;; our gun's laser sight of this frame, as its place
+              (if (and *target* (logtest? (-> out flags) (mp-actor-flag laser)) (nonzero? (-> *target* gun)))
+                  (mp-pack-laser out)
+                  )
               (+! (-> own count) 1)
               )
             )

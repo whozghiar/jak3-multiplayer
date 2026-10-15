@@ -456,6 +456,26 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hw) and bool(gw) and gw[-1][2] == "#t" and abs(float(gw[-1][3]) - hw[-1][0]) < 0.1 and abs(float(gw[-1][4]) - hw[-1][1]) < 0.1,
                 f"host {hw[-1] if hw else None}, guest override {gw[-1][2:] if gw else None}")
 
+    elif scenario == "guard-hit":
+        text = "\n".join(host)
+        pairs = re.findall(r"player 1 hit #<crimson-guard[^>]*> \((\S+), [^)]*\)\s*\n\[multiplayer\]   taken (\S+), then (\S+)", text)
+        reacted = [(m, n) for (m, t, n) in pairs if t == "#t" and n in ("hit", "knocked", "die", "die-falling", "knocked-recover", "hostile")]
+        c.check(scenario, "the host's guard takes the guest's blows and reacts", len(reacted) >= 1, f"{pairs[:6]}")
+
+    elif scenario in ("shot-path", "laser"):
+        sys.path.insert(0, str(ROOT / "scripts" / "mp-test"))
+        import compare_poses
+        if scenario == "shot-path":
+            r = compare_poses.shot_report("\n".join(host), "\n".join(client))
+            c.check(scenario, "the copies of the host's shots are drawn where the shots are", bool(r) and r["shots"] >= 3 and r["p95"] < 0.5,
+                    f"{r['shots'] if r else 0} shots, {r['samples'] if r else 0} samples, median {r['median'] * 100 if r else 0:.1f} cm, "
+                    f"95% under {r['p95'] * 100 if r else 0:.1f} cm, largest {r['largest'] * 100 if r else 0:.1f} cm")
+        else:
+            r = compare_poses.laser_report("\n".join(host), "\n".join(client))
+            c.check(scenario, "the laser sight drawn on the gun's copy follows the owner's", bool(r) and r["samples"] >= 60 and r["start"] < 0.1 and r["angle_p95"] < 3.0,
+                    f"{r['samples'] if r else 0} samples, start {r['start'] * 100 if r else 0:.1f} cm (largest {r['start_max'] * 100 if r else 0:.1f}), "
+                    f"direction {r['angle'] if r else 0:.2f} deg (95% under {r['angle_p95'] if r else 0:.2f}), end {r['end'] * 100 if r else 0:.1f} cm (95% under {r['end_p95'] * 100 if r else 0:.1f})")
+
     elif scenario == "npc-watch":
         gone = [int(v) for (v,) in grab(host, r"npcs gone near another player (\d+)")]
         w = counter(client, r"world sent \d+ received (\d+) replicas (\d+)")

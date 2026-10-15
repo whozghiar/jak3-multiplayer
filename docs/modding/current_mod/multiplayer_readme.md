@@ -146,8 +146,14 @@ touching every part of a vehicle for several frames counts once, as stock code c
   (`vector<-cspace!` on a process without joints).
 - **The gun's laser sight** is particles 207-212 launched by `draw-beam`, which takes their
   direction from globals of the machine that draws them: they are not replayed. The gun's state
-  carries a `laser` flag, and the copy of the gun draws the laser itself (`mp-draw-laser`, as
-  `gun-info-method-9` does): from the gun's laser joint along its barrel, up to what it meets.
+  carries a `laser` flag and the owner's sight, every frame (`mp-pack-laser`, after the skeleton
+  name: where it starts from the gun's root in mm, its direction in 1/32767): the aim, auto-aim
+  included, not the barrel. The copy of the gun draws the laser itself (`mp-draw-laser`, as
+  `gun-info-method-9` does), from there along that direction up to what it meets, passing through
+  the owner's puppet and hurtbox as the owner's passes through its player. In motion (`laser`):
+  its start within 0.1 cm of the owner's (median), its direction within 0.27 degree (95 %); from
+  the barrel before, 14 cm and 8.5 degrees, and a sixth of the samples ended behind the gun on the
+  owner's hurtbox.
 - **Shots.** A player's shots in flight are objects of its batches (`mp-collect-shot`, flag
   `shot`): with their model when they have one, else their place alone (an `mp-fx-copy` playing
   their trail and sounds). Their code never runs elsewhere: a shot's code reads the local player
@@ -483,10 +489,10 @@ A script line is `<seconds> <command>`:
 |---|---|
 | `enable`, `name <w>`, `color <n>`, `character <n>` | Mod settings. |
 | `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
-| `press <button> <ms>`, `stick <lx> <ly> <ms>`, `stick-r <rx> <ry> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; sticks 0-255, 128 centered; the right stick turns the camera). |
+| `press <button> <ms> [lx ly]`, `stick <lx> <ly> <ms>`, `stick-r <rx> <ry> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; sticks 0-255, 128 centered; `press` with a left stick moves while it fires; the right stick turns the camera). |
 | `goto-player <slot> [x z]`, `face-player <slot>`, `goto-behind <slot> <m>` | Stand next to a remote player (or x and z meters from it), turn to it; stand that far behind it, out of its view. |
 | `goto-own <prefix>`, `kill-own <prefix>` | Stand 8 m from one of our NPCs we send whose skeleton starts with `prefix` (`h-bike`, `barge`), facing it; give the first such vehicle a blow from our player that leaves it no hit points (it crashes and blows up as the game makes it). |
-| `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
+| `goto-npc <prefix> [meters]`, `goto-actor <n>` | Stand 1.5 m (or that far) from a replicated NPC whose skeleton, without `skel-`, starts with `prefix`, facing it. |
 | `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
 | `gun`, `vehicle <type>`, `cheat <name>`, `zone <n>`, `continue <name>` | Gameplay helpers. |
 | `screenshot <name>`, `log` | Evidence: the log shows the session, the local player, the role (authority) and the own NPCs awake and asleep, every remote player and puppet, the objects sent, received and drawn, the poses sent and applied, the emitters and sounds sent and replayed, the effects and shots sent and replayed, the hits taken from players with the stock reaction seen after them (`target-hit`) and how far the last one pushed. |
@@ -514,9 +520,10 @@ A script line is `<seconds> <command>`:
 | `log-coop`, `log-weather` | Co-op: authority, steps held and released, leash returns, the player waited for, distance to the host; the weather (clouds, fog, special, the override). |
 | `log-gone`, `trace-gone` | On the authority: the NPCs it sent, shown, that left the game or were hidden within 40 m of another player without dying (count; each, with why). |
 | `log-vanished`, `trace-vanish` | What vanished on our screen within 40 m while alive: own NPCs put to sleep, copies removed or hidden at once (count; each, with why), and copies that faded out instead; each copy that dies here (`copy died <skeleton> [vehicle]`). |
-| `log-path <skeleton> <frames>` | An object's root every frame: on its owner each state it sends, on a viewer each state drawn, stamped with the owner's clock (`compare_poses.py` compares the copy's path with the owner's). |
+| `log-path <skeleton\|shot> <frames>` | An object's root (every shot's, with its id) every frame: on its owner each state it sends, on a viewer each state drawn, stamped with the owner's clock (`compare_poses.py` compares the copy's path with the owner's, shot by shot). |
+| `log-laser <frames>` | The gun's laser sight every frame, where it starts and ends: the owner's as its game computes it (`laser-point`, `laser-hit-point`), the copy's as drawn, stamped with the owner's clock (`compare_poses.py laser_report`). |
 
-Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 253 checks passed, 1 failed, 35 scenarios, no crash; the failure, `v1-city-combat` checking a vehicle's copy dying, no vehicle destroyed in that run, was dropped for that scenario (`v1-city-dark1-host` destroys one for sure) and the run again passed 6 of 6):
+Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano; `check_results.py`: 253 checks passed, 1 failed, 35 scenarios, no crash, before the last changes; the failure, `v1-city-combat` checking a vehicle's copy dying, no vehicle destroyed in that run, was dropped for that scenario (`v1-city-dark1-host` destroys one for sure) and the run again passed 6 of 6. The last changes (the laser sight sent by its owner and passing through it, each blow's answer logged, `goto-npc` with a distance, `press` with a stick) were checked by `guard-hit`, `shot-path` and `laser`, and the first 7 scenarios of a full run (`smoke` to `npc-handoff`, no crash) stopped there on the user's request; the others were not run again after them):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -538,7 +545,10 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus (art range raised to 100 km for the test). No Haven level loads in Spargus: the host opens the art heap in `wascitya`'s memory and loads the art groups of what passes by the guest alone (8 in the last run: barge, cars `cara` `carb` `carc`, bikes `bikea` `bikeb` `bikec`, `citizen-norm`; `crimson-guard` too in an earlier one), 0 failed; every object the guest draws is drawn here (3 of 3 in the last run: a barge, a citizen, Daxter; 11 of 11 in an earlier one, with guards and a car). The guest, in Haven, opens its own art heap in `ctywide`'s memory for the host's dog (`dogat`) and closes it when it leaves. `log-shaders`: 0 broken links. |
 | `progress-late` | A guest 40 missions behind joins | It loads the host's world on joining: the same 42 closed nodes as the host, with their rewards, and plays on. |
 | `guns` | Every gun mod, both ways | Each player fires all 12 mods (yellow 1-3, red 1-3, blue 1-3, dark 1-3) 7 m from the other, in Spargus: no crash on either machine; the guest draws 214 copies of the host's shots, the host 183 of the guest's, and the shots hit the other player (hit reactions on both). |
-| `city-combat` | The crash report's weapons in Haven City | The guest fires the gyro burster (yellow 3), the plasmite RPG (red 3) and the peace maker (dark 1) at the port, then the host fires the same: no crash. The gyro burster's homing shots pick the host's guards and barges through their copies: the host applies 3 hits to crimson guards and 60 to barges (before, homing weapons saw no copy: copies were not focusable). |
+| `city-combat` | The crash report's weapons in Haven City | The guest fires the gyro burster (yellow 3), the plasmite RPG (red 3) and the peace maker (dark 1) at the port, then the host fires the same: no crash; the host draws 165 copies of the guest's shots, the guest 162 of the host's. The homing and blast weapons pick the host's barges through their copies (before, copies were not focusable). Its `goto-npc skel-...` lines never matched (the prefix goes without `skel-`): the guest fires from beside the host; `guard-hit` aims at a guard. |
+| `guard-hit` | Guards react to another player's shots | The guest stands 5 m from one of the host's guards and fires the blaster at it: the host's guard takes each blow and reacts as the game makes it: three shots taken (`taken #t`), the guard goes to `hit`, then `die`, the next one to `hit`. Before, this script's shots never reached a guard (at 1.5 m a shot starts inside the guard's sphere; `goto-npc` took `skel-` prefixes that never matched). |
+| `shot-path` | Shots where they fly | The host fires the blaster, the plasmite RPG and the gyro burster while running sideways; the guest draws each shot's copy: 163 shots, each copy within 0.2 cm of its shot at the same moment (median), 3.1 cm for 95 %, 5.5 cm at most. |
+| `laser` | The laser sight in motion | The host walks and turns the camera with its gun out; the laser its gun's copy draws on the guest against the host's own: 767 samples, its start within 0.1 cm (median), its direction within 0.27 degree (95 %), its end 28 cm (median; farther where the two meet different things). Before the fix: 14 cm, 8.5 degrees, a sixth of the samples ending on the owner's hurtbox behind the gun. |
 | `vehicle-hit` | The hoverboard's zap on a vehicle (the host's crash) | The guest on the hoverboard zaps the host's buggy and punches it: the host applies the zaps (`board`) and blows to its buggy and wheels, until the buggy blows up; no crash on the host (the zap's effect, replayed under `*entity-pool*`, crashed it in `board-zap-track`) nor on the guest (the copy of the dead buggy played a character's death effect, a call to address 0). The guest's hoverboard is drawn on the host (`skel-board` copy). |
 | `elevator-alone` | Another player's elevator trip | The host rides the palace elevator up while the guest stays in the street 25 m away: the guest's elevator rises with it (34.6 m to 242.9 m, placed from the host's states), its scripts set aside for the trip and back after; the guest's continue point stays `wascity-start` and no palace level loads for it. Before: the elevator stayed at the bottom (paused out of view) and, arriving, its scripts changed the guest's continue point and levels. |
 | `drive` | Smoothness of a driven vehicle | The host drives a buggy 80 m straight; the guest, 8 m away, logs its copy's root every frame: 351 samples, the copy within 0.1 cm of the host's path (median), 0.2 cm for 95 %, 0.4 cm at most; its speed changes 0.21 m/s per frame, the host's own 0.23 m/s (the copy moves as evenly as the original). |
@@ -564,7 +574,7 @@ passed, 0 failed, no crash):
 | `smoke`, `pvp`, `vehicle`, `coop`, `join-world` | Every check of the scenario passes: puppets and hits, the steal prompt, the leash, held story steps and the host's weather, the host's world loaded and the guest 1.5 m from the host. |
 | `drive` | The buggy's copy within 0.1 cm of the owner's path (median), 0.2 cm at most, over 102 m; its speed changes 0.10 m/s per frame, the owner's 0.24. |
 | `pose-all` | Copies within 0.8 mm (player), 0.9 mm (NPC), 0.7 mm (Daxter) of the owner's pose (median), 2.1 mm at most. |
-| `guns`, `city-combat`, `v1-city-dark1-host` | No crash; 219 and 170 shot copies drawn; a vehicle's copy dies on the guest. |
+| `guns`, `city-combat`, `v1-city-dark1-host` | No crash; 219 and 170 shot copies drawn; a vehicle's copy dies on the guest. (`guard-hit`, `shot-path` and `laser` were not run under a delay.) |
 | `npc-handoff` | Nothing vanishes at once on the guest's screen; 2 copies left in view faded out. |
 | `world-objects`, `float`, `float-weight`, `elevator-alone` | Cycles within 2 ms of the host's (30 to 34 ms before the clock fix); lava platforms within 7.6 cm; the elevator rides up and gives its scripts back. |
 
@@ -599,8 +609,8 @@ public IP.
   without saving until it loads its own save or goes back to the title screen.
 - Co-op holds every story step until every player is within 25 m of it, including steps closed
   by a script on arrival somewhere (an elevator, a trigger): the player who got there waits.
-- The laser sight of a remote player's gun follows the gun's barrel (joint 13), the owner's aim
-  without auto-aim bending.
+- The laser sight's far end can still differ from the owner's when they meet different things
+  (another player's copies there, a small angle at long range).
 - Sizes, above what the game spawns (at most 20 objects per batch were seen in the scenarios):
   128 objects per batch and 256 copies drawn, 8 particle groups per copy, 32 emitters and 32
   sounds per object and batch. Sounds of a sound bank the viewer has not loaded stay silent.
@@ -654,6 +664,12 @@ public IP.
     Measures `log-vanished` and `log-gone` (hidden NPCs counted too), test commands `stick-r`,
     `goto-behind`, `goto-own`, `trace-gone`, `trace-vanish`; `npc-watch` with the guest out of
     the host's view.
+  - *Guards, shots, laser.* Each blow another player lands is logged with the object's answer
+    and the state it goes to (`taken #t, then hit`). The laser sight is the owner's, sent with
+    the gun (start and aim), passing through the owner's player. Scenarios `guard-hit`,
+    `shot-path`, `laser`; `goto-npc` takes a distance (its prefix goes without `skel-`: the
+    `skel-` prefixes of `city-combat` and the `v1-*` scripts never matched, kept as they were run);
+    `press` takes a left stick.
   - *Network.* `run_mp_test.py --latency <ms>:<jitter>`: what each instance receives is held
     that long, in order, as over a link between two machines (15 scenarios pass, 5.2). Under 50 ms and
     30 ms of jitter, cycles were 30 to 34 ms off the host's: their clock shift now follows the

@@ -1,0 +1,22 @@
+# A guard hit by another player's shots, guest side: once the host's guards are about, stands 5 m
+# from one and fires the blaster at it at once (it walks on), three times, then punches one twice.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0
+75 gun 29
+76 goto-npc crimson-guard 5
+76.1 press r1 1200
+78 goto-npc crimson-guard 5
+78.1 press r1 1200
+80 goto-npc crimson-guard 5
+80.1 press r1 1200
+82 gun
+83 goto-npc crimson-guard
+83.1 press square 100
+84 goto-npc crimson-guard
+84.1 press square 100
+86 log
+100 log

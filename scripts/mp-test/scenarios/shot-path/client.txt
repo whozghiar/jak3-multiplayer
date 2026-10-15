@@ -1,0 +1,11 @@
+# Shots where they fly, guest side: stands 10 m from the host and logs where it draws the copies of
+# the host's shots each frame (log-path shot).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 10
+53 face-player 0
+56 log-path shot 1500
+75 log

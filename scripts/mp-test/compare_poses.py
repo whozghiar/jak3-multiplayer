@@ -94,6 +94,74 @@ def path_report(own: list, copy: list) -> dict | None:
             "largest": max(errors), "moved": moved, "jerk_own": jerk(own), "jerk_copy": jerk(copy)}
 
 
+SHOT = re.compile(r"\[mp-test\] path (own|copy) t (-?\d+(?:\.\d+)?) pos (\S+) (\S+) (\S+) id (\d+)")
+LASER = re.compile(r"\[mp-test\] laser (own|copy) t (-?\d+(?:\.\d+)?) from (\S+) (\S+) (\S+) to (\S+) (\S+) (\S+)")
+
+
+def shot_report(host: str, client: str) -> dict | None:
+    """Every shot's copy against the shot itself at the same moments (log-path shot), each shot by
+    its id: how far from where the shot is its copy is drawn. None without samples in common."""
+    def by_id(text: str, kind: str) -> dict:
+        out: dict = {}
+        for m in SHOT.finditer(text):
+            if m.group(1) == kind:
+                out.setdefault(m.group(6), []).append((float(m.group(2)), tuple(float(m.group(i)) for i in (3, 4, 5))))
+        for series in out.values():
+            series.sort(key=lambda s: s[0])
+        return out
+    own, copy = by_id(host, "own"), by_id(client, "copy")
+    errors, shots = [], 0
+    for sid, series in copy.items():
+        if sid not in own:
+            continue
+        r = path_report(own[sid], series)
+        if r:
+            shots += 1
+            for t, p in series:
+                for (ta, a), (tb, b) in zip(own[sid], own[sid][1:]):
+                    if ta <= t <= tb and 0 < tb - ta <= 40:
+                        f = (t - ta) / (tb - ta)
+                        errors.append(math.dist(p, tuple(x + (y - x) * f for x, y in zip(a, b))))
+                        break
+    if not errors:
+        return None
+    return {"shots": shots, "samples": len(errors), "median": statistics.median(errors),
+            "p95": sorted(errors)[int(0.95 * (len(errors) - 1))], "largest": max(errors)}
+
+
+def laser_report(host: str, client: str) -> dict | None:
+    """The laser sight drawn on the gun's copy against the owner's at the same moments (log-laser):
+    where it starts, its direction (degrees) and where it ends. None without samples in common."""
+    def series(text: str, kind: str) -> list:
+        out = [(float(m.group(2)), tuple(float(m.group(i)) for i in (3, 4, 5)), tuple(float(m.group(i)) for i in (6, 7, 8)))
+               for m in LASER.finditer(text) if m.group(1) == kind]
+        out.sort(key=lambda s: s[0])
+        return out
+    own, copy = series(host, "own"), series(client, "copy")
+    starts, angles, ends = [], [], []
+    for t, fa, ta_ in copy:
+        for (t0, f0, e0), (t1, f1, e1) in zip(own, own[1:]):
+            if t0 <= t <= t1 and 0 < t1 - t0 <= 40:
+                k = (t - t0) / (t1 - t0)
+                f = tuple(x + (y - x) * k for x, y in zip(f0, f1))
+                e = tuple(x + (y - x) * k for x, y in zip(e0, e1))
+                d1 = tuple(b - a for a, b in zip(f, e))
+                d2 = tuple(b - a for a, b in zip(fa, ta_))
+                n1, n2 = math.hypot(*d1), math.hypot(*d2)
+                if n1 > 0 and n2 > 0:
+                    c = max(-1.0, min(1.0, sum(a * b for a, b in zip(d1, d2)) / (n1 * n2)))
+                    angles.append(math.degrees(math.acos(c)))
+                starts.append(math.dist(fa, f))
+                ends.append(math.dist(ta_, e))
+                break
+    if not starts:
+        return None
+    med = statistics.median
+    return {"samples": len(starts), "start": med(starts), "start_max": max(starts),
+            "angle": med(angles) if angles else 0.0, "angle_p95": sorted(angles)[int(0.95 * (len(angles) - 1))] if angles else 0.0,
+            "end": med(ends), "end_p95": sorted(ends)[int(0.95 * (len(ends) - 1))]}
+
+
 def main() -> int:
     path = Path(sys.argv[1] if len(sys.argv) > 1 else "out/mp-test/pose-all/summary.txt")
     client, host = path.read_text(encoding="utf-8").split("=== host")

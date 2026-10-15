@@ -1,0 +1,17 @@
+# The laser sight in motion, host side: gun out, walks around and turns the camera for 10 s,
+# logging its laser sight each frame (log-laser); the guest logs the one its gun's copy draws.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 face-player 1
+55 gun 29
+56 log-laser 900
+57 stick 128 0 2000
+59 stick 255 128 1500
+60.5 stick-r 255 128 1000
+61.5 stick 0 128 1500
+63 stick 128 255 2000
+65 stick-r 0 128 1000
+70 log

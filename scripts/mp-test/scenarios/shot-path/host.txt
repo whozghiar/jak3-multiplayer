@@ -1,0 +1,20 @@
+# Shots where they fly, host side: fires the blaster (yellow 1), the plasmite RPG (red 3) and the
+# gyro burster (yellow 3) while running sideways near the guest, logging every shot's place each
+# frame (log-path shot); the guest logs where it draws their copies.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 face-player 1
+55 gun 29
+56 log-path shot 1500
+57 press r1 1500 255 128
+59 press r1 1500 0 128
+61 gun 28
+62 press r1 1500 255 128
+64 press r1 1500 0 128
+66 gun 31
+67 press r1 1500 255 128
+69 press r1 1500 0 128
+75 log
