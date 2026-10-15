@@ -435,6 +435,20 @@
       :max-length 31
       :on-confirm (lambda () (mp-config-save!) (none))
       )
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-mp-mode)
+      :items (new 'static 'boxed-array :type text-id (text-id progress-mp-mode-free) (text-id progress-mp-mode-coop))
+      :get-item-index-fn (lambda () (-> *mp-config* mode))
+      :on-confirm (lambda ((index int) (the-progress progress))
+                    (set! (-> *mp-config* mode) index)
+                    (mp-config-save!)
+                    ;; a host switches its running server too
+                    (if (= *mp-mode* (mp-mode host))
+                        (mp-apply-mode!)
+                        )
+                    (none)
+                    )
+      )
     (new 'static 'menu-generic-button-option
       :name (text-id progress-mp-host)
       :should-disable? (lambda () (!= *mp-mode* (mp-mode offline)))

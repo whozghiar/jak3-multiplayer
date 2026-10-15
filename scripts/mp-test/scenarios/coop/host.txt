@@ -1,0 +1,17 @@
+# Co-op, host side: hosts in co-op mode. Once the guest stands 60 m away, a story step closes here:
+# it waits until the guest comes next to the host, then closes on both. Weather is the host's.
+1 enable
+1 name Host
+1 color 1
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+70 log-coop
+84 log-tasks
+85 close-task
+86 log-coop
+86 log-tasks
+95 log-coop
+95 log-tasks
+96 log-weather
+97 log

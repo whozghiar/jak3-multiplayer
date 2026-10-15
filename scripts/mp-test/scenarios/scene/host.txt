@@ -4,6 +4,7 @@
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
+44.9 wait-player 1
 55 scene wascity-pre-game-intro
 58 log-levels
 62 screenshot scene

@@ -4,6 +4,7 @@
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
+45.1 wait-joined
 50 continue volcanoa-start
 63 goto-player 0 0 3
 65.00 log-float

@@ -291,5 +291,14 @@
   "1526": "Orange",
   "1527": "Cyan",
   "1528": "Rose",
-  "1529": "Gris"
+  "1529": "Gris",
+  "152a": "Appuyez sur <PAD_TRIANGLE> pour prendre ce véhicule",
+  "152b": "Appuyez sur <PAD_TRIANGLE> pour voler ce véhicule, maintenez <PAD_TRIANGLE> pour monter à bord",
+  "152c": "Appuyez sur <PAD_TRIANGLE> pour descendre",
+  "1530": "Mode de jeu",
+  "1531": "Libre",
+  "1532": "Coopération",
+  "1533": "Multijoueur",
+  "1534": "En attente des autres joueurs à cet endroit",
+  "1535": "Connexion à la partie de l'hôte..."
 }

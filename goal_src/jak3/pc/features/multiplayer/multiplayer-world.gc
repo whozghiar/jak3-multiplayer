@@ -47,6 +47,18 @@
   (prop 3)    ;; a player's prop (Daxter, gun): drawn, not solid
   (owned 4)   ;; belongs to a player (prop, driven vehicle and wheels), never an NPC
   (world 5)   ;; a physics object of the level (id: mp-world-object-id): no copy, ours follows it
+  (shot 6)    ;; a player's shot in flight: drawn (model, trail, sounds), not solid, no code run
+  (laser 7)   ;; the gun's laser sight is on (mp-draw-laser)
+  ;; what weapons may aim at: the object's search-info-flag bits 1-6 (process-focusable.gc), and its
+  ;; kind; its copy answers the same (mp-replica get-search-info-flag, mask)
+  (aim-crate 8)
+  (aim-guard 9)
+  (aim-attackable 10)
+  (aim-enemy 11)
+  (aim-priority 12)
+  (aim-high-priority 13)
+  (aim-civilian 14)
+  (aim-hostile 15)  ;; an enemy, metalhead or KG robot
   )
 
 (deftype mp-actor-state (structure)
@@ -77,9 +89,10 @@
 (define-extern pc-mp-clock (function int int))
 (define-extern pc-mp-sandbox-begin (function none))
 (define-extern pc-mp-sandbox-watch (function pointer int int none))
-(define-extern pc-mp-sandbox-restore (function uint uint int))
+(define-extern pc-mp-sandbox-restore (function int))
 (define-extern pc-mp-sandbox-end (function none))
 (define-extern pc-mp-render-level (function string symbol none))
+(define-extern pc-mp-art-file-size (function string int))
 (define-extern mp-note-art (function skeleton-group process-drawable none))
 (define-extern mp-skel-def-get (function string skeleton-group))
 (define-extern mp-send-skel-def (function skeleton-group none))
@@ -111,9 +124,20 @@
    (elev-count     int32)       ;; elevators seen: entity aid, and whether a trip is under way
    (elev-aid       uint32 64)
    (elev-trip      symbol 64)
+   (elev-muted     symbol 64)   ;; its scripts are set aside for a trip started by another player
+   (elev-local     symbol 64)   ;; the trip under way was started here: its state goes to the others
+   (elev-driven    time-frame 64) ;; last state of another player's trip applied here
+   (elev-scripts   pair 448)    ;; those scripts, 7 per elevator (mp-elevator-mute)
    (elevator-trips-sent  int32) ;; counters for the test log
    (elevator-trips-shown int32)
+   (elevator-states int32)      ;; states of another player's trip applied here
    (world-driven  int32)        ;; physics object updates applied from the authority
+   (shot-copies   int32)        ;; copies of other players' shots drawn here (test log)
+   (gone-near     int32)        ;; NPCs we sent that left the game within 40 m of another player,
+                                ;; not dying (test log: despawned under another player's eyes)
+   (hit-remote    uint32 16)    ;; recent blows from other players: sender slot << 28 | its attack id
+   (hit-local     uint32 16)    ;; and the attack id each got here
+   (hit-next      int32)
    )
   )
 
@@ -127,6 +151,7 @@
   (new 'static 'boxed-array :type symbol
     'generic 'punch 'spin 'uppercut 'flop 'dark-punch 'dark-smack 'lunge 'roll 'bonk 'board
     'eco-yellow 'eco-red 'eco-blue 'eco-dark 'explode 'mech-punch 'flut-attack 'tube
+    'eco-red-shove 'gravity-end 'flut 'mech 'turret 'ice
     )
   )
 
@@ -217,6 +242,10 @@
                   #t
                   )
                  ((< *mp-local-slot* 0)
+                  #f
+                  )
+                 ;; co-op: the host's NPCs everywhere (a guest stays near the host)
+                 ((mp-coop?)
                   #f
                   )
                  (else
@@ -498,6 +527,18 @@
           (if (and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) dead))
               (logior! (-> st flags) (mp-actor-flag dead))
               )
+          ;; what the other players' weapons may aim at on its copy
+          (when (type? proc process-focusable)
+            (logior! (-> st flags)
+                     (the-as mp-actor-flag (shl (logand (the-as int (get-search-info-flag (the-as process-focusable proc))) #x7e) 7))
+                     )
+            (if (logtest? (process-mask civilian) (-> proc mask))
+                (logior! (-> st flags) (mp-actor-flag aim-civilian))
+                )
+            (if (logtest? (process-mask enemy metalhead kg-robot) (-> proc mask))
+                (logior! (-> st flags) (mp-actor-flag aim-hostile))
+                )
+            )
           (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
           (copyn-charp<-string (-> st skel) (-> sg name) 32)
           (mp-note-art sg proc)
@@ -710,8 +751,42 @@
   (none)
   )
 
+(defun mp-add-shot ((proc process-drawable))
+  "Add a shot without a model to the batch: its place only (its trail is its emitters)."
+  (when (< *mp-collect-count* MP_MAX_ACTORS)
+    (let ((st (-> *mp-actors-out* state *mp-collect-count*)))
+      (vector-copy! (-> st trans) (-> proc root trans))
+      (set! (-> st trans w) 1.0)
+      (quaternion-copy! (-> st quat) (-> proc root quat))
+      (set! (-> st id) (the-as uint (logand (-> proc pid) #xffffff)))
+      (set! (-> st anim-index) -1)
+      (set! (-> st anim-frame) 0.0)
+      (set! (-> st flags) (mp-actor-flag owned shot))
+      (set! (-> st seg-mask) (the-as uint 0))
+      (set! (-> st skel 0) (the-as uint 0))
+      (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
+      (+! *mp-collect-count* 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-collect-shot ((proc process-drawable))
+  "iterate-process-tree callback, under the player: add a shot of the player in flight, with its
+   model when it has one. The others draw it from its state, no projectile code runs there: a
+   shot's code reads the local player (*target*'s gun, its pad, its ammo), so a copy of the shot ran
+   on another machine charged, aimed and vanished with that machine's player."
+  (when (and (type? proc projectile) (nonzero? (-> proc root)))
+    (if (not (mp-add-actor proc (mp-actor-flag owned shot)))
+        (mp-add-shot proc)
+        )
+    )
+  #f
+  )
+
 (defun mp-collect-props ()
-  "Add the local player's props: Daxter on the shoulder, the gun, the vehicle driven and its wheels."
+  "Add the local player's props: Daxter on the shoulder, the gun (with its laser sight on or off),
+   the hoverboard, the vehicle driven and its wheels, and its shots in flight."
   (when *target*
     (let ((dax (ppointer->process (-> *target* sidekick))))
       (if (and dax (not (focus-test? *target* indax)))
@@ -720,11 +795,27 @@
       )
     (when (nonzero? (-> *target* gun))
       (let ((gun (ppointer->process (-> *target* gun gun))))
-        (if gun
-            (mp-add-prop (the-as process-drawable gun))
+        (when gun
+          (mp-add-prop (the-as process-drawable gun))
+          (let ((st (-> *mp-actors-out* state (max 0 (+ *mp-collect-count* -1)))))
+            (if (and (= (-> st id) (the-as uint (logand (-> gun pid) #xffffff)))
+                     (-> *target* gun laser-active?)
+                     (-> *target* gun active?)
+                     )
+                (logior! (-> st flags) (mp-actor-flag laser))
+                )
+            )
+          )
+        )
+      )
+    (when (nonzero? (-> *target* board))
+      (let ((board (ppointer->process (-> *target* board board))))
+        (if board
+            (mp-add-prop (the-as process-drawable board))
             )
         )
       )
+    (iterate-process-tree *target* (the-as (function object object) mp-collect-shot) *null-kernel-context*)
     (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
       (let ((veh (handle->process (-> *target* pilot vehicle))))
         (when (and veh (type? veh process-drawable))
@@ -750,13 +841,16 @@
   (none)
   )
 
+(define-extern mp-remote-distance (function vector float))
 (define-extern mp-send-poses (function none))
 (define-extern mp-send-near-poses (function none))
-(define-extern mp-send-levels (function none))
 (define-extern mp-send-art (function none))
 (define-extern mp-far-fetch-art (function none))
-(define-extern mp-far-art-reset (function none))
+(define-extern mp-art-heap-close (function none))
+(define-extern mp-elevators-unmute (function symbol none))
+(define-extern mp-test-note-path (function symbol mp-actor-state none)) ;; multiplayer-test.gc
 (define-extern mp-poll-elevator (function process object))
+(define-extern mp-drive-elevator (function mp-actor-state none))
 (define-extern mp-update-remote-riders (function none))
 
 
@@ -774,6 +868,17 @@
       )
     (when (and (> (mp-player-count) 0) (>= (- (mp-now) (-> ws last-send)) (seconds 0.066)))
       (set! (-> ws last-send) (mp-now))
+      ;; the NPCs of the last batch that left meanwhile, alive, near another player (test log)
+      (dotimes (i (-> *mp-actors-out* count))
+        (let ((st (-> *mp-actors-out* state i)))
+          (if (and (not (logtest? (-> st flags) (mp-actor-flag owned world dead hidden)))
+                   (not (handle->process (-> *mp-pose* obj i)))
+                   (< (mp-remote-distance (-> st trans)) (meters 40))
+                   )
+              (+! (-> ws gone-near) 1)
+              )
+          )
+        )
       (set! *mp-collect-count* 0)
       (mp-collect-served)
       (mp-collect-props)
@@ -787,6 +892,9 @@
       (mp-release-math #f)
       (iterate-process-tree *active-pool* (the-as (function object object) mp-poll-elevator) *null-kernel-context*)
       (set! (-> *mp-actors-out* count) *mp-collect-count*)
+      (dotimes (i *mp-collect-count*)
+        (mp-test-note-path #t (-> *mp-actors-out* state i))
+        )
       (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
       (mp-send-poses)
       )
@@ -794,11 +902,10 @@
     (if (and (> (mp-player-count) 0) (!= (-> ws last-send) (mp-now)))
         (mp-send-near-poses)
         )
-    ;; the levels of our place, for the far levels of the others
-    (when (> (mp-player-count) 0)
-      (mp-send-levels)
-      (mp-send-art)
-      )
+    ;; the art of what we send, for the others' copies
+    (if (> (mp-player-count) 0)
+        (mp-send-art)
+        )
     )
   (none)
   )
@@ -817,9 +924,37 @@
     )
   )
 
+(defun mp-local-attack-id ((from int) (remote uint))
+  "The attack id here of blow `remote` of player `from` (its machine's attack id, 0 when it had
+   none): the same one each time it arrives (a zap touches every part of a vehicle several frames),
+   so the victim counts it once, as stock code does with one attack id."
+  (let ((ws *mp-world-state*)
+        (key (logior (shl from 28) (logand remote #xfffffff)))
+        )
+    (when (nonzero? remote)
+      (dotimes (i 16)
+        (if (= (-> ws hit-remote i) key)
+            (return (-> ws hit-local i))
+            )
+        )
+      )
+    (let ((id (new-attack-id))
+          (i (-> ws hit-next))
+          )
+      (when (nonzero? remote)
+        (set! (-> ws hit-remote i) key)
+        (set! (-> ws hit-local i) id)
+        (set! (-> ws hit-next) (logand (+ i 1) 15))
+        )
+      id
+      )
+    )
+  )
+
 (defbehavior mp-on-actor-hit mp-manager ((ev mp-event))
   "Another player hit the replica of one of our objects (an NPC, our vehicle). Apply it to the real
-   one, from that player's puppet, so it turns to that player and reacts as if hit here."
+   one, from that player's puppet, so it turns to that player and reacts as if hit here; one blow
+   once (mp-local-attack-id)."
   (let ((proc (mp-process-by-pid (-> ev iarg 0)))
         (attacker (handle->process (-> self puppets (max 0 (min (-> ev from) (+ MP_MAX_PLAYERS -1))))))
         (mode (-> *mp-attack-modes* (max 0 (min (-> ev iarg 1) (+ (-> *mp-attack-modes* length) -1)))))
@@ -833,7 +968,7 @@
         #f
         (static-attack-info
           :mask (vehicle-impulse-factor)
-          ((id (new-attack-id))
+          ((id (mp-local-attack-id (-> ev from) (the-as uint (-> ev pad))))
            (mode mode)
            (damage (-> ev fvec w))
            (penetrate-using (the-as penetrate (logior (shl (the-as uint (-> ev iarg 3)) 32)
@@ -868,10 +1003,11 @@
 
 ;; One NPC of the host, drawn here. It plays the host's animation (and with it the effects the
 ;; animation carries: footsteps, sounds), takes the host's body variant, and is solid and hittable
-;; like the real one. Hits go to the host.
-(deftype mp-replica (process-drawable)
-  ((root   collide-shape :override)
-   (id     uint32)
+;; like the real one. Hits go to the host. It is a process-focusable of the original's kind (process
+;; mask, search-info flags, sent in its state): auto-aim, homing shots and blasts (gyro burster,
+;; peace maker, wave concussor) only consider focusables of those kinds.
+(deftype mp-replica (process-focusable)
+  ((id     uint32)
    (dying? symbol)
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
    (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the owner's object emits (mp-play-emitters)
@@ -881,6 +1017,15 @@
    (pose-time  int32)              ;; owner's time (tenths of a ms) of the pose laid last (test logs)
    (net    mp-actor-state :inline) ;; latest state from the owner
    )
+  )
+
+(defmethod get-search-info-flag ((this mp-replica))
+  "What the original answers (its state's aim bits): the local player's weapons pick the copy as
+   they would the original. Nothing for props, shots, hidden or dying copies."
+  (if (logtest? (-> this net flags) (mp-actor-flag prop owned shot hidden dead))
+      (the-as search-info-flag 0)
+      (the-as search-info-flag (shr (logand (the-as int (-> this net flags)) #x3f00) 7))
+      )
   )
 
 (defun mp-attack-mode-index ((mode symbol))
@@ -924,6 +1069,12 @@
             )
       (set! (-> ev iarg 2) (the-as int (logand pen #xffffffff)))
       (set! (-> ev iarg 3) (the-as int (shr pen 32)))
+      ;; its attack id: the owner counts one blow once
+      (set! (-> ev pad) (if (and info (logtest? (attack-mask id) (-> info mask)))
+                            (the-as int (-> info id))
+                            0
+                            )
+            )
       (vector-copy! (-> ev fvec) (-> *target* control trans))
       (set! (-> ev fvec w) (if (and info (logtest? (attack-mask damage) (-> info mask)))
                                (-> info damage)
@@ -937,8 +1088,33 @@
   )
 
 (defbehavior mp-replica-update mp-replica ()
-  "Apply the host's latest state: place, scale, visibility, body variant, animation, death."
+  "Apply the host's latest state: place, scale, visibility, body variant, animation, death, and the
+   kind weapons see (process mask, dead)."
   (let ((st (-> self net)))
+    (let ((f (-> st flags)))
+      (logclear! (-> self mask) (process-mask enemy guard civilian crate vehicle))
+      (when (not (logtest? f (mp-actor-flag prop owned shot hidden dead)))
+        (if (logtest? f (mp-actor-flag aim-crate))
+            (logior! (-> self mask) (process-mask crate))
+            )
+        (if (logtest? f (mp-actor-flag aim-guard))
+            (logior! (-> self mask) (process-mask guard))
+            )
+        (if (logtest? f (mp-actor-flag aim-enemy aim-hostile))
+            (logior! (-> self mask) (process-mask enemy))
+            )
+        (if (logtest? f (mp-actor-flag aim-civilian))
+            (logior! (-> self mask) (process-mask civilian))
+            )
+        (if (logtest? f (mp-actor-flag vehicle))
+            (logior! (-> self mask) (process-mask vehicle))
+            )
+        )
+      (if (logtest? f (mp-actor-flag dead))
+          (logior! (-> self focus-status) (focus-status dead))
+          (logclear! (-> self focus-status) (focus-status dead))
+          )
+      )
     (move-to-point! (-> self root) (-> st trans))
     (quaternion-copy! (-> self root quat) (-> st quat))
     (let ((scale (if (< 0.01 (-> st trans w))
@@ -979,13 +1155,93 @@
           )
         )
       )
-    ;; the host's NPC died: the stock death dissolve, once
+    ;; the host's NPC died: the stock death dissolve of characters, once. Not for a vehicle: its art
+    ;; has no "death-default" (do-effect then called address 0, a crash when a zapped buggy blew
+    ;; up); its explosion comes with the effects replayed, its parts with its state.
     (when (and (logtest? (-> st flags) (mp-actor-flag dead)) (not (-> self dying?)))
       (set! (-> self dying?) #t)
       (set! (-> self root root-prim prim-core collide-as) (collide-spec))
-      (when (nonzero? (-> self skel effect))
+      (when (and (nonzero? (-> self skel effect)) (not (logtest? (-> st flags) (mp-actor-flag vehicle))))
         (logior! (-> self skel effect flags) (effect-control-flag ecf1))
         (do-effect (-> self skel effect) "death-default" 0.0 -1)
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-laser ((proc process-drawable))
+  "The laser sight of the copy of another player's gun, drawn as the owner's gun draws it
+   (gun-info-method-9, engine/target/gun/gun-util.gc): from the gun's laser joint (14) along its
+   barrel (joint 13, the owner's fire direction when no target is tracked), ending on what it meets.
+   The owner's own laser particles are not replayed (mp-play-emitters): they take their direction
+   from the drawing machine's globals."
+  (when (and (nonzero? (-> proc node-list))
+             (> (-> proc node-list length) 14)
+             (nonzero? (-> proc draw))
+             (not (logtest? (-> proc draw status) (draw-control-status no-draw)))
+             )
+    (let ((from (vector<-cspace! (new 'stack-no-clear 'vector) (-> proc node-list data 14)))
+          (dir (vector-normalize-copy! (new 'stack-no-clear 'vector) (-> proc node-list data 13 bone transform fvec) 1.0))
+          (cq (new 'stack-no-clear 'collide-query))
+          )
+      (vector+float*! (-> cq start-pos) from dir -8192.0)
+      (vector-float*! (-> cq move-dist) dir 163840.0)
+      (let ((v1-13 cq))
+        (set! (-> v1-13 radius) 819.2)
+        (set! (-> v1-13 collide-with)
+              (collide-spec backgnd bot crate civilian enemy obstacle vehicle-sphere hit-by-others-list pusher shield)
+              )
+        (set! (-> v1-13 ignore-process0) proc)
+        (set! (-> v1-13 ignore-process1) #f)
+        (set! (-> v1-13 ignore-pat)
+              (new 'static 'pat-surface :noentity #x1 :nojak #x1 :probe #x1 :noproj #x1 :noendlessfall #x1 :board #x1)
+              )
+        (set! (-> v1-13 action-mask) (collide-action solid semi-solid))
+        )
+      (let ((f0-3 (fill-and-probe-using-line-sphere *collide-cache* cq)))
+        (cond
+          ((>= f0-3 0.0)
+           (vector+float*! (-> cq start-pos) (-> cq start-pos) (-> cq move-dist) f0-3)
+           ;; the spot where it ends
+           (let ((spot (vector-normalize! (vector-! (new 'stack-no-clear 'vector) from (-> cq start-pos)) 1638.4)))
+             (vector+! spot spot (-> cq start-pos))
+             (launch-particles (-> *part-id-table* 212) spot)
+             )
+           )
+          (else
+            (vector+! (-> cq start-pos) (-> cq start-pos) (-> cq move-dist))
+            )
+          )
+        )
+      ;; the beam: thinner as the camera comes close, as the owner's
+      (let* ((beam (-> *part-id-table* 207))
+             (timer (get-field-spec-by-id beam (sp-field-id spt-timer)))
+             (scale (get-field-spec-by-id beam (sp-field-id spt-scale-x)))
+             (old-timer (-> timer initial-valuef))
+             (old-scale (-> scale initial-valuef))
+             (old-range (-> scale random-rangef))
+             (cam (vector-vector-distance (camera-pos) from))
+             (f (cond
+                  ((< cam 122.88)
+                   0.0
+                   )
+                  ((< 65536.0 cam)
+                   1.0
+                   )
+                  (else
+                    (* 0.000015287453 (+ -122.88 cam))
+                    )
+                  )
+                )
+             )
+        (set! (-> scale initial-valuef) (* old-scale f))
+        (set! (-> scale random-rangef) (* old-range f))
+        (set! (-> timer initial-valuef) 1.0)
+        (draw-beam beam from (vector-! (new 'stack-no-clear 'vector) (-> cq start-pos) from) #t)
+        (set! (-> timer initial-valuef) old-timer)
+        (set! (-> scale initial-valuef) old-scale)
+        (set! (-> scale random-rangef) old-range)
         )
       )
     )
@@ -1010,6 +1266,9 @@
     (mp-replica-update)
     (mp-play-emitters self (-> self id) (-> self fx-group) (-> self fx-tracker))
     (ja-post)
+    (if (logtest? (-> self net flags) (mp-actor-flag laser))
+        (mp-draw-laser self)
+        )
     )
   )
 
@@ -1019,6 +1278,7 @@
   (set! (-> self level) lev)
   (set! (-> self id) (-> st id))
   (set! (-> self dying?) #f)
+  (set! (-> self focus-status) (focus-status))
   (mem-copy! (the-as pointer (-> self net)) (the-as pointer st) (size-of mp-actor-state))
   (let ((vehicle? (logtest? (-> st flags) (mp-actor-flag vehicle)))
         (cshape (new 'process 'collide-shape self (collide-list-enum usually-hit-by-player)))
@@ -1026,7 +1286,7 @@
     (let ((prim (new 'process 'collide-shape-prim-sphere cshape (the-as uint 0))))
       ;; props (Daxter, a gun) are only drawn
       (set! (-> prim prim-core collide-as) (cond
-                                                ((logtest? (-> st flags) (mp-actor-flag prop)) (collide-spec))
+                                                ((logtest? (-> st flags) (mp-actor-flag prop shot)) (collide-spec))
                                                 (vehicle? (collide-spec obstacle))
                                                 (else (collide-spec enemy))
                                                 )
@@ -1139,9 +1399,68 @@
     )
   )
 
+;; The copy of a shot without a model: its place, its trail (the owner's emitters) and sounds.
+(deftype mp-fx-copy (mp-replica)
+  ()
+  )
+
+(defstate mp-fx-copy-idle (mp-fx-copy)
+  :code (behavior ()
+    (loop
+      (suspend)
+      )
+    )
+  :post (behavior ()
+    (move-to-point! (-> self root) (-> self net trans))
+    (quaternion-copy! (-> self root quat) (-> self net quat))
+    (mp-play-emitters self (-> self id) (-> self fx-group) (-> self fx-tracker))
+    )
+  )
+
+(defbehavior mp-fx-copy-init-by-other mp-fx-copy ((st mp-actor-state))
+  "A copy of shot `st`: an intangible point that plays the owner's emitters and sounds."
+  (set! (-> self id) (-> st id))
+  (set! (-> self dying?) #f)
+  (set! (-> self focus-status) (focus-status))
+  (mem-copy! (the-as pointer (-> self net)) (the-as pointer st) (size-of mp-actor-state))
+  (let ((cshape (new 'process 'collide-shape self (collide-list-enum usually-hit-by-player))))
+    (let ((prim (new 'process 'collide-shape-prim-sphere cshape (the-as uint 0))))
+      (set! (-> prim prim-core collide-as) (collide-spec))
+      (set! (-> prim prim-core collide-with) (collide-spec))
+      (set-vector! (-> prim local-sphere) 0.0 0.0 0.0 (meters 0.5))
+      (set! (-> cshape total-prims) (the-as uint 1))
+      (set! (-> cshape root-prim) prim)
+      )
+    (set! (-> self root) cshape)
+    )
+  (vector-copy! (-> self root trans) (-> st trans))
+  (quaternion-copy! (-> self root quat) (-> st quat))
+  (dotimes (i MP_FX_TRACKERS)
+    (set! (-> self fx-group i) -1)
+    (set! (-> self fx-tracker i) (the-as handle #f))
+    )
+  (go mp-fx-copy-idle)
+  )
+
 (defbehavior mp-replica-spawn mp-manager ((st mp-actor-state))
-  "Spawn a replica of `st` if its skeleton is loaded here. #t when spawned."
+  "Spawn a replica of `st` if its skeleton is loaded here (a shot without a model gets an
+   mp-fx-copy). #t when spawned."
   (let ((ws *mp-world-state*))
+    (when (and (< (-> ws replica-count) MP_MAX_REPLICAS)
+               (logtest? (-> st flags) (mp-actor-flag shot))
+               (zero? (-> st skel 0))
+               )
+      (let ((proc (process-spawn mp-fx-copy st :name "mp-fx-copy" :to self)))
+        (when proc
+          (+! (-> ws shot-copies) 1)
+          (set! (-> ws replica-id (-> ws replica-count)) (-> st id))
+          (set! (-> ws replica (-> ws replica-count)) (ppointer->handle proc))
+          (+! (-> ws replica-count) 1)
+          (return #t)
+          )
+        )
+      (return #f)
+      )
     (when (< (-> ws replica-count) MP_MAX_REPLICAS)
       (string<-charp *mp-temp-string* (-> st skel))
       (set! (-> ws level-box 0) #f)
@@ -1157,6 +1476,9 @@
         (when (and sg lev (type? sg skeleton-group))
           (let ((proc (process-spawn mp-replica st sg lev :name "mp-replica" :to self :stack-size #x20000)))
             (when proc
+              (if (logtest? (-> st flags) (mp-actor-flag shot))
+                  (+! (-> ws shot-copies) 1)
+                  )
               (set! (-> ws replica-id (-> ws replica-count)) (-> st id))
               (set! (-> ws replica (-> ws replica-count)) (ppointer->handle proc))
               (+! (-> ws replica-count) 1)
@@ -1170,23 +1492,32 @@
   #f
   )
 
+(define-extern mp-vehicle-type-of-skel (function (pointer uint8) int))
+
 (defun mp-nearest-replica-vehicle ((pos vector))
-  "Replica table index of another player's NPC vehicle within 4.5 m of `pos`, -1 when none."
+  "Replica table index of another player's NPC vehicle near `pos` (within its size and 1.5 m) that
+   can be taken here (mp-get-vehicle-at: a city bike or car, a Spargus buggy, its model loaded),
+   -1 when none. Wheels and the vehicles that cannot be taken never prompt."
   (let ((ws *mp-world-state*)
         (best -1)
-        (best-dist (meters 4.5))
+        (best-dist (meters 6))
         )
     (dotimes (i (-> ws replica-count))
       (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
         (when (and proc
+                   (nonzero? (-> proc draw))
                    (not (logtest? (-> proc net flags) (mp-actor-flag owned)))
                    (logtest? (-> proc net flags) (mp-actor-flag vehicle))
                    (not (logtest? (-> proc net flags) (mp-actor-flag hidden dead)))
                    )
           (let ((d (vector-vector-distance pos (-> proc root trans))))
-            (when (< d best-dist)
-              (set! best i)
-              (set! best-dist d)
+            (when (and (< d best-dist) (< d (+ (fmin (-> proc draw bounds w) (meters 4.5)) (meters 1.5))))
+              (let ((vtype (mp-vehicle-type-of-skel (-> proc net skel))))
+                (when (and (or (and (>= vtype 0) (<= vtype 6)) (and (>= vtype 12) (<= vtype 19))) (mp-vehicle-skel vtype))
+                  (set! best i)
+                  (set! best-dist d)
+                  )
+                )
               )
             )
           )
@@ -1349,12 +1680,18 @@
           )
       (set! (-> *mp-actors-in* count) count)
       (dotimes (i count)
+        (mp-test-note-path #f (-> *mp-actors-in* state i))
+        )
+      (dotimes (i count)
         (let* ((st (-> *mp-actors-in* state i))
                (index (mp-replica-index (-> st id)))
                )
           (cond
             ((logtest? (-> st flags) (mp-actor-flag world))
-             (mp-drive-world-object st)
+             (if (= (-> st anim-index) 1)
+                 (mp-drive-elevator st)
+                 (mp-drive-world-object st)
+                 )
              (set! (-> st id) (the-as uint 0))
              )
             ((not (mp-replica-wanted? st))
@@ -1410,6 +1747,30 @@
   (none)
   )
 
+
+(defun mp-keep-seen-npcs ()
+  "Authority, after the frame's draw (per-frame hook): the NPCs we send within 60 m of another
+   player are marked on screen for the next frame's logic. Citizens, guards and traffic leave when
+   off our screen a while (citizen enemy-common-post, crimson-guard-method-270, vehicle
+   offscreen-time), while another player may be looking at them: they vanished under its eyes."
+  (when (and *mp-authority* (mp-online?) (> (mp-player-count) 0))
+    (dotimes (i (-> *mp-actors-out* count))
+      (let ((st (-> *mp-actors-out* state i)))
+        (when (and (not (logtest? (-> st flags) (mp-actor-flag owned world)))
+                   (< (mp-remote-distance (-> st trans)) (meters 60))
+                   )
+          (let ((proc (the-as process-drawable (handle->process (-> *mp-pose* obj i)))))
+            (if (and proc (nonzero? (-> proc draw)))
+                (logior! (-> proc draw status) (draw-control-status on-screen))
+                )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-world-wake mp-manager ()
   "Our NPCs and traffic back (we simulate our world again)."
   (let ((ws *mp-world-state*))
@@ -1447,12 +1808,16 @@
          (mp-world-suppress)
          )
      (mp-world-receive)
+     (mp-elevators-unmute #f)
+     (mp-far-fetch-art)
      (mp-sounds-housekeeping #f)
      (mp-update-remote-riders)
      )
     (else
       (set! *mp-authority* #f)
       (set! (-> *mp-clock-sync* known?) #f)
+      (mp-art-heap-close)
+      (mp-elevators-unmute #t)
       (if (or (> (-> *mp-world-state* replica-count) 0)
               (> (-> *mp-world-state* suppressed-count) 0)
               (> (-> *mp-world-state* forced-count) 0)
@@ -1546,8 +1911,105 @@
   -1
   )
 
-(defbehavior mp-effect-started part-tracker ((group sparticle-launch-group) (target process-drawable) (duration time-frame))
-  "A one-shot effect started here: remember it, and send it unless it is a copy or a replica's."
+;; Particle callbacks a copy cannot run. A copy of a group plays on a part-tracker (mp-replay-effect,
+;; mp-play-emitters), where these read what that process has not (a collide-shape root, joints, a
+;; darkjak-ball), or the local player (*target*'s gun or joints): a crash (board-zap-track read the
+;; joints of *entity-pool* on the host, in testing) or an effect on the wrong player.
+(define *mp-unsafe-part-funcs*
+  (new 'static 'boxed-array :type symbol
+    'sparticle-track-root-prim 'eco-track-root-prim-fadeout 'sparticle-track-joint-glider
+    'sparticle-track-joint-xz 'crowd-dude-func 'fruit-check-ground-bounce 'sparticle-track-hadouken
+    'sparticle-track-gun-joint 'sparticle-track-gun-joint-player-y 'part-tracker-track-target-joint
+    'board-charge-track 'sparticle-red-2-converge
+    )
+  )
+
+(defun mp-launcher-replayable? ((launcher sparticle-launcher) (parent process))
+  "#t when a copy of particle `launcher` can play under `parent` (#f: in the world or a direct
+   launch): no callback of *mp-unsafe-part-funcs*, and board-zap-track (the joints of the tracker's
+   parent) only with a parent that has joints."
+  (let ((spec (get-field-spec-by-id launcher (sp-field-id spt-func))))
+    (when spec
+      (let ((fn (-> spec sym)))
+        (dotimes (k (-> *mp-unsafe-part-funcs* length))
+          (if (= fn (-> *mp-unsafe-part-funcs* k))
+              (return #f)
+              )
+          )
+        (if (and (= fn 'board-zap-track) (not (and parent (type? parent process-drawable))))
+            (return #f)
+            )
+        )
+      )
+    )
+  #t
+  )
+
+(defun mp-group-replayable? ((group sparticle-launch-group) (parent process))
+  "#t when a copy of particle group `group` can play on a part-tracker under `parent` (#f: in the
+   world): every particle of it can (mp-launcher-replayable?)."
+  (dotimes (i (-> group length))
+    (let ((launcher (-> *part-id-table* (-> group launcher i launcher))))
+      (if (and (nonzero? launcher) launcher (type? launcher sparticle-launcher) (not (mp-launcher-replayable? launcher parent)))
+          (return #f)
+          )
+      )
+    )
+  #t
+  )
+
+(defun mp-effect-owner ((proc process))
+  "What another machine attaches the copy of an effect of `proc` to: -2 our player (its puppet
+   there), the pid of an object we send (its copy there), -1 nothing (the world)."
+  (cond
+    ((not proc)
+     -1
+     )
+    ((= proc *target*)
+     -2
+     )
+    (else
+      (let ((pid (-> proc pid)))
+        (dotimes (i (-> *mp-actors-out* count))
+          (if (= (logand (-> *mp-actors-out* state i id) #xffffff) pid)
+              (return pid)
+              )
+          )
+        )
+      -1
+      )
+    )
+  )
+
+(defun mp-effect-parent ((from int) (owner int))
+  "The copy here of what owns another player's effect (mp-effect-owner): the puppet of player
+   `from`, or the replica of its object; #f when it has none here (or for the world)."
+  (let ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+    (cond
+      ((not manager)
+       (the-as process #f)
+       )
+      ((= owner -2)
+       (handle->process (-> manager puppets (max 0 (min from (+ MP_MAX_PLAYERS -1)))))
+       )
+      ((>= owner 0)
+       (let ((index (mp-replica-index (the-as uint (logior (shl from 24) owner)))))
+         (if (>= index 0)
+             (handle->process (-> *mp-world-state* replica index))
+             (the-as process #f)
+             )
+         )
+       )
+      (else
+        (the-as process #f)
+        )
+      )
+    )
+  )
+
+(defbehavior mp-effect-started part-tracker ((group sparticle-launch-group) (target process-drawable) (duration time-frame) (joint object))
+  "A one-shot effect started here: remember it, and send it unless it is a copy or a replica's,
+   with what it belongs to (mp-effect-owner) and the joint it follows."
   (let ((fx *mp-fx*)
         (pos (if (and target (nonzero? (-> target root)))
                  (-> target root trans)
@@ -1575,6 +2037,17 @@
               (set! (-> ev to) -1)
               (set! (-> ev iarg 0) index)
               (set! (-> ev iarg 1) (the-as int duration))
+              (set! (-> ev iarg 2) (mp-effect-owner (if target
+                                                        target
+                                                        (ppointer->process (-> self parent))
+                                                        )
+                                                    )
+                    )
+              (set! (-> ev iarg 3) (if target
+                                       (the-as int joint)
+                                       -1
+                                       )
+                    )
               (vector-copy! (-> ev fvec) pos)
               (pc-mp-send-event ev)
               (+! (-> fx total-effects-sent) 1)
@@ -1588,10 +2061,13 @@
   )
 
 (defun mp-replay-effect ((ev mp-event))
-  "Start an effect another player saw start, unless an identical one just started here (the copy
-   of a shot makes its own impact)."
+  "Start an effect another player saw start, unless an identical one just started here: on the copy
+   of what it belongs to (following the same joint), else in the world; never for a player whose
+   puppet is not here, nor a group that cannot play there (mp-group-replayable?)."
   (let ((index (-> ev iarg 0))
         (fx *mp-fx*)
+        (owner (-> ev iarg 2))
+        (joint (-> ev iarg 3))
         )
     (when (and (>= index 0) (< index (-> *part-group-id-table* length)))
       (let ((group (-> *part-group-id-table* index)))
@@ -1605,14 +2081,59 @@
                 (return #f)
                 )
             )
-          (set! (-> fx replaying?) #t)
-          (+! (-> fx total-effects-shown) 1)
-          (vector-copy! (-> *launch-matrix* trans) (-> ev fvec))
-          (if (logtest? (-> group flags) (sp-group-flag sp13))
-              (part-tracker-spawn part-tracker-subsampler :to *entity-pool* :group group :duration (the-as time-frame (-> ev iarg 1)))
-              (part-tracker-spawn part-tracker :to *entity-pool* :group group :duration (the-as time-frame (-> ev iarg 1)))
+          (let ((parent (mp-effect-parent (-> ev from) owner)))
+            ;; a shot's effect (its impact) plays in the world when it can: the shot's copy goes
+            ;; 250 ms after the shot, and its effects with it
+            (if (and parent
+                     (type? parent mp-replica)
+                     (logtest? (-> (the-as mp-replica parent) net flags) (mp-actor-flag shot))
+                     (mp-group-replayable? group (the-as process #f))
+                     )
+                (set! parent (the-as process #f))
+                )
+            (when (and (or parent (= owner -1) (>= owner 0)) (mp-group-replayable? group parent))
+              (set! (-> fx replaying?) #t)
+              (+! (-> fx total-effects-shown) 1)
+              (vector-copy! (-> *launch-matrix* trans) (-> ev fvec))
+              (let ((to (the-as process-tree (if parent
+                                                 parent
+                                                 *entity-pool*
+                                                 )
+                                )
+                        )
+                    (tgt (the-as process-drawable (if (and parent (>= joint 0))
+                                                      parent
+                                                      )
+                                 )
+                         )
+                    (mat-joint (if (and parent (>= joint 0))
+                                   joint
+                                   *launch-matrix*
+                                   )
+                               )
+                    )
+                (if (logtest? (-> group flags) (sp-group-flag sp13))
+                    (part-tracker-spawn
+                      part-tracker-subsampler
+                      :to to
+                      :group group
+                      :duration (the-as time-frame (-> ev iarg 1))
+                      :target tgt
+                      :mat-joint mat-joint
+                      )
+                    (part-tracker-spawn
+                      part-tracker
+                      :to to
+                      :group group
+                      :duration (the-as time-frame (-> ev iarg 1))
+                      :target tgt
+                      :mat-joint mat-joint
+                      )
+                    )
+                )
+              (set! (-> fx replaying?) #f)
               )
-          (set! (-> fx replaying?) #f)
+            )
           )
         )
       )
@@ -1621,7 +2142,9 @@
   )
 
 (defun mp-projectile-fired ((proj projectile) (params projectile-init-by-other-params))
-  "A projectile was fired here: send it when it is the local player's, or an NPC's on the host."
+  "A projectile was fired here: send it when it is an NPC's and we simulate the NPCs (every machine
+   fires its copy, which may hit its player). A player's shots are not fired elsewhere: they go in
+   the batches as objects (mp-collect-shot)."
   (when (and (mp-online?) (not (-> *mp-fx* replaying?)))
     (let* ((owner (handle->process (-> params owner-handle)))
            (shooter (if owner
@@ -1629,11 +2152,11 @@
                         (ppointer->process (-> proj parent))
                         )
                     )
-           (mine? (mp-from-local-player? (the-as process shooter)))
            )
-      (when (and (or mine?
-                     (and *mp-authority* shooter (type? shooter process) (> (mp-actor-kind (the-as process shooter)) 0))
-                     )
+      (when (and *mp-authority*
+                 shooter
+                 (type? shooter process)
+                 (> (mp-actor-kind (the-as process shooter)) 0)
                  (mp-near-a-player? (-> params pos))
                  (mp-fx-budget #f)
                  )
@@ -1644,11 +2167,7 @@
           (set! (-> ev iarg 0) (the-as int (-> params vel x)))
           (set! (-> ev iarg 1) (the-as int (-> params vel y)))
           (set! (-> ev iarg 2) (the-as int (-> params vel z)))
-          (set! (-> ev iarg 3) (if mine?
-                                   -1
-                                   (logand (-> (the-as process shooter) pid) #xffffff)
-                                   )
-                )
+          (set! (-> ev iarg 3) (logand (-> (the-as process shooter) pid) #xffffff))
           (copyn-charp<-string (-> ev text) (symbol->string (-> proj type symbol)) 32)
           (pc-mp-send-event ev)
           (+! (-> *mp-fx* total-shots-sent) 1)
@@ -1660,24 +2179,12 @@
   )
 
 (defun mp-replay-projectile ((ev mp-event))
-  "Fire the copy of another player's projectile, from that player's puppet or from the replica of
-   the NPC that fired it."
-  (let* ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
-         (from (-> ev from))
-         (parent (cond
-                   ((not manager)
-                    #f
-                    )
-                   ((< (-> ev iarg 3) 0)
-                    (handle->process (-> manager puppets (max 0 (min from (+ MP_MAX_PLAYERS -1)))))
-                    )
-                   (else
-                     (let ((index (mp-replica-index (the-as uint (logior (shl from 24) (-> ev iarg 3))))))
-                       (if (>= index 0)
-                           (handle->process (-> *mp-world-state* replica index))
-                           )
+  "Fire the copy of an NPC's projectile from the replica of the NPC that fired it."
+  (let* ((from (-> ev from))
+         (parent (let ((index (mp-replica-index (the-as uint (logior (shl from 24) (-> ev iarg 3))))))
+                   (if (>= index 0)
+                       (handle->process (-> *mp-world-state* replica index))
                        )
-                     )
                    )
                  )
          )
@@ -1710,12 +2217,7 @@
             (set! (-> params vehicle-impulse-factor) 1.0)
             (set! (-> *mp-fx* replaying?) #t)
             (+! (-> *mp-fx* total-shots-shown) 1)
-            (let ((proj (the-as projectile (ppointer->process (spawn-projectile (the-as type typ) params (the-as process-tree parent) *default-dead-pool*)))))
-              ;; a player's shot is only drawn: the shooter's machine sends its hits
-              (if (and proj (< (-> ev iarg 3) 0) (nonzero? (-> proj root)))
-                  (set! (-> proj root root-prim prim-core collide-with) (collide-spec backgnd))
-                  )
-              )
+            (spawn-projectile (the-as type typ) params (the-as process-tree parent) *default-dead-pool*)
             (set! (-> *mp-fx* replaying?) #f)
             )
           )
@@ -1742,7 +2244,7 @@
   "Stock behavior, then the other players see the effect too (multiplayer mod, no-op offline)."
   (*mp-stock-part-tracker-init-base* arg0 arg1 arg2 arg3 arg4 arg5)
   (if (nonzero? arg0)
-      (mp-effect-started arg0 arg4 arg1)
+      (mp-effect-started arg0 arg4 arg1 arg5)
       )
   (none)
   )
@@ -1858,14 +2360,17 @@
   )
 
 (defun mp-emitter-owner? ((proc process))
-  "#t when the others draw `proc` from this machine: the player, Daxter, the gun, the vehicle driven
-   (and its wheels), or an NPC while we simulate the NPCs around us."
+  "#t when the others draw `proc` from this machine: the player, Daxter, the gun, the hoverboard,
+   the player's shots, the vehicle driven (and its wheels), or an NPC while we simulate the NPCs
+   around us."
   (and proc
        (nonzero? proc)
        (or (= proc *target*)
            (and *target*
                 (or (= proc (ppointer->process (-> *target* sidekick)))
                     (and (nonzero? (-> *target* gun)) (= proc (ppointer->process (-> *target* gun gun))))
+                    (and (nonzero? (-> *target* board)) (= proc (ppointer->process (-> *target* board board))))
+                    (and (type? proc projectile) (mp-from-local-player? proc))
                     )
                 )
            (mp-driven-vehicle? proc)
@@ -2149,7 +2654,8 @@
                                  (< (mp-remote-distance (-> st trans)) (meters 40))
                                  )
               )
-        ;; physics objects of the level have no copy, so no pose
+        ;; physics objects of the level have no copy, so no pose; a shot without a model has its
+        ;; effects only
         (if (and proc (not (logtest? (-> st flags) (mp-actor-flag world))))
             (mp-send-pose
               (-> st id)
@@ -2157,7 +2663,7 @@
               (-> st trans)
               (-> st quat)
               (not (logtest? (-> st flags) (mp-actor-flag owned)))
-              #t
+              (nonzero? (-> st skel 0))
               #t
               )
             )
@@ -2170,11 +2676,16 @@
   (none)
   )
 
+(define *mp-owned-out* (new 'global 'mp-actor-table))
+
 (defun mp-send-near-poses ()
   "Between two batches, every frame: the bones of the player, of its props and of the NPCs near
    another player, without effects, so their copies are drawn from every frame of the owner's
-   (the batch's 15 Hz would leave the copy a straight blend between poses 66 ms apart)."
+   (the batch's 15 Hz would leave the copy a straight blend between poses 66 ms apart); and the
+   state of what the player owns (props, the vehicle driven and its wheels, shots), so their copies
+   move from every frame too: a vehicle blended between states 66 ms apart jerked at speed."
   (let* ((ps *mp-pose*)
+         (own *mp-owned-out*)
          (manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
          (seated (if (and manager (>= *mp-ride-slot* 0))
                      (the-as process-drawable (handle->process (-> manager self-puppet)))
@@ -2191,6 +2702,7 @@
         (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t #f)
         )
       )
+    (set! (-> own count) 0)
     (dotimes (i *mp-collect-count*)
       (let ((st (-> *mp-actors-out* state i))
             (proc (the-as process-drawable (handle->process (-> ps obj i))))
@@ -2210,11 +2722,28 @@
               (quaternion-copy! quat (-> proc root quat))
               )
             )
-          (mp-send-pose (-> st id) proc trans quat (not (logtest? (-> st flags) (mp-actor-flag owned))) #t #f)
+          (if (nonzero? (-> st skel 0))
+              (mp-send-pose (-> st id) proc trans quat (not (logtest? (-> st flags) (mp-actor-flag owned))) #t #f)
+              )
+          (when (logtest? (-> st flags) (mp-actor-flag owned))
+            (let ((out (-> own state (-> own count))))
+              (mem-copy! (the-as pointer out) (the-as pointer st) (size-of mp-actor-state))
+              (vector-copy! (-> out trans) trans)
+              (set! (-> out trans w) (-> st trans w))
+              (quaternion-copy! (-> out quat) quat)
+              (+! (-> own count) 1)
+              )
+            )
           )
         )
       )
     (pc-mp-send-poses)
+    (dotimes (i (-> own count))
+      (mp-test-note-path #t (-> own state i))
+      )
+    (if (> (-> own count) 0)
+        (pc-mp-send-actors (-> own state) (-> own count))
+        )
     )
   (none)
   )
@@ -2390,7 +2919,7 @@
                    (slot -1)
                    )
                ;; a level's groups are unlinked (0) while that level is not loaded here
-               (when (and (nonzero? group) (type? group sparticle-launch-group))
+               (when (and (nonzero? group) (type? group sparticle-launch-group) (mp-group-replayable? group proc))
                  (dotimes (k MP_FX_TRACKERS)
                    (if (and (= (-> groups k) (-> em index)) (handle->process (-> trackers k)))
                        (set! slot k)
@@ -2437,7 +2966,13 @@
                )
              )
            )
-          ((and (> (-> em count) 0) (mp-launcher-usable? (-> em index) (-> em home)))
+          ;; the gun's laser particles (207-212) take their direction from globals of the machine that
+          ;; draws them: the gun's copy draws its laser itself (mp-draw-laser)
+          ((and (> (-> em count) 0)
+                (not (and (>= (-> em index) 207) (<= (-> em index) 212)))
+                (mp-launcher-usable? (-> em index) (-> em home))
+                (mp-launcher-replayable? (-> *part-id-table* (-> em index)) (the-as process #f))
+                )
            (let ((launcher (-> *part-id-table* (-> em index))))
              (dotimes (k (min 4 (-> em count)))
                (if (= (-> em kind) 2)
@@ -2834,12 +3369,187 @@
       (let ((i (-> ws elev-count)))
         (set! (-> ws elev-aid i) aid)
         (set! (-> ws elev-trip i) #f)
+        (set! (-> ws elev-muted i) #f)
+        (set! (-> ws elev-local i) #f)
+        (set! (-> ws elev-driven i) 0)
         (+! (-> ws elev-count) 1)
         (return i)
         )
       )
     )
   -1
+  )
+
+;; An elevator's scripts (entity res: on-activate, on-deactivate...) load levels, change the
+;; continue point, the camera and the player's settings, and some guard them with player-ridden?
+;; while others do not: Spargus' palace elevator runs (want-vis 'waspala) (want-continue
+;; "waspala-start") on arrival. A trip started on another player's word runs them on a machine whose
+;; player is elsewhere: its levels and continue point change under it (too many levels loading, a
+;; crash). While the local player is not on it, such a trip runs without them.
+
+(defun mp-elevator-mute ((elev elevator) (slot int))
+  "Set aside the scripts of `elev` (table entry `slot`) for a trip of another player."
+  (let ((ws *mp-world-state*)
+        (k (* slot 7))
+        )
+    (when (not (-> ws elev-muted slot))
+      (set! (-> ws elev-scripts (+ k 0)) (-> elev on-activate))
+      (set! (-> ws elev-scripts (+ k 1)) (-> elev on-deactivate))
+      (set! (-> ws elev-scripts (+ k 2)) (-> elev on-up))
+      (set! (-> ws elev-scripts (+ k 3)) (-> elev on-down))
+      (set! (-> ws elev-scripts (+ k 4)) (-> elev on-running))
+      (set! (-> ws elev-scripts (+ k 5)) (-> elev on-notice))
+      (set! (-> ws elev-scripts (+ k 6)) (-> elev on-wait))
+      (set! (-> elev on-activate) #f)
+      (set! (-> elev on-deactivate) #f)
+      (set! (-> elev on-up) #f)
+      (set! (-> elev on-down) #f)
+      (set! (-> elev on-running) #f)
+      (set! (-> elev on-notice) #f)
+      (set! (-> elev on-wait) #f)
+      (set! (-> ws elev-muted slot) #t)
+      )
+    )
+  (none)
+  )
+
+(defun mp-elevator-unmute ((elev elevator) (slot int))
+  "Give `elev` its scripts back."
+  (let ((ws *mp-world-state*)
+        (k (* slot 7))
+        )
+    (when (-> ws elev-muted slot)
+      (set! (-> elev on-activate) (-> ws elev-scripts (+ k 0)))
+      (set! (-> elev on-deactivate) (-> ws elev-scripts (+ k 1)))
+      (set! (-> elev on-up) (-> ws elev-scripts (+ k 2)))
+      (set! (-> elev on-down) (-> ws elev-scripts (+ k 3)))
+      (set! (-> elev on-running) (-> ws elev-scripts (+ k 4)))
+      (set! (-> elev on-notice) (-> ws elev-scripts (+ k 5)))
+      (set! (-> elev on-wait) (-> ws elev-scripts (+ k 6)))
+      (set! (-> ws elev-muted slot) #f)
+      )
+    )
+  (none)
+  )
+
+(defun mp-elevators-unmute ((all? symbol))
+  "Each frame: a trip driven by another player's states arrives once they stop (theirs arrived);
+   an elevator whose scripts are set aside gets them back once the trip is over (it waits at a stop)
+   or our player rides it; every one with `all?` (the session ended)."
+  (let ((ws *mp-world-state*))
+    (dotimes (slot (-> ws elev-count))
+      (when (or (-> ws elev-muted slot) (nonzero? (-> ws elev-driven slot)))
+        (let* ((ent (entity-by-aid (-> ws elev-aid slot)))
+               (proc (if ent
+                         (-> (the-as entity-actor ent) extra process)
+                         )
+                     )
+               )
+          (cond
+            ((not (and proc (type? proc elevator)))
+             ;; gone: a new one reads its scripts from its entity again
+             (set! (-> ws elev-muted slot) #f)
+             (set! (-> ws elev-driven slot) 0)
+             )
+            (else
+              (when (and (nonzero? (-> ws elev-driven slot))
+                         (or all? (time-elapsed? (-> ws elev-driven slot) (seconds 0.3)))
+                         )
+                (set! (-> ws elev-driven slot) 0)
+                (if (and (-> proc next-state) (= (-> proc next-state name) 'running))
+                    (set! (-> (the-as elevator proc) path-pos) 1.0)
+                    )
+                )
+              (if (and (-> ws elev-muted slot)
+                       (or all?
+                           (and (-> proc next-state) (= (-> proc next-state name) 'waiting))
+                           (< (- (current-time) (-> (the-as elevator proc) sticky-player-last-ride-time)) (seconds 0.5))
+                           )
+                       )
+                  (mp-elevator-unmute (the-as elevator proc) slot)
+                  )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-add-elevator ((elev elevator))
+  "Add the place of `elev` on its trip to the batch (a world entry, anim-index 1): stops in
+   trans w and seg-mask, how far along in anim-frame (interpolated by the runtime like an
+   animation frame)."
+  (when (< *mp-collect-count* MP_MAX_ACTORS)
+    (let ((st (-> *mp-actors-out* state *mp-collect-count*)))
+      (vector-copy! (-> st trans) (-> elev root trans))
+      (set! (-> st trans w) (-> elev move-pos 0))
+      (quaternion-copy! (-> st quat) (-> elev root quat))
+      (set! (-> st id) (-> elev entity aid))
+      (set! (-> st anim-index) 1)
+      (set! (-> st anim-frame) (-> elev path-pos))
+      (set! (-> st flags) (mp-actor-flag world))
+      (set! (-> st seg-mask) (the-as uint (-> elev move-pos 1)))
+      (set! (-> st skel 0) (the-as uint 0))
+      (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle elev))
+      (+! *mp-collect-count* 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-drive-elevator ((st mp-actor-state))
+  "Another player's elevator trip (mp-add-elevator): ours starts the same trip, without its scripts
+   unless our player is on it, and is placed where theirs is, every frame. Its own post no longer
+   moves it (waiting-to-ascend cleared): its platform, and whoever stands on it, follow theirs."
+  (let ((ent (entity-by-aid (logand (-> st id) #xffffff))))
+    (when ent
+      (let ((proc (-> (the-as entity-actor ent) extra process))
+            (ws *mp-world-state*)
+            )
+        (when (and proc (type? proc elevator) (nonzero? (-> (the-as elevator proc) path)))
+          (let ((elev (the-as elevator proc))
+                (slot (mp-elevator-slot (logand (-> st id) #xffffff)))
+                (from (-> st trans w))
+                (to (the-as float (-> st seg-mask)))
+                )
+            (when (and (>= slot 0) (not (-> ws elev-local slot)))
+              ;; the trip starts here as there
+              (when (and (-> proc next-state)
+                         (or (= (-> proc next-state name) 'waiting) (= (-> proc next-state name) 'arrived))
+                         (!= to (-> elev move-pos 1))
+                         )
+                (set! (-> ws elev-trip slot) #t)
+                (if (not (send-event proc 'query 'player-standing-on?))
+                    (mp-elevator-mute elev slot)
+                    )
+                ;; waiting, it pauses out of view (actor-pause): its trip would never start
+                (logclear! (-> proc mask) (process-mask actor-pause))
+                (send-event proc 'move-to to)
+                (+! (-> ws elevator-trips-shown) 1)
+                )
+              (when (and (-> proc next-state) (= (-> proc next-state name) 'running))
+                (set! (-> ws elev-driven slot) (current-time))
+                (+! (-> ws elevator-states) 1)
+                (logclear! (-> elev elevator-status) (elevator-status waiting-to-ascend))
+                (set! (-> elev move-pos 0) from)
+                (set! (-> elev move-pos 1) to)
+                (set! (-> elev path-pos) (fmax 0.0 (fmin 1.0 (-> st anim-frame))))
+                (get-point-in-path!
+                  (-> elev path)
+                  (-> elev basetrans)
+                  (+ from (* (ease-value-in-out (-> elev path-pos) 0.08) (- to from)))
+                  'interp
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
   )
 
 (defun mp-poll-elevator ((proc process))
@@ -2854,13 +3564,19 @@
         (cond
           ((not running?)
            (set! (-> *mp-world-state* elev-trip slot) #f)
+           (set! (-> *mp-world-state* elev-local slot) #f)
            )
           ((not (-> *mp-world-state* elev-trip slot))
            (set! (-> *mp-world-state* elev-trip slot) #t)
+           (set! (-> *mp-world-state* elev-local slot) #t)
            (mp-send-event (mp-event-kind elevator) -1 (the-as int (-> proc entity aid)) (-> elev move-pos 1))
            (+! (-> *mp-world-state* elevator-trips-sent) 1)
            )
           )
+        ;; one elevator for everyone: the trip's place goes in the batch, the others put theirs there
+        (if (and running? (-> *mp-world-state* elev-local slot))
+            (mp-add-elevator elev)
+            )
         )
       )
     )
@@ -2882,10 +3598,16 @@
                        (or (= (-> proc next-state name) 'waiting) (= (-> proc next-state name) 'arrived))
                        (!= target (-> elev move-pos 1))
                        )
-              ;; noted first: the trip it starts is the other player's, not to be sent back
-              (if (>= slot 0)
-                  (set! (-> *mp-world-state* elev-trip slot) #t)
-                  )
+              ;; noted first: the trip it starts is the other player's, not to be sent back; without
+              ;; its scripts unless our player stands on it
+              (when (>= slot 0)
+                (set! (-> *mp-world-state* elev-trip slot) #t)
+                (if (not (send-event proc 'query 'player-standing-on?))
+                    (mp-elevator-mute elev slot)
+                    )
+                )
+              ;; waiting, it pauses out of view (actor-pause): its trip would never start
+              (logclear! (-> proc mask) (process-mask actor-pause))
               (cond
                 ((= target (-> elev bottom-top 1))
                  (send-event proc 'move-to 'top)
@@ -2992,140 +3714,69 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
-;; Distant players' levels
+;; Art of distant players' objects
 ;; ------------------------------------------------------------------------------------------------
 
-;; The level heap holds the levels of one place: 18 banks, a large level takes 12 of them, and
-;; load-begin stops the game when none is free (engine/level/level.gc). The level a distant player
-;; stands in takes no bank: like the game's borrow levels, it is loaded in the free top of the heap
-;; of one of our active levels (its host), registered in a borrow slot of that host that none of its
-;; own borrow levels can claim, so the host unloads it first when it goes. That memory stays below
-;; 256 MB: adgif shader links keep an address in 24 bits of address/16 (shader-ptr,
-;; engine/gfx/texture/texture-h.gc), a texture of a level above it breaks the links (a crash when
-;; the level unloads, seen in testing). The level is loaded, never displayed: its art and particle
-;; groups are linked, so the copies of that player's objects are drawn from it, while its entities
-;; never start, its callbacks never run and our place is unchanged. One such level at a time, started
-;; only when our own place waits for no load, and let go as soon as our place loads a level.
+;; A copy runs none of its object's code: it needs the skeleton-group (ours, or rebuilt from the
+;; description its sender sends, below) and the art group. The art group of an object no level of
+;; ours holds (a distant player's guards, cars, boats) is loaded alone by name (loado,
+;; out/jak3/obj/<name>-ag.go: data, no code) into the art heap, and listed in the art directory of
+;; the level whose memory holds that heap, where initialize-skeleton looks for it. The renderer
+;; keeps the data of the level its model comes from (pc-mp-render-level), which the sender names
+;; (art-level event). Only for objects within MP_ART_RANGE of our player: nobody here sees farther
+;; ones.
 ;;
-;; Its code links into the running game like any level's: a defun, define or deftype of a name our
-;; own levels use points that name at its copy, and a deftype of an existing type resets that type's
-;; methods (kscheme.cpp new_type). Two halves of a place the game never loads together share their
-;; code (Spargus wascitya and wascityb): a crash in testing. While it loads, the sandbox
-;; (pc-mp-sandbox-*, kmultiplayer.cpp) puts back every symbol, method and particle or texture table
-;; entry it took; the names only it defines stay.
+;; The art heap is carved from the free top of the heap of one of our active levels (its host), like
+;; the game's borrow heaps, below 256 MB: adgif shader links keep an address in 24 bits of
+;; address/16 (shader-ptr, engine/gfx/texture/texture-h.gc), a texture above it breaks the links (a
+;; crash when the level unloads, seen in testing). It goes when its host level leaves or the session
+;; ends.
+;;
+;; The levels of another place are never loaded here: their code would link into the running game,
+;; and a level's top-level code resets our globals (Haven's traffic-manager.gc runs
+;; (define *traffic-engine* #f): Spargus' traffic then crashed a guest in testing).
 
 (defconstant MP_FAR_LIMIT #x10000000)          ;; shader links reach 256 MB
 (defconstant MP_FAR_MARGIN (* 4 1024 1024))    ;; left free above what the host uses
+(defconstant MP_ART_HEAP_MAX (* 32 1024 1024)) ;; art heap size when the host has room
+(defconstant MP_ART_HEAP_MIN (* 8 1024 1024))
+(defconstant MP_ART_RANGE (meters 400))        ;; copies farther from our player get no art
 
 (deftype mp-far-state (structure)
-  ((name      symbol)   ;; level wanted for a distant player, or #f
-   (level     level)    ;; the level slot holding it while it loads or is loaded, or #f
-   (host      level)    ;; the level whose heap holds it
-   (host-top  pointer)  ;; top and top-base of the host heap before
+  ((host      level)          ;; the level whose heap top holds the art heap, or #f
+   (host-top  pointer)        ;; top and top-base of the host heap before
    (host-base pointer)
-   (text      string)   ;; a level name read from a player state
-   (lo        uint32)   ;; its memory, while the sandbox watches it link
-   (hi        uint32)
-   (sandbox?  symbol)
-   (slot      int32)    ;; the distant player it is loaded for
-   (borrows   symbol 5) ;; that player's borrow levels of it, loaded in its borrow heaps
-   (loads     int32)    ;; counters for the test log
-   (drops     int32)
-   (restored  int32)    ;; entries the sandbox put back
+   (heap      kheap :inline)  ;; the art heap
+   (text      string)         ;; a name read from an event
+   (opened    int32)          ;; counters for the test log
+   (closed    int32)
+   (restored  int32)          ;; table entries the sandbox put back after an art load
    )
   )
 
-;; The levels of each other player's place (levels event), and what we last sent of ours.
-(deftype mp-levels-state (structure)
-  ((names      symbol 80)  ;; MP_MAX_PLAYERS (8) lists of 10
-   (count      int32 8)
-   (sent-hash  int32)
-   (sent-time  time-frame)
-   (check-time time-frame)
-   )
-  )
-
-(define *mp-levels* (new 'global 'mp-levels-state))
-
-(define *mp-far-enabled* #t) ;; test switch (far-levels): load distant players' levels
+(define *mp-far-enabled* #t) ;; test switch (far-levels): load the art of distant players' objects
+(define *mp-art-range* MP_ART_RANGE) ;; test switch (art-range): how far from our player art loads
 
 (define *mp-far* (new 'global 'mp-far-state))
 (set! (-> *mp-far* text) (new 'global 'string 32 (the-as string #f)))
-(set! (-> *mp-far* name) #f)
-(set! (-> *mp-far* level) #f)
 (set! (-> *mp-far* host) #f)
-(set! (-> *mp-far* sandbox?) #f)
-(dotimes (i 5)
-  (set! (-> *mp-far* borrows i) #f)
-  )
-
-(defun mp-far-size ((info level-load-info))
-  "Heap bytes for a level: the PS2 level heap pages of its memory mode (load-begin) at twice the PS2
-   page, the margin the PC port gives its levels and more, plus the borrow heaps it carves from the
-   top of its heap at login (level-update-after-load: BORROW_MULT times each borrow size, in KB)."
-  (+ (let ((carved 0))
-       (when (-> info borrow)
-         (dotimes (i 5)
-           (+! carved (shl (the int (* BORROW_MULT (-> info borrow borrow-size i))) 10))
-           )
-         )
-       carved
-       )
-  (* LEVEL_PAGE_SIZE
-     2
-     (case (-> info memory-mode)
-       (((level-memory-mode large)) 96)
-       (((level-memory-mode medium)) 73)
-       (((level-memory-mode small-center) (level-memory-mode city-center)) 50)
-       (((level-memory-mode city-tiny-edge) (level-memory-mode tiny-center) (level-memory-mode tiny-edge) (level-memory-mode tiny))
-        32
-        )
-       (((level-memory-mode micro)) 16)
-       (((level-memory-mode tiny-center-micro)) 24)
-       (((level-memory-mode tiny-center-small)) 40)
-       (else 48)
-       )
-     )
-     )
-  )
-
-(defun mp-far-free-slot ((host level))
-  "A borrow slot of `host` that is empty and that none of its borrow levels can claim, or -1:
-   level-find-borrow-slot gives slots 0 to 2 to city borrow levels and slot i to the borrow levels
-   its borrow info names at i, so slot 4 or 3 when its info leaves it unused."
-  (let ((info (-> host info borrow))
-        (found -1)
-        )
-    (dotimes (n 2)
-      (let ((k (- 4 n)))
-        (when (and (= found -1)
-                   (not (-> host borrow-level k))
-                   (or (not info) (and (not (-> info borrow-info k)) (zero? (-> info borrow-size k))))
-                   )
-          (set! found k)
-          )
-        )
-      )
-    found
-    )
-  )
 
 (defun mp-far-room ((host level))
   "Free bytes at the top of the heap of `host` below 256 MB."
   (- (min (the-as int (-> host heap top)) MP_FAR_LIMIT) (the-as int (-> host heap current)))
   )
 
-(defun mp-far-host ((except level) (size int))
+(defun mp-far-host ((size int))
   "Our active level (not a borrow level) with the most free memory below 256 MB, when that holds
-   `size` bytes and a margin and it has a free borrow slot (mp-far-free-slot); or #f."
+   `size` bytes and a margin; or #f."
   (let ((best (the-as level #f))
         (best-room 0)
         )
     (dotimes (i (-> *level* length))
       (let ((lev (-> *level* level i)))
-        (when (and (!= lev except) (= (-> lev status) 'active) (not (-> lev borrow-from-level)))
+        (when (and (= (-> lev status) 'active) (not (-> lev borrow-from-level)))
           (let ((room (mp-far-room lev)))
-            (when (and (> room best-room) (>= room (+ size MP_FAR_MARGIN)) (>= (mp-far-free-slot lev) 0))
+            (when (and (> room best-room) (>= room (+ size MP_FAR_MARGIN)))
               (set! best lev)
               (set! best-room room)
               )
@@ -3137,8 +3788,17 @@
     )
   )
 
+(defun mp-art-ours? ((ptr object))
+  "#t when `ptr` points into the art heap."
+  (and (-> *mp-far* host)
+       (>= (the-as uint ptr) (the-as uint (-> *mp-far* heap base)))
+       (< (the-as uint ptr) (the-as uint (-> *mp-far* heap top-base)))
+       )
+  )
+
 (defun mp-far-sandbox-begin ()
-  "Note our names and global tables before code of another place links (pc-mp-sandbox-*)."
+  "Note the global tables an art load may take (pc-mp-sandbox-*): particle, lightning and texture
+   page entries."
   (pc-mp-sandbox-begin)
   (pc-mp-sandbox-watch (the-as pointer (&-> *part-id-table* data 0)) (-> *part-id-table* length) 4)
   (pc-mp-sandbox-watch (the-as pointer (&-> *part-group-id-table* data 0)) (-> *part-group-id-table* length) 4)
@@ -3152,55 +3812,7 @@
     (-> *texture-page-dir* length)
     (&- (the-as pointer (-> *texture-page-dir* entries 1)) (the-as uint (-> *texture-page-dir* entries 0)))
     )
-  (set! (-> *mp-far* sandbox?) #t)
   (none)
-  )
-
-(defun mp-far-level-heap! ((lev level))
-  "load-begin hook (*mp-far-level-hook*): when `lev` is the level wanted for a distant player, its
-   heap is carved from the top of a host's heap (mp-far-host) and it becomes a borrow level of that
-   host; it takes no bank of the level heap. #t then; #f leaves the stock bank search."
-  (when (and (-> *mp-far* name) (= (-> lev name) (-> *mp-far* name)) (not (-> *mp-far* level)))
-    (let* ((size (mp-far-size (-> lev info)))
-           (host (mp-far-host lev size))
-           )
-      (when host
-        (let ((top (min (the-as int (-> host heap top)) MP_FAR_LIMIT))
-              (heap (-> lev heap))
-              )
-          (set! (-> heap base) (the-as pointer (logand (- top size) -64)))
-          (set! (-> heap current) (-> heap base))
-          (set! (-> heap top-base) (the-as pointer (logand top -64)))
-          (set! (-> heap top) (-> heap top-base))
-          (set! (-> *mp-far* level) lev)
-          (set! (-> *mp-far* host) host)
-          ;; the host heap ends below it, as for the game's borrow heaps (level-update-after-load):
-          ;; an address is found in one level only (get-level-by-heap-ptr-and-status, art login)
-          (set! (-> *mp-far* host-top) (-> host heap top))
-          (set! (-> *mp-far* host-base) (-> host heap top-base))
-          (set! (-> host heap top-base) (-> heap base))
-          (set! (-> host heap top) (-> heap base))
-          (set! (-> host borrow-level (mp-far-free-slot host)) lev)
-          (set! (-> lev borrow-from-level) host)
-          (set! (-> lev memory-mask) (the-as uint 0))
-          ;; its code may take names of our levels: noted now, put back while it links
-          (set! (-> *mp-far* lo) (the-as uint (-> heap base)))
-          (set! (-> *mp-far* hi) (the-as uint (-> heap top-base)))
-          (mp-far-sandbox-begin)
-          (+! (-> *mp-far* loads) 1)
-          (format
-            0
-            "[multiplayer] level ~A loads for a distant player in the heap of ~A (#x~X-#x~X)~%"
-            (-> lev name)
-            (-> host name)
-            (-> heap base)
-            (-> heap top-base)
-            )
-          #t
-          )
-        )
-      )
-    )
   )
 
 (defun mp-far-unlink-textures ((lo uint) (hi uint))
@@ -3258,445 +3870,13 @@
   (none)
   )
 
-(defun mp-far-sandbox ()
-  "While the far level or one of its borrow levels links its code, put back what it took from our
-   levels (pc-mp-sandbox-restore; the borrow heaps are in the far level's memory); once none loads,
-   the code is in and the notes go."
-  (let ((lev (-> *mp-far* level)))
-    (when (and lev (-> *mp-far* sandbox?))
-      (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
-      (let ((loading? (not (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active)))))
-        (dotimes (i 5)
-          (let ((b (-> lev borrow-level i)))
-            (if (and b (!= (-> b status) 'loaded) (!= (-> b status) 'alive) (!= (-> b status) 'active))
-                (set! loading? #t)
-                )
-            )
-          )
-        ;; a borrow level wanted but not started yet keeps the notes too
-        (dotimes (i 5)
-          (if (and (-> *mp-far* borrows i) (not (level-get *level* (-> *mp-far* borrows i))))
-              (set! loading? #t)
-              )
-          )
-        (when (not loading?)
-          (pc-mp-sandbox-end)
-          (set! (-> *mp-far* sandbox?) #f)
-          )
-        )
-      )
-    )
-  (none)
-  )
-
-(defun mp-far-leaving ((lev level))
-  "Level `lev` unloads (deactivate, called first by unload!): when it is the far level, what its
-   code took is put back (it may leave while loading) and its host gets its memory back; a borrow
-   level of it leaves no texture list pointing at its memory either."
-  (when (and (-> *mp-far* level) (!= lev (-> *mp-far* level)) (= (-> lev borrow-from-level) (-> *mp-far* level)))
-    (if (-> *mp-far* sandbox?)
-        (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
-        )
-    (mp-far-unlink-textures (the-as uint (-> lev heap base)) (the-as uint (-> lev heap top-base)))
-    )
-  (when (= lev (-> *mp-far* level))
-    (when (-> *mp-far* sandbox?)
-      (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
-      (pc-mp-sandbox-end)
-      (set! (-> *mp-far* sandbox?) #f)
-      )
-    (mp-far-unlink-textures (-> *mp-far* lo) (-> *mp-far* hi))
-    ;; the art groups loaded alone were in its memory, the renderer data they used goes
-    (pc-mp-render-level "" #f)
-    (mp-far-art-reset)
-    (let ((host (-> *mp-far* host)))
-      (when (and host (= (-> lev borrow-from-level) host))
-        (set! (-> host heap top-base) (-> *mp-far* host-base))
-        (set! (-> host heap top) (-> *mp-far* host-top))
-        )
-      )
-    (set! (-> *mp-far* level) #f)
-    (set! (-> *mp-far* host) #f)
-    )
-  (none)
-  )
-
-(set! *mp-far-level-hook* mp-far-level-heap!)
-
-(defun mp-level-ready? ((name symbol))
-  "#t when level `name` is loaded here (loaded, alive or active)."
-  (let ((lev (level-get *level* name)))
-    (and lev (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active)))
-    )
-  )
-
-(defun mp-far-candidate ()
-  "The level a remote player stands in that is not loaded here, or #f. A level whose master level is
-   not loaded here cannot load alone (level-get-for-use stops the game): the topmost master level
-   not loaded here is taken instead (Haven's ctyslumb gives ctywide, which holds the city's shared
-   art). The current far level wins while a player is in its place."
-  (let ((found (the-as symbol #f)))
-    (dotimes (i MP_MAX_PLAYERS)
-      (let ((st (mp-remote-state i)))
-        (when (and st (nonzero? (-> st level 0)))
-          (string<-charp (-> *mp-far* text) (-> st level))
-          (let* ((name (string->symbol (-> *mp-far* text)))
-                 (info (lookup-level-info name))
-                 )
-            ;; up the master levels not loaded here by our own place (at most 4; the far level loaded
-            ;; as a master stays the one wanted)
-            (dotimes (k 4)
-              (when (and (!= info default-level)
-                         (-> info master-level)
-                         (or (not (mp-level-ready? (-> info master-level))) (= (-> info master-level) (-> *mp-far* name)))
-                         )
-                (set! name (-> info master-level))
-                (set! info (lookup-level-info name))
-                )
-              )
-            (when (and (!= info default-level)
-                       (= (-> info name) name)
-                       (or (= name (-> *mp-far* name)) (not (level-get *level* name)))
-                       (or (not (-> info master-level)) (mp-level-ready? (-> info master-level)))
-                       (or (not found) (= name (-> *mp-far* name)))
-                       )
-              (set! found name)
-              (set! (-> *mp-far* slot) i)
-              )
-            )
-          )
-        )
-      )
-    found
-    )
-  )
-
-(defun mp-borrow-mode? ((mode level-memory-mode))
-  "#t for the memory modes of levels loaded in a borrow heap of their host (level-find-borrow-slot)."
-  (case mode
-    (((level-memory-mode borrow)
-      (level-memory-mode borrow0)
-      (level-memory-mode borrow1)
-      (level-memory-mode borrow2)
-      (level-memory-mode borrow3)
-      (level-memory-mode borrow4)
-      (level-memory-mode borrow-city-small)
-      )
-     #t
-     )
-    (else
-      #f
-      )
-    )
-  )
-
-(defun mp-far-name? ((name symbol))
-  "#t when `name` is the far level or one of its borrow levels."
-  (or (= name (-> *mp-far* name))
-      (let ((found #f))
-        (dotimes (i 5)
-          (if (and name (= name (-> *mp-far* borrows i)))
-              (set! found #t)
-              )
-          )
-        found
-        )
-      )
-  )
-
-(defun mp-far-target-add ((ls load-state) (name symbol))
-  "Put level `name` among the levels to load, not displayed (nothing when it is there)."
-  (let ((slot -1))
-    (dotimes (i 10)
-      (cond
-        ((= (-> ls target i name) name)
-         (set! slot -2)
-         )
-        ((and (= slot -1) (not (-> ls target i name)))
-         (set! slot i)
-         )
-        )
-      )
-    (when (>= slot 0)
-      (set! (-> ls target slot name) name)
-      (set! (-> ls target slot display?) #f)
-      (set! (-> ls target slot force-vis?) #f)
-      (set! (-> ls target slot force-inside?) #f)
-      )
-    )
-  (none)
-  )
-
-(defun mp-far-target-remove ((ls load-state) (name symbol))
-  "Take level `name` out of the levels to load, unless our own place wants it (want-exp)."
-  (let ((own? #f))
-    (dotimes (k 10)
-      (if (= (-> ls want-exp k name) name)
-          (set! own? #t)
-          )
-      )
-    (when (not own?)
-      (dotimes (i 10)
-        (if (= (-> ls target i name) name)
-            (set! (-> ls target i name) #f)
-            )
-        )
-      )
-    )
-  (none)
-  )
-
-(defun mp-far-update-borrows ((ls load-state) (free-slots int))
-  "The borrow levels of the far level that its player has (levels event: the cars and citizens of a
-   city): once the far level is loaded, they load in its borrow heaps like the game's own (stock
-   level-find-borrow-slot), one at a time with a level slot left for our place. Without the far level
-   loaded they must not be wanted: a level loading before its master level stops the game."
-  (let ((far-lev (-> *mp-far* level))
-        (want (new 'stack-no-clear 'array 'symbol 5))
-        (n 0)
-        )
-    (dotimes (i 5)
-      (set! (-> want i) #f)
-      )
-    (when (and far-lev (-> *mp-far* name) (= (-> far-lev name) (-> *mp-far* name)) (= (-> far-lev status) 'loaded))
-      (let ((slot (-> *mp-far* slot))
-            (adding? #f)
-            )
-        (when (and (>= slot 0) (< slot MP_MAX_PLAYERS))
-          (dotimes (k (-> *mp-levels* count slot))
-            (let* ((name (-> *mp-levels* names (+ (* slot 10) k)))
-                   (info (lookup-level-info name))
-                   )
-              (when (and name
-                         (< n 5)
-                         (!= info default-level)
-                         (= (-> info master-level) (-> *mp-far* name))
-                         (mp-borrow-mode? (-> info memory-mode))
-                         )
-                (let ((lev (level-get *level* name)))
-                  (cond
-                    ;; already loaded in the far level's borrow heaps
-                    ((and lev (= (-> lev borrow-from-level) far-lev))
-                     (set! (-> want n) name)
-                     (+! n 1)
-                     )
-                    ;; one new at a time, a level slot left for our place
-                    ((and (not lev) (not adding?) (>= free-slots 2) (not (load-in-progress? *level*)))
-                     (set! (-> want n) name)
-                     (+! n 1)
-                     (set! adding? #t)
-                     )
-                    )
-                  )
-                )
-              )
-            )
-          ;; its code links like the far level's: the sandbox notes our names first
-          (when (and adding? (not (-> *mp-far* sandbox?)))
-            (pc-mp-sandbox-begin)
-            (set! (-> *mp-far* sandbox?) #t)
-            )
-          )
-        )
-      )
-    ;; the previous ones not wanted any more leave, the wanted ones are in
-    (dotimes (i 5)
-      (let ((old (-> *mp-far* borrows i))
-            (keep? #f)
-            )
-        (when old
-          (dotimes (k n)
-            (if (= (-> want k) old)
-                (set! keep? #t)
-                )
-            )
-          (if (not keep?)
-              (mp-far-target-remove ls old)
-              )
-          )
-        )
-      )
-    (dotimes (i 5)
-      (set! (-> *mp-far* borrows i) (-> want i))
-      (if (-> want i)
-          (mp-far-target-add ls (-> want i))
-          )
-      )
-    )
-  (none)
-  )
-
-(defun mp-send-levels ()
-  "Send the levels of our own place (not the far ones) to the others when they change, and every
-   10 seconds for players who join (levels event)."
-  (let ((st *mp-levels*))
-    (when (time-elapsed? (-> st check-time) (seconds 1))
-      (set-time! (-> st check-time))
-      (let ((hash 0)
-            (count 0)
-            )
-        (dotimes (i (-> *level* length))
-          (let ((lev (-> *level* level i)))
-            (when (and (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
-                       (not (mp-far-name? (-> lev name)))
-                       )
-              (set! hash (logxor hash (* (the-as int (-> lev name)) (+ count 7))))
-              (+! count 1)
-              )
-            )
-          )
-        (when (or (!= hash (-> st sent-hash)) (time-elapsed? (-> st sent-time) (seconds 10)))
-          (set! (-> st sent-hash) hash)
-          (set-time! (-> st sent-time))
-          (let ((ev (new 'stack 'mp-event))
-                (index 0)
-                )
-            (dotimes (i (-> *level* length))
-              (let ((lev (-> *level* level i)))
-                (when (and (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
-                           (not (mp-far-name? (-> lev name)))
-                           )
-                  (set! (-> ev kind) (mp-event-kind levels))
-                  (set! (-> ev to) -1)
-                  (set! (-> ev iarg 0) index)
-                  (set! (-> ev iarg 1) count)
-                  (copyn-charp<-string (-> ev text) (symbol->string (-> lev name)) 32)
-                  (pc-mp-send-event ev)
-                  (+! index 1)
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  (none)
-  )
-
-(defun mp-apply-levels ((ev mp-event))
-  "A player's list of levels (levels event): kept for the borrow levels of its far level."
-  (let ((slot (-> ev from))
-        (index (-> ev iarg 0))
-        )
-    (when (and (>= slot 0) (< slot MP_MAX_PLAYERS) (>= index 0) (< index 10))
-      (if (zero? index)
-          (set! (-> *mp-levels* count slot) 0)
-          )
-      (string<-charp (-> *mp-far* text) (-> ev text))
-      (set! (-> *mp-levels* names (+ (* slot 10) index)) (string->symbol (-> *mp-far* text)))
-      (set! (-> *mp-levels* count slot) (max (-> *mp-levels* count slot) (+ index 1)))
-      )
-    )
-  (none)
-  )
-
-(defun mp-far-update ((ls load-state))
-  "Before the level loads of a frame (load-state update!): keep the far level among the levels to
-   load (target), not displayed; start one for a distant player only when our own place waits for
-   no load and two level slots are free; let it go when our place needs its slot, wants that level
-   itself, or no player stands in it any more."
-  (let ((far (-> *mp-far* name))
-        (want (if (and *mp-far-enabled* (> (mp-player-count) 0) (not (and *scene-player* (-> *scene-player* 0))))
-                  (mp-far-candidate)
-                  )
-              )
-        (pending? #f)
-        (free-slots 0)
-        )
-    ;; our own place: the levels it wants (want-exp, never written here) and those still loading
-    (dotimes (i 10)
-      (let ((name (-> ls want-exp i name)))
-        (when name
-          (if (= name want)
-              (set! want #f)
-              )
-          ;; it wants the far level itself: that copy goes, ours loads like any level of our place
-          ;; (the far copy took no bank and its code was kept from our names)
-          (when (and (-> *mp-far* level) (= name (-> *mp-far* level name)))
-            (format 0 "[multiplayer] level ~A now wanted here: its distant copy unloads first~%" name)
-            (level-status-update! (-> *mp-far* level) 'inactive)
-            (set! far #f)
-            )
-          )
-        )
-      (let ((name (-> ls target i name)))
-        (if (and name (!= name far) (!= name want) (not (mp-far-name? name)) (not (mp-level-ready? name)))
-            (set! pending? #t)
-            )
-        )
-      )
-    (dotimes (i (-> *level* length))
-      (if (= (-> *level* level i status) 'inactive)
-          (+! free-slots 1)
-          )
-      )
-    (cond
-      ((and want (= want far))
-       ;; our place loads a level: the far one goes first, so no level of ours links next to it
-       (when pending?
-         (set! want #f)
-         (+! (-> *mp-far* drops) 1)
-         )
-       )
-      (want
-       ;; a new one: the previous one gone, and a host with room for it
-       (if (or pending?
-               (< free-slots 2)
-               (load-in-progress? *level*)
-               (-> *mp-far* level)
-               (not (mp-far-host (the-as level #f) (mp-far-size (lookup-level-info want))))
-               )
-           (set! want #f)
-           )
-       )
-      )
-    ;; the previous far level leaves the levels to load (our place keeps it if it wants it)
-    (when (and far (!= far want))
-      (dotimes (i 10)
-        (when (= (-> ls target i name) far)
-          (let ((own? #f))
-            (dotimes (k 10)
-              (if (= (-> ls want-exp k name) far)
-                  (set! own? #t)
-                  )
-              )
-            (if (not own?)
-                (set! (-> ls target i name) #f)
-                )
-            )
-          )
-        )
-      )
-    (set! (-> *mp-far* name) want)
-    (if want
-        (mp-far-target-add ls want)
-        )
-    (mp-far-update-borrows ls free-slots)
-    (mp-far-fetch-art)
-    )
-  (none)
-  )
-
-;; ------------------------------------------------------------------------------------------------
-;; Art of a distant player's objects
-;; ------------------------------------------------------------------------------------------------
-
-;; The levels of another place that hold the art of a distant player's objects do not all fit in
-;; the 10 level slots next to our own place's (Haven's cars, guards, citizens and boats each come
-;; from a level of their own; the renderer keeps 11 levels too). For an object whose skeleton is
-;; known here but whose art is not, its art group alone is loaded by name (out/jak3/obj/<name>.go)
-;; into the far level's memory, inside the sandbox, and listed with that level's art; the renderer
-;; keeps the data of the level its model comes from (pc-mp-render-level), which the sender names
-;; (art-level event). All of it goes with the far level.
-
 (deftype mp-art-table (structure)
   ((count       int32)
    (skel        symbol 160) ;; skeleton name, interned
    (level       symbol 160) ;; the level whose art array holds its art group
    (sent        symbol 160)
    (time        time-frame)
-   (tried       symbol 32)  ;; receiver: art groups loaded or tried with this far level
+   (tried       symbol 32)  ;; receiver: art groups loaded or tried in this art heap
    (tried-count int32)
    (fetch-time  time-frame)
    (loaded      int32)      ;; counters for the test log
@@ -3707,14 +3887,11 @@
 (define *mp-art-out* (new 'global 'mp-art-table))
 (define *mp-art-in* (new 'global 'mp-art-table))
 
-(defun mp-far-art-reset ()
-  "The far level left: the art groups loaded alone went with it, they may be tried again."
-  (set! (-> *mp-art-in* tried-count) 0)
-  (none)
-  )
-
 (defun mp-level-of-art ((ag art-group))
-  "The loaded level whose art array holds `ag`, or #f."
+  "The loaded level whose art array holds `ag`, or #f (#f for the art heap's: not our place's)."
+  (if (mp-art-ours? ag)
+      (return (the-as level #f))
+      )
   (dotimes (i (-> *level* length))
     (let ((lev (-> *level* level i)))
       (when (!= (-> lev status) 'inactive)
@@ -3756,14 +3933,12 @@
   )
 
 (defun mp-note-all-kinds ()
-  "Note every skeleton-group of the levels of our place (not the far ones) for mp-send-art: the
+  "Note every skeleton-group of the levels of our place (not the art heap's) for mp-send-art: the
    others then know every kind of object this place can send, not only those sent so far."
   (let ((tbl *mp-art-out*))
     (dotimes (i (-> *level* length))
       (let ((lev (-> *level* level i)))
-        (when (and (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
-                   (not (mp-far-name? (-> lev name)))
-                   )
+        (when (or (= (-> lev status) 'loaded) (= (-> lev status) 'alive) (= (-> lev status) 'active))
           (let ((arr (-> lev art-group art-group-array)))
             (dotimes (k (-> arr length))
               (let ((sg (-> arr k)))
@@ -3771,6 +3946,7 @@
                 ;; the game never ships, defined in code all the same, is not one)
                 (when (and sg
                            (type? sg skeleton-group)
+                           (not (mp-art-ours? sg))
                            (< (-> tbl count) 160)
                            (mp-art-group-get (-> (the-as skeleton-group sg) art-group-name) (the-as (pointer level) #f))
                            )
@@ -3879,43 +4055,141 @@
   (none)
   )
 
+(defun mp-art-heap-open ()
+  "Carve the art heap from the free top of a host level (mp-far-host). The host when there is one."
+  (when (not (-> *mp-far* host))
+    (let ((host (mp-far-host MP_ART_HEAP_MIN)))
+      (when host
+        (let* ((top (logand (min (the-as int (-> host heap top)) MP_FAR_LIMIT) -64))
+               (size (min MP_ART_HEAP_MAX (- (mp-far-room host) MP_FAR_MARGIN)))
+               (heap (-> *mp-far* heap))
+               )
+          (set! (-> heap base) (the-as pointer (logand (- top size) -64)))
+          (set! (-> heap current) (-> heap base))
+          (set! (-> heap top-base) (the-as pointer top))
+          (set! (-> heap top) (-> heap top-base))
+          (set! (-> *mp-far* host) host)
+          ;; the host heap ends below it, as for the game's borrow heaps (level-update-after-load): an
+          ;; address is found in one level only (get-level-by-heap-ptr-and-status, art login)
+          (set! (-> *mp-far* host-top) (-> host heap top))
+          (set! (-> *mp-far* host-base) (-> host heap top-base))
+          (set! (-> host heap top-base) (-> heap base))
+          (set! (-> host heap top) (-> heap base))
+          (+! (-> *mp-far* opened) 1)
+          (format
+            0
+            "[multiplayer] art heap for distant players' objects in the heap of ~A (#x~X-#x~X)~%"
+            (-> host name)
+            (-> heap base)
+            (-> heap top-base)
+            )
+          )
+        )
+      )
+    )
+  (-> *mp-far* host)
+  )
+
+(defun mp-art-heap-close ()
+  "The art heap goes: the copies drawn from its art, the texture pages and links in it, its art in
+   the host's directory, the renderer data kept for it; the host gets its memory back."
+  (let ((host (-> *mp-far* host)))
+    (when host
+      (let ((ws *mp-world-state*)
+            (i 0)
+            )
+        (while (< i (-> ws replica-count))
+          (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
+            (if (and proc (nonzero? (-> proc draw)) (mp-art-ours? (-> proc draw art-group)))
+                (mp-replica-remove i)
+                (+! i 1)
+                )
+            )
+          )
+        (set! (-> ws skel-count) 0)
+        )
+      (mp-far-unlink-textures (the-as uint (-> *mp-far* heap base)) (the-as uint (-> *mp-far* heap top-base)))
+      ;; its art groups were appended last to the host's directory
+      (let* ((dir (-> host art-group))
+             (arr (-> dir art-group-array))
+             )
+        (while (and (> (-> arr length) 0) (mp-art-ours? (-> arr (+ (-> arr length) -1))))
+          (+! (-> arr length) -1)
+          (+! (-> dir string-array length) -1)
+          )
+        )
+      (pc-mp-render-level "" #f)
+      (set! (-> host heap top-base) (-> *mp-far* host-base))
+      (set! (-> host heap top) (-> *mp-far* host-top))
+      (set! (-> *mp-far* host) #f)
+      (set! (-> *mp-art-in* tried-count) 0)
+      (+! (-> *mp-far* closed) 1)
+      (format 0 "[multiplayer] art heap for distant players' objects closed~%")
+      )
+    )
+  (none)
+  )
+
+(defun mp-far-leaving ((lev level))
+  "Level `lev` unloads (deactivate, called first by unload!): when its heap holds the art heap, that
+   goes first."
+  (if (= lev (-> *mp-far* host))
+      (mp-art-heap-close)
+      )
+  (none)
+  )
+
 (defun mp-far-load-art ((name string))
-  "Load art group `name` into the far level's memory and list it with that level's art, inside the
-   sandbox (its pages and links in there too, loading-level pointing at it). #t when loaded."
-  (let* ((lev (-> *mp-far* level))
-         (dir (-> lev art-group))
+  "Load art group `name` alone into the art heap and list it in the host's art directory. Its load
+   may log texture pages and particle entries: the sandbox puts back the entries it changed
+   (loading-level points at the art heap for the links). #t when loaded."
+  (let* ((host (-> *mp-far* host))
+         (heap (-> *mp-far* heap))
+         (dir (-> host art-group))
          (arr (-> dir art-group-array))
+         (size (pc-mp-art-file-size name))
          (old-heap loading-level)
          (old-print *print-login*)
          (ag (the-as object #f))
          )
-    (when (and (< (-> arr length) (-> arr allocated-length)) (< (-> dir string-array length) (-> dir string-array allocated-length)))
-      (mp-far-sandbox-begin)
-      (set! loading-level (-> lev heap))
-      ;; an art group loaded outside a level load logs itself in (joint.gc), which needs this
-      (set! *print-login* #t)
-      ;; the file of art group "barge" is out/jak3/obj/barge-ag.go
-      (format (clear (-> *mp-far* text)) "~S-ag" name)
-      (set! ag (loado (-> *mp-far* text) (-> lev heap)))
-      (set! loading-level old-heap)
-      (set! *print-login* old-print)
-      (+! (-> *mp-far* restored) (pc-mp-sandbox-restore (-> *mp-far* lo) (-> *mp-far* hi)))
-      (pc-mp-sandbox-end)
-      (set! (-> *mp-far* sandbox?) #f)
-      (cond
-        ((and ag (type? ag art-group))
-         (set! (-> arr (-> arr length)) (the-as art-group ag))
-         (+! (-> arr length) 1)
-         (set! (-> dir string-array (-> dir string-array length)) (-> (the-as art-group ag) name))
-         (+! (-> dir string-array length) 1)
-         (+! (-> *mp-art-in* loaded) 1)
-         (format 0 "[multiplayer] art group ~S loaded alone for a distant player~%" name)
-         #t
-         )
-        (else
-          (+! (-> *mp-art-in* failed) 1)
-          (format 0 "[multiplayer] art group ~S could not be loaded~%" name)
-          #f
+    (cond
+      ((or (zero? size)
+           (>= (-> arr length) (-> arr allocated-length))
+           (>= (-> dir string-array length) (-> dir string-array allocated-length))
+           ;; the file, the link arrays of its textures and a margin
+           (< (the-as int (&- (-> heap top) (the-as uint (-> heap current)))) (+ size (/ size 4) (* 64 1024)))
+           )
+       (+! (-> *mp-art-in* failed) 1)
+       (format 0 "[multiplayer] art group ~S does not fit in the art heap (~D bytes)~%" name size)
+       #f
+       )
+      (else
+        (mp-far-sandbox-begin)
+        (set! loading-level heap)
+        ;; an art group loaded outside a level load logs itself in (joint.gc), which needs this
+        (set! *print-login* #t)
+        ;; the file of art group "barge" is out/jak3/obj/barge-ag.go
+        (format (clear (-> *mp-far* text)) "~S-ag" name)
+        (set! ag (loado (-> *mp-far* text) heap))
+        (set! loading-level old-heap)
+        (set! *print-login* old-print)
+        (+! (-> *mp-far* restored) (pc-mp-sandbox-restore))
+        (pc-mp-sandbox-end)
+        (cond
+          ((and ag (type? ag art-group))
+           (set! (-> arr (-> arr length)) (the-as art-group ag))
+           (+! (-> arr length) 1)
+           (set! (-> dir string-array (-> dir string-array length)) (-> (the-as art-group ag) name))
+           (+! (-> dir string-array length) 1)
+           (+! (-> *mp-art-in* loaded) 1)
+           (format 0 "[multiplayer] art group ~S loaded alone for a distant player~%" name)
+           #t
+           )
+          (else
+            (+! (-> *mp-art-in* failed) 1)
+            (format 0 "[multiplayer] art group ~S could not be loaded~%" name)
+            #f
+            )
           )
         )
       )
@@ -3923,22 +4197,24 @@
   )
 
 (defun mp-far-fetch-art ()
-  "While the far level is loaded and quiet: for one object of another player whose skeleton is known
-   here but not its art group, load that art group alone (mp-far-load-art) and keep the renderer
-   data of the level its sender names. One every half second."
-  (let ((lev (-> *mp-far* level))
-        (tbl *mp-art-in*)
-        )
-    (when (and lev
-               (= (-> lev status) 'loaded)
-               (not (-> *mp-far* sandbox?))
+  "For one object another player sends within MP_ART_RANGE of our player, whose skeleton is known
+   here (ours or rebuilt) but whose art group is in no level loaded here: open the art heap, keep the
+   renderer data of the level its sender names, load the art group alone. One every half second,
+   never while our own place loads a level."
+  (let ((tbl *mp-art-in*))
+    (when (and *mp-far-enabled*
+               *target*
+               (> (mp-player-count) 0)
                (not (load-in-progress? *level*))
                (time-elapsed? (-> tbl fetch-time) (seconds 0.5))
                )
       (set-time! (-> tbl fetch-time))
       (dotimes (i (-> *mp-actors-in* count))
         (let ((st (-> *mp-actors-in* state i)))
-          (when (and (nonzero? (-> st id)) (< (mp-replica-index (-> st id)) 0))
+          (when (and (nonzero? (-> st id))
+                     (< (mp-replica-index (-> st id)) 0)
+                     (< (vector-vector-distance (-> st trans) (-> *target* control trans)) *mp-art-range*)
+                     )
             (string<-charp *mp-temp-string* (-> st skel))
             (let ((skel (string->symbol *mp-temp-string*))
                   (sg (the-as skeleton-group (mp-art-group-get *mp-temp-string* (the-as (pointer level) #f))))
@@ -3952,7 +4228,7 @@
                         (set! tried? #t)
                         )
                     )
-                  (when (and (not tried?) (< (-> tbl tried-count) 32))
+                  (when (and (not tried?) (< (-> tbl tried-count) 32) (mp-art-heap-open))
                     (set! (-> tbl tried (-> tbl tried-count)) ag-name)
                     (+! (-> tbl tried-count) 1)
                     ;; the renderer data of the level the sender has this art in
@@ -4143,25 +4419,6 @@
       )
     )
   (the-as skeleton-group #f)
-  )
-
-;; MOD multiplayer -- the far level among the levels to load (engine/level/level.gc)
-(define-perm *mp-stock-load-state-update* (function load-state int)
-  (the-as (function load-state int) (method-of-type load-state update!))
-  )
-
-(defmethod update! ((this load-state))
-  "The far level first (mp-far-update, its sandbox), then the stock loads and unloads of the frame."
-  (when (= this *load-state*)
-    (mp-far-sandbox)
-    (mp-far-update this)
-    )
-  (let ((ret (*mp-stock-load-state-update* this)))
-    (if (= this *load-state*)
-        (mp-far-sandbox)
-        )
-    ret
-    )
   )
 
 ;; ------------------------------------------------------------------------------------------------

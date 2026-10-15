@@ -4,6 +4,7 @@
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
+44.9 wait-player 1
 48 continue volcanoa-start
 64 goto-float
 65 log-me

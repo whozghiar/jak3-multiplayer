@@ -1,0 +1,15 @@
+# Joining from the title screen, guest side: goes back to the title screen, joins from there: the
+# host's world loads (loading screen) and the guest appears next to the host.
+1 enable
+1 name Guest
+1 color 2
+25 title
+44 log-join
+44 screenshot title
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 screenshot loading
+78 log-join
+78 log-tasks
+78 screenshot joined
+80 log

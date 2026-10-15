@@ -9,11 +9,6 @@
 (define-extern *level-type-list* type)
 (define-extern city-sound-expand-want-list (function none))
 
-;; og:preserve-this MOD multiplayer: gives a level loaded for a distant player a heap carved from the
-;; free top of another level's heap (pc/features/multiplayer/multiplayer-world.gc). #t when it did:
-;; load-begin then takes no bank of the level heap.
-(define *mp-far-level-hook* (the-as (function level symbol) #f))
-
 (defglobalconstant NUM_LEVEL_PAGES 146)
 (defglobalconstant LEVEL_PAGE_SIZE_KB 126) ;; original value
 (defglobalconstant LEVEL_PAGE_SIZE (* LEVEL_PAGE_SIZE_KB 1024)) ;; original value
@@ -1041,8 +1036,6 @@
         )
       )
     (label cfg-28)
-    ;; og:preserve-this MOD multiplayer: a level loaded for a distant player takes no bank
-    (if (not (and *mp-far-level-hook* (*mp-far-level-hook* this)))
     (case mem-mode
       (((level-memory-mode borrow)
         (level-memory-mode borrow0)
@@ -1666,7 +1659,6 @@
           )
         )
       )
-    ) ;; og:preserve-this MOD multiplayer
     )
   (set! loading-level (-> this heap))
   (set! (-> *level* loading-level) this)

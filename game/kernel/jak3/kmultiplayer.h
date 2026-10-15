@@ -26,7 +26,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 4;
+constexpr u32 kProtocolVersion = 5;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -34,8 +34,15 @@ constexpr double kInterpDelayMs = 100.0;
 // 119 hours): the receiver's clock estimate and the blend between poses a frame apart need better
 // than the millisecond.
 constexpr double kBatchTicksPerMs = 10.0;
-// Local state is sent at most this often (30 Hz).
-constexpr double kStateIntervalMs = 33.0;
+// Local state is sent at most this often (every frame at 60 frames a second): a driver's puppet
+// blended between states 33 ms apart drifted on the vehicle it sits in, which moves every frame.
+constexpr double kStateIntervalMs = 15.0;
+// A late object keeps moving along its last velocity this long at most, then holds.
+constexpr double kMaxExtrapolateMs = 150.0;
+// Object snapshots kept per object: the drawn time stays inside them at every send rate.
+constexpr double kActorHistoryMs = 500.0;
+// mp-actor-flag shot (GOAL): a shot in flight, gone 250 ms after its last state.
+constexpr u16 kActorShot = 1 << 6;
 
 // Mirrors the GOAL type `mp-player-state` (multiplayer.gc). Positions are game units.
 struct PlayerState {
@@ -190,7 +197,7 @@ struct Config {
   s32 character;     // 48
   s32 color;         // 52
   s32 enabled;       // 56
-  s32 pad;           // 60
+  s32 mode;          // 60 game mode when hosting: 0 free roam, 1 co-op
 };
 static_assert(sizeof(Config) == 64, "Config must match mp-config");
 
@@ -203,6 +210,8 @@ struct Remote {
   void clear() { snaps.clear(); }
   void push(PlayerState s, double now_ms);
   bool sample(double now_ms, PlayerState* out) const;
+  // The state at sender time `t`, interpolated (extrapolated a little past the newest).
+  bool sample_at(double t, PlayerState* out) const;
 };
 
 class Session {
@@ -219,6 +228,13 @@ class Session {
   // Interpolated state of `slot`, or false if no such remote player.
   bool get_player(int slot, double now_ms, PlayerState* out) const;
   void send_event(Event ev);
+  // Send `size` bytes to player `to` (the host's world save for a guest that joins), in frames
+  // of at most kBlobChunk bytes; the host relays a guest's blob.
+  void send_blob(int to, const u8* data, size_t size);
+  // A blob fully received: its size (0 while none or still arriving).
+  size_t blob_ready() const { return m_blob_got && m_blob_got == m_blob.size() ? m_blob.size() : 0; }
+  // Copy the received blob into `out` (at most `max` bytes) and forget it. Returns the size copied.
+  size_t take_blob(u8* out, size_t max);
   // Send the objects this player simulates (the host relays a guest's batch to the others).
   void send_actors(const ActorState* actors, int count, double now_ms);
   // Interpolated objects of the other players, at most `max`. Returns the count.
@@ -261,8 +277,12 @@ class Session {
   void route_event(Event ev, int sender_slot);
   void store_actors(int source, const u8* data, size_t len, double recv_ms);
   void store_poses(int source, const u8* data, size_t len, double recv_ms);
+  void store_blob(const u8* data, size_t len);
   void note_actor_clock(int source, double sent_ms, double recv_ms);
   double drawn_time(int source, double now_ms) const;
+  // Local ms minus `source`'s ms: the fastest delivery of its states and its batches alike, so its
+  // puppet and its objects (the vehicle it drives) are drawn at the same moment.
+  double offset_of(int source) const;
   void drop(Peer& p, const std::string& reason);
   void refuse(Peer& p, const char* why);
 
@@ -281,6 +301,8 @@ class Session {
   std::vector<std::vector<u8>> m_pose_out;  // entries queued by add_pose, sent by send_poses
   float m_pose_frame[16] = {};              // frame of the last queued entry
   std::deque<Event> m_events;
+  std::vector<u8> m_blob;  // blob being received (sized by its first chunk)
+  size_t m_blob_got = 0;
   std::set<std::string> m_banned;
   double m_connect_start = 0;
   double m_last_state_sent = -1e9;

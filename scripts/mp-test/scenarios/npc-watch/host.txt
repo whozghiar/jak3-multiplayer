@@ -1,0 +1,13 @@
+# NPCs under another player's eyes, host side: in Haven City's slums with its traffic; the guest
+# stands 25 m away for 60 s. The host counts the NPCs it sent that left the game near the guest
+# without dying (log-gone): the game removes NPCs off its own screen, which the guest may see.
+1 enable
+1 name Host
+1 color 1
+20 continue ctysluma-start
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-gone
+80 log-gone
+110 log-gone
+112 log

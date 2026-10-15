@@ -3,12 +3,14 @@
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
+45.1 wait-joined
 55 goto-player 0 7
 56 face-player 0
 57 log
 57 log-copies 0
 60 screenshot buggy
 62 goto-player 0 2
+62.6 screenshot prompt
 63 press triangle 100
 66 log
 66 log-copies 0

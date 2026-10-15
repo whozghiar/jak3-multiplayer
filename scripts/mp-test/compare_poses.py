@@ -59,9 +59,50 @@ def at(series: list[Sample], t: float) -> dict | None:
     return None
 
 
+PATH = re.compile(r"\[mp-test\] path (own|copy) t (-?\d+(?:\.\d+)?) pos (\S+) (\S+) (\S+)")
+
+
+def paths(text: str, kind: str) -> list[tuple[float, tuple[float, float, float]]]:
+    """log-path samples of one kind (own or copy), in time order."""
+    out = [(float(m.group(2)), (float(m.group(3)), float(m.group(4)), float(m.group(5))))
+           for m in PATH.finditer(text) if m.group(1) == kind]
+    out.sort(key=lambda s: s[0])
+    return out
+
+
+def path_report(own: list, copy: list) -> dict | None:
+    """The copy's root against the owner's at the same moments (the owner's interpolated between
+    its two states around each copy stamp), and the copy's frame-to-frame jerk against the
+    owner's: how far and how unevenly the copy follows. None without samples in common."""
+    errors = []
+    for t, p in copy:
+        for (ta, a), (tb, b) in zip(own, own[1:]):
+            if ta <= t <= tb and 0 < tb - ta <= 40:
+                f = (t - ta) / (tb - ta)
+                errors.append(math.dist(p, tuple(x + (y - x) * f for x, y in zip(a, b))))
+                break
+    if not errors:
+        return None
+
+    def jerk(series: list) -> float:
+        """Median change of speed between frames (m/s per frame): 0 for an even motion."""
+        speeds = [math.dist(a, b) / ((tb - ta) / 1000.0) for (ta, a), (tb, b) in zip(series, series[1:]) if tb > ta]
+        return statistics.median(abs(v2 - v1) for v1, v2 in zip(speeds, speeds[1:])) if len(speeds) > 2 else 0.0
+
+    moved = math.dist(own[0][1], own[-1][1])
+    return {"samples": len(errors), "median": statistics.median(errors), "p95": sorted(errors)[int(0.95 * (len(errors) - 1))],
+            "largest": max(errors), "moved": moved, "jerk_own": jerk(own), "jerk_copy": jerk(copy)}
+
+
 def main() -> int:
     path = Path(sys.argv[1] if len(sys.argv) > 1 else "out/mp-test/pose-all/summary.txt")
     client, host = path.read_text(encoding="utf-8").split("=== host")
+    report = path_report(paths(host, "own"), paths(client, "copy"))
+    if report:
+        print(f"path: {report['samples']} copy samples, the host moved {report['moved']:.1f} m; copy root"
+              f" error median {report['median'] * 100:.1f} cm, 95% under {report['p95'] * 100:.1f} cm, largest"
+              f" {report['largest'] * 100:.1f} cm; speed change per frame median {report['jerk_own']:.2f} m/s"
+              f" (owner) {report['jerk_copy']:.2f} m/s (copy)")
     own, copies = samples(host), samples(client)
     for own_label, copy_label in PAIRS:
         for (label, oid), series in own.items():

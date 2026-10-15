@@ -1,8 +1,9 @@
-# Distant player's level, guest side: joins in Spargus, goes to Haven City, comes back to the host.
+# Distant player's objects, guest side: joins in Spargus, goes to Haven City, comes back to the host.
 1 enable
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
+45.1 wait-joined
 52 log-levels
 53 continue ctyport-start
 66 announce-all-kinds

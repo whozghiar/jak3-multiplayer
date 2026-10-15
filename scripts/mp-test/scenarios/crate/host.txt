@@ -3,6 +3,7 @@
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
+44.9 wait-player 1
 55 log-crates
 56 goto-crate
 56.8 log-crates

@@ -3,5 +3,6 @@
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
+44.9 wait-player 1
 62 log
 64 log

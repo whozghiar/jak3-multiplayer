@@ -16,16 +16,24 @@
 ;;   press <button> <ms> | stick <lx> <ly> <ms>              force pad 0 (0-255, 128 = center)
 ;;   goto-player <slot> [x z] | face-player <slot>           stand next to / face a remote player
 ;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
+;;   gun [pickup-type] | board | vehicle <type>              every gun mod (26-37 picks one); hoverboard; a vehicle
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
 ;;   log-pose [slot] | log-me                                bones of a player's model; own position
 ;;   log-pose-own <player|npc|daxter|gun|vehicle|wheel> [frames] bones of our model or object, each frame
 ;;   log-pose-copy <slot> <skeleton name|*>                  bones of the copies of player slot's objects
 ;;   log-tasks | close-task [n]                              story progress; close the first open node(s)
+;;   log-path <skeleton> <frames>                            an object's root each frame, owner and viewer
+;;   wait-joined | wait-player <slot>                        the script waits: in the host's world; player in game
+;;   mode <0|1> | title                                      game mode when hosting (free roam, co-op); title screen
+;;   log-join | try-save                                     joining the host's world; an auto-save (refused there)
+;;   log-coop | log-weather                                  co-op state (held steps, leash); the weather
 ;;   log-sync                                                phase of a test cycle (host clock sync)
 ;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
 ;;   ride-shown-elevator                                     once a trip of player 0 was shown here: stand by it
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
-;;   far-levels <0|1>                                        load distant players' levels (default 1)
+;;   far-levels <0|1>                                        load the art of distant players' objects (default 1)
+;;   art-range <meters>                                      how far from us that art loads (default 400)
+;;   log-gone                                                NPCs we sent that left near another player, alive
 ;;   synth-skels <0|1>                                       copies use the skeleton-groups rebuilt from descriptions
 ;;   log-art-kinds                                           every skeleton another player announced: drawable here?
 ;;   announce-all-kinds | log-kinds-coverage                 describe every kind of our place; check those described
@@ -36,10 +44,21 @@
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
-(define-extern pc-mp-art-file-exists (function string symbol))
 (define-extern pc-mp-test-poll (function string symbol))
 (define-extern pc-mp-test-screenshot (function string none))
 (define-extern pc-mp-test-pad (function int int int none))
+(define-extern pc-mp-test-pause (function symbol none))
+
+;; wait-joined / wait-player: the script clock stops until the wait is over (mp-test-update).
+(deftype mp-test-waiting (structure)
+  ((kind  symbol)     ;; 'joined, 'player or #f
+   (slot  int32)
+   (since time-frame)
+   )
+  )
+
+(define *mp-test-wait* (new 'global 'mp-test-waiting))
+(set! (-> *mp-test-wait* kind) #f)
 
 ;; Test runner state (in a structure: a time-frame is 64 bits, a global symbol holds 32).
 (deftype mp-test-state (structure)
@@ -199,11 +218,45 @@
 
 (define-extern mp-test-own-object (function string process-drawable))
 
+;; log-path: the root of one object, every frame, on its owner (each state it sends) and on a viewer
+;; (each state drawn), stamped with the owner's clock: the copy's path against the owner's
+;; (scripts/mp-test/compare_poses.py, smoothness of a driven vehicle).
+(deftype mp-test-path (structure)
+  ((skel   string)
+   (frames int32)
+   )
+  )
+
+(define *mp-test-path* (new 'global 'mp-test-path))
+(set! (-> *mp-test-path* skel) (new 'global 'string 32 (the-as string #f)))
+
+(defun mp-test-note-path ((own? symbol) (st mp-actor-state))
+  "Print the root of `st` when its skeleton is the one log-path asked for (its own states on the
+   owner, the interpolated ones on a viewer)."
+  (when (and (> (-> *mp-test-path* frames) 0) (string-charp= (-> *mp-test-path* skel) (-> st skel)))
+    (format
+      0
+      "[mp-test] path ~S t ~D.~D pos ~m ~m ~m~%"
+      (if own? "own" "copy")
+      (/ (pc-mp-clock (if own? -1 (the-as int (shr (-> st id) 24)))) 10)
+      (mod (pc-mp-clock (if own? -1 (the-as int (shr (-> st id) 24)))) 10)
+      (-> st trans x)
+      (-> st trans y)
+      (-> st trans z)
+      )
+    )
+  (none)
+  )
+
 (defun mp-test-own-flush ()
   "Print the bones of our objects asked by log-pose-own, once per frame for as many frames as asked.
    Called by the manager, at the point of the frame where the batch reads them (before this frame's
    joint math), so they match what is sent. Every frame is printed, whatever the script's timing:
-   after a long frame the script runs several due lines at once and skips none of the game's frames."
+   after a long frame the script runs several due lines at once and skips none of the game's frames.
+   log-path counts its frames here too (the manager runs once a frame)."
+  (if (> (-> *mp-test-path* frames) 0)
+      (+! (-> *mp-test-path* frames) -1)
+      )
   (let ((rq *mp-test-own*)
         (kept 0)
         )
@@ -640,11 +693,12 @@
     )
   (format
     0
-    "[mp-test] fx effects sent ~D shown ~D shots sent ~D shown ~D~%"
+    "[mp-test] fx effects sent ~D shown ~D shots sent ~D shown ~D shot copies ~D~%"
     (-> *mp-fx* total-effects-sent)
     (-> *mp-fx* total-effects-shown)
     (-> *mp-fx* total-shots-sent)
     (-> *mp-fx* total-shots-shown)
+    (-> *mp-world-state* shot-copies)
     )
   (format
     0
@@ -677,7 +731,8 @@
            )
       (string<-charp *mp-temp-string* (-> st skel))
       (format 0 "[mp-test] actor ~D ~S pos ~m ~m ~m anim ~D~%" (-> st id) *mp-temp-string* (-> st trans x) (-> st trans y) (-> st trans z) (-> st anim-index))
-      (if rep
+      ;; the copy of a shot without a model (mp-fx-copy) has no draw-control
+      (if (and rep (nonzero? (-> rep draw)))
           (format
             0
             "[mp-test]   replica scale ~f seg #x~X channels ~D mgeo ~A~%"
@@ -694,7 +749,10 @@
             (-> rep root trans x)
             (-> rep root trans y)
             (-> rep root trans z)
-            (-> rep draw status)
+            (if (nonzero? (-> rep draw))
+                (-> rep draw status)
+                0
+                )
             (if (-> rep level) (-> rep level name) #f)
             (if (-> rep next-state) (-> rep next-state name) #f)
             )
@@ -990,13 +1048,29 @@
            )
          )
         ((string= cmd "gun")
-         ;; unlock the gun (red and yellow) with ammo, and take it out
-         (logior! (-> *game-info* features) (game-feature gun gun-red-1 gun-yellow-1))
-         (dotimes (i 4)
-           (set! (-> *game-info* gun-ammo i) 100.0)
-           )
-         (if *target*
+         ;; gun [pickup-type]: unlock every gun mod with ammo and take the gun out; with a
+         ;; pickup-type (26 red-1 ... 31 yellow-3 ... 35 dark-1 ... 37 dark-3), switch to that mod
+         (let ((kind (mp-test-int)))
+           (logior! (-> *game-info* features) (game-feature gun))
+           (dotimes (i 12)
+             (logior! (-> *game-info* features) (the-as game-feature (ash 1 (+ i 6))))
+             )
+           (dotimes (i 4)
+             (set! (-> *game-info* gun-ammo i) 100.0)
+             )
+           (when *target*
              (send-event *target* 'change-mode 'gun #f (pickup-type gun-yellow-1))
+             (if (and (>= kind 26) (<= kind 37))
+                 (send-event *target* 'gun-type kind)
+                 )
+             )
+           )
+         )
+        ((string= cmd "board")
+         ;; unlock the hoverboard and its zap, and get on it
+         (logior! (-> *game-info* features) (game-feature board board-zap))
+         (if *target*
+             (send-event *target* 'change-mode 'board #f)
              )
          )
         ((string= cmd "vehicle")
@@ -1037,6 +1111,96 @@
          )
         ((string= cmd "log-tasks")
          (mp-test-log-tasks)
+         )
+        ((string= cmd "wait-joined")
+         ;; the script waits until this guest is in the host's world, next to it
+         (set! (-> *mp-test-wait* kind) 'joined)
+         (pc-mp-test-pause #t)
+         )
+        ((string= cmd "wait-player")
+         ;; the script waits until player <slot> is in game for 2 s
+         (set! (-> *mp-test-wait* slot) (mp-test-int))
+         (set! (-> *mp-test-wait* since) 0)
+         (set! (-> *mp-test-wait* kind) 'player)
+         (pc-mp-test-pause #t)
+         )
+        ((string= cmd "log-path")
+         ;; log-path <skeleton> <frames>: the object's root every frame (owner and viewers alike)
+         (mp-test-word)
+         (format (clear (-> *mp-test-path* skel)) "skel-~S" (-> *mp-test* word))
+         (set! (-> *mp-test-path* frames) (mp-test-int))
+         )
+        ((string= cmd "mode")
+         ;; game mode when hosting: 0 free roam, 1 co-op
+         (set! (-> *mp-config* mode) (mp-test-int))
+         (mp-config-save!)
+         (if (= *mp-mode* (mp-mode host))
+             (mp-apply-mode!)
+             )
+         )
+        ((string= cmd "title")
+         ;; back to the title screen, as the pause menu's quit does
+         (set! (-> *game-info* mode) 'play)
+         (initialize! *game-info* 'game (the-as game-save #f) "title-restart" (the-as resetter-spec #f))
+         (set-master-mode 'game)
+         )
+        ((string= cmd "log-join")
+         ;; joining the host's world: stage, world received, saves refused, where we stand
+         (format
+           0
+           "[mp-test] join stage ~D foreign ~A worlds sent ~D loaded ~D bytes ~D saves refused ~D~%"
+           (-> *mp-join* stage)
+           (-> *mp-join* foreign?)
+           (-> *mp-join* sent)
+           (-> *mp-join* loaded)
+           (-> *mp-join* bytes)
+           (-> *mp-join* blocked)
+           )
+         (format
+           0
+           "[mp-test] join continue ~S title ~A in-game ~A language ~D~%"
+           (if (-> *game-info* current-continue) (-> *game-info* current-continue name) "none")
+           (= (level-status? *level* 'title #f) 'active)
+           (mp-in-game?)
+           (-> *setting-control* user-default language)
+           )
+         (let ((host (mp-remote-state 0)))
+           (if (and host *target*)
+               (format 0 "[mp-test] join distance to the host ~m~%" (vector-vector-distance (-> *target* control trans) (-> host trans)))
+               )
+           )
+         )
+        ((string= cmd "try-save")
+         ;; an auto-save, as a checkpoint asks it
+         (auto-save-command 'auto-save 0 0 *default-pool* #f)
+         )
+        ((string= cmd "log-coop")
+         (format 0 "[mp-test] coop ~A authority ~A pending ~D~%" (mp-coop?) *mp-authority* (-> *mp-coop* pending-count))
+         (format
+           0
+           "[mp-test] coop held ~D released ~D leashed ~D waits-for ~D~%"
+           (-> *mp-coop* held)
+           (-> *mp-coop* released)
+           (-> *mp-coop* leashed)
+           (-> *mp-coop* wait-from)
+           )
+         (let ((host (mp-remote-state 0)))
+           (if (and host *target*)
+               (format 0 "[mp-test] coop distance to the host ~m~%" (vector-vector-distance (-> *target* control trans) (-> host trans)))
+               )
+           )
+         )
+        ((string= cmd "log-weather")
+         (format
+           0
+           "[mp-test] weather cloud ~f fog ~f special ~f override ~A ~f ~f~%"
+           (-> *mood-control* current-interp cloud)
+           (-> *mood-control* current-interp fog)
+           (-> *mood-control* current-special-interp)
+           (-> *mood-control* overide-weather-flag)
+           (-> *mood-control* overide cloud)
+           (-> *mood-control* overide fog)
+           )
          )
         ((string= cmd "close-task")
          ;; close-task [n]: close the first open task node, n times, as if completed here
@@ -1120,7 +1284,7 @@
            (dotimes (i (-> defs count))
              (when (-> defs complete i)
                (+! complete 1)
-               (if (pc-mp-art-file-exists (-> defs sg i art-group-name))
+               (if (> (pc-mp-art-file-size (-> defs sg i art-group-name)) 0)
                    (+! files 1)
                    (format 0 "[mp-test] kind ~S: no art file ~S-ag.go~%" (-> defs sg i name) (-> defs sg i art-group-name))
                    )
@@ -1141,7 +1305,7 @@
                     (art (and sg (type? sg skeleton-group) (mp-art-group-get (-> sg art-group-name) (the-as (pointer level) #f))))
                     )
                ;; drawable: its group here (ours or rebuilt) and its art loaded or loadable alone
-               (let ((loadable (and sg (type? sg skeleton-group) (or art (pc-mp-art-file-exists (-> sg art-group-name))))))
+               (let ((loadable (and sg (type? sg skeleton-group) (or art (> (pc-mp-art-file-size (-> sg art-group-name)) 0)))))
                  (format 0 "[mp-test] kind ~S group ~A rebuilt ~A art ~A loadable ~A~%" name (if sg #t #f) (if (mp-skel-def-get name) #t #f) (if art #t #f) (if loadable #t #f))
                  (if loadable
                      (+! ok 1)
@@ -1155,6 +1319,13 @@
         ((string= cmd "far-levels")
          (set! *mp-far-enabled* (!= (mp-test-int) 0))
          )
+        ((string= cmd "log-gone")
+         (format 0 "[mp-test] npcs gone near another player ~D~%" (-> *mp-world-state* gone-near))
+         )
+        ((string= cmd "art-range")
+         ;; art-range <meters>: the art of other players' objects loads this far from our player
+         (set! *mp-art-range* (* (meters 1) (the float (mp-test-int))))
+         )
         ((string= cmd "log-shaders")
          (mp-test-log-shaders)
          )
@@ -1164,40 +1335,29 @@
              (if (-> lev name)
                  (format
                    0
-                   "[mp-test] level ~A ~A display ~A far ~A~%"
+                   "[mp-test] level ~A ~A display ~A art-heap ~A~%"
                    (-> lev name)
                    (-> lev status)
                    (-> lev display?)
-                   (= lev (-> *mp-far* level))
+                   (= lev (-> *mp-far* host))
                    )
                  )
              )
            )
          (format
            0
-           "[mp-test] far level ~A loads ~D drops ~D restored ~D in ~A host ~A~%"
-           (-> *mp-far* name)
-           (-> *mp-far* loads)
-           (-> *mp-far* drops)
-           (-> *mp-far* restored)
-           (-> *mp-far* level)
+           "[mp-test] art heap in ~A opened ~D closed ~D restored ~D~%"
            (-> *mp-far* host)
+           (-> *mp-far* opened)
+           (-> *mp-far* closed)
+           (-> *mp-far* restored)
            )
          (format
            0
-           "[mp-test] far art loaded ~D failed ~D, art levels known ~D~%"
+           "[mp-test] art loaded ~D failed ~D, art levels known ~D~%"
            (-> *mp-art-in* loaded)
            (-> *mp-art-in* failed)
            (-> *mp-art-in* count)
-           )
-         (format
-           0
-           "[mp-test] far borrows ~A ~A ~A ~A ~A~%"
-           (-> *mp-far* borrows 0)
-           (-> *mp-far* borrows 1)
-           (-> *mp-far* borrows 2)
-           (-> *mp-far* borrows 3)
-           (-> *mp-far* borrows 4)
            )
          (format
            0
@@ -1256,11 +1416,33 @@
          )
         ((string= cmd "log-elevator")
          (mp-test-log-object "elevator" elevator)
+         (let ((elev (the-as elevator (mp-test-nearest elevator (mp-test-reference-pos)))))
+           (if elev
+               (format
+                 0
+                 "[mp-test] elevator path-pos ~f stops ~f ~f status #x~X states applied ~D~%"
+                 (-> elev path-pos)
+                 (-> elev move-pos 0)
+                 (-> elev move-pos 1)
+                 (-> elev elevator-status)
+                 (-> *mp-world-state* elevator-states)
+                 )
+               )
+           )
          (format
            0
-           "[mp-test] elevator trips sent ~D shown ~D~%"
+           "[mp-test] elevator trips sent ~D shown ~D muted ~D continue ~S~%"
            (-> *mp-world-state* elevator-trips-sent)
            (-> *mp-world-state* elevator-trips-shown)
+           (let ((n 0))
+             (dotimes (i (-> *mp-world-state* elev-count))
+               (if (-> *mp-world-state* elev-muted i)
+                   (+! n 1)
+                   )
+               )
+             n
+             )
+           (-> *game-info* current-continue name)
            )
          )
         ((or (string= cmd "goto-door") (string= cmd "goto-elevator"))
@@ -1336,11 +1518,49 @@
   (none)
   )
 
+(defun mp-test-wait-over? ()
+  "#t when the script's wait is over: wait-joined, the guest is in the host's world; wait-player,
+   that player is in game (shown) for 2 s."
+  (let ((w *mp-test-wait*))
+    (case (-> w kind)
+      (('joined)
+       (= (-> *mp-join* stage) 4)
+       )
+      (('player)
+       (let ((st (mp-remote-state (-> w slot))))
+         (cond
+           ((or (not st) (logtest? (-> st flags) (mp-flag hidden)))
+            (set! (-> w since) 0)
+            #f
+            )
+           ((zero? (-> w since))
+            (set! (-> w since) (mp-now))
+            #f
+            )
+           (else
+             (>= (- (mp-now) (-> w since)) (seconds 2))
+             )
+           )
+         )
+       )
+      (else
+        #t
+        )
+      )
+    )
+  )
+
 (defun mp-test-update ()
-  "Release forced input when its time is over, then run the due script commands."
+  "Release forced input when its time is over, end a wait when it is over, then run the due script
+   commands."
   (when (and (nonzero? (-> *mp-test* pad-until)) (>= (mp-now) (-> *mp-test* pad-until)))
     (pc-mp-test-pad 0 128 128)
     (set! (-> *mp-test* pad-until) 0)
+    )
+  (when (and (-> *mp-test-wait* kind) (mp-test-wait-over?))
+    (format 0 "[mp-test] wait ~A over~%" (-> *mp-test-wait* kind))
+    (set! (-> *mp-test-wait* kind) #f)
+    (pc-mp-test-pause #f)
     )
   (while (pc-mp-test-poll (-> *mp-test* line))
     (mp-test-run)

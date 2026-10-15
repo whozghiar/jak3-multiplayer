@@ -3,6 +3,7 @@
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
+45.1 wait-joined
 57 goto-player 0
 59 face-player 0
 60.5 log-me
@@ -10,9 +11,11 @@
 61.1 log-me
 61.2 log-me
 61.3 log-me
+61.3 screenshot p13
 61.4 log-me
 61.5 log-me
 61.6 log-me
+61.6 screenshot p16
 61.7 log-me
 61.8 log-me
 61.9 log-me
@@ -23,5 +26,3 @@
 62.8 log-me
 63.0 log-me
 63.5 log-me
-61.3 screenshot p13
-61.6 screenshot p16

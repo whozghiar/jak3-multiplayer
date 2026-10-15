@@ -3,6 +3,7 @@
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
+45.1 wait-joined
 58 goto-npc wlander
 60 goto-npc wlander
 60.2 press square 200

@@ -1,0 +1,9 @@
+# Joining from the title screen, host side: plays its save and hosts.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+80 log-join
+80 log-tasks
+80 log

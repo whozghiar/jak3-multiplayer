@@ -5,6 +5,7 @@
 40 log
 40 screenshot boot
 48 join 127.0.0.1:7777
+48.1 wait-joined
 60 log
 60 screenshot together
 60 log-levels

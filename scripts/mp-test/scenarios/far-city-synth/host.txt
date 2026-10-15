@@ -3,9 +3,11 @@
 # (synth-skels 1), as if the code defining it were in none of its levels.
 1 synth-skels 1
 1 enable
+1 art-range 100000
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
+44.9 wait-player 1
 52 log-levels
 52 log-shaders
 70 log-levels

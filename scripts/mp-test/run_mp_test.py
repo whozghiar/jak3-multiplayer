@@ -115,14 +115,27 @@ def main() -> int:
         time.sleep(2.0)  # let the first window open before the next one
 
     duration = max(script_length(s) for s in scripts) + args.extra_seconds
-    print(f"[run] waiting {duration:.0f} s")
-    deadline = time.time() + duration
-    while time.time() < deadline:
+    # a script that waits (wait-joined, wait-player) stops its clock meanwhile: the games run until
+    # every script printed that it finished (each game logs it), within a cap
+    waits = any("wait-" in s.read_text(encoding="utf-8") for s in scripts)
+    cap = duration + (240.0 if waits else 0.0)
+    print(f"[run] waiting {duration:.0f} s" + (f" plus the scripts' waits (at most {cap:.0f} s)" if waits else ""))
+    start = time.time()
+    finished_at = None
+    while time.time() < start + cap:
         if any(p.poll() is not None for _, _, _, p in procs):
             for name, _, _, p in procs:
                 if p.poll() is not None:
                     print(f"[run] {name} exited early with code {p.returncode}")
             break
+        if not waits:
+            if time.time() >= start + duration:
+                break
+        elif all("[mp-test] script finished" in (folder / "gk.log").read_text(encoding="utf-8", errors="replace")
+                 for _, folder, _, _ in procs):
+            finished_at = finished_at or time.time()
+            if time.time() - finished_at >= args.extra_seconds:
+                break
         time.sleep(1.0)
 
     for name, _, log, p in procs:

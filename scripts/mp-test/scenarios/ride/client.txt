@@ -3,6 +3,7 @@
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
+45.1 wait-joined
 58 goto-player 0 0 3
 59 press triangle 900
 62 log

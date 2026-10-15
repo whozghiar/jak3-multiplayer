@@ -1,0 +1,19 @@
+# Joining the host's world, guest side: goes to Haven City's port and closes 3 more story steps
+# first (its own world differs from the host's), then joins: it loads the host's world (Spargus, the
+# host's progress), comes next to the host, and saves nothing there.
+1 enable
+1 name Guest
+1 color 2
+20 continue ctyport-start
+36 close-task 3
+37 log-tasks
+40 log-join
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 log-join
+72 log-join
+72 log-tasks
+73 try-save
+74 log-join
+74 screenshot joined
+76 log

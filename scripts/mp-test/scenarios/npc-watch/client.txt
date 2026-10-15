@@ -1,0 +1,13 @@
+# NPCs under another player's eyes, guest side: stands 25 m from the host (showing the host's
+# NPCs), looking at the street between them, for 60 s.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+54 goto-player 0 0 25
+55 face-player 0
+60 log-me
+60 log
+80 screenshot street
+112 log

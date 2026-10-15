@@ -5,6 +5,7 @@
 1 color 2
 42 log-tasks
 45 join 127.0.0.1:7777
+45.1 wait-joined
 50 log-tasks
 55 log
 60 log-tasks

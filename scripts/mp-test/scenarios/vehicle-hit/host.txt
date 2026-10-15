@@ -1,0 +1,11 @@
+# Hits on a player's vehicle, host side: drives a buggy, then waits in it while the guest zaps it
+# from the hoverboard and punches it. The host applies every blow to its own buggy.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 15
+58 log
+66 log
+72 log

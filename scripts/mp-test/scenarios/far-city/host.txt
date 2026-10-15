@@ -1,10 +1,12 @@
-# Distant player's level, host side: stays in Spargus while the guest goes to Haven City. Haven's
-# master level is loaded here, not displayed, in the free top of a Spargus level's heap
-# (log-levels: far), and the guest's Haven objects are drawn from its art (log: replica level).
+# Distant player's objects, host side: stays in Spargus while the guest goes to Haven City. No
+# Haven level loads here: the art of the guest's objects is loaded alone into the art heap (art
+# range raised to 100 km for the test: they are kilometers away) and its objects are drawn.
 1 enable
+1 art-range 100000
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
+44.9 wait-player 1
 52 log-levels
 52 log-shaders
 70 log-levels

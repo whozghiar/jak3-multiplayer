@@ -1,0 +1,17 @@
+# An elevator trip of another player, guest side: stays in the street 25 m from the host, who rides
+# the palace elevator up. The trip runs here too (the host's puppet rides it), without the
+# elevator's scripts: the guest's continue point and levels stay those of the street.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+55 goto-player 0 0 25
+60 log-levels
+60 log-elevator
+66 log-elevator
+70 log-elevator
+70 screenshot street
+78 log-elevator
+78 log-levels
+78 screenshot after

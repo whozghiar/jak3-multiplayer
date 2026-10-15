@@ -1,0 +1,12 @@
+# An elevator trip of another player, host side: rides Spargus' palace elevator up while the
+# guest stays in the street, 25 m away.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+62 goto-elevator
+63 log-elevator
+70 log-elevator
+78 log-elevator
+78 log-levels

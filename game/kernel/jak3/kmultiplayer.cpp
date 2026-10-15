@@ -120,7 +120,12 @@ enum Msg : u8 {
   MSG_POSES = 8,    // both ways: u8 source slot, u32 source time ms, u16 count, count x entry:
                     // u32 id, u16 joints, u8 emitters, u8 sounds, PoseJoint..., PoseEmitter...,
                     // PoseSound...
+  MSG_BLOB = 9,     // both ways: u8 from, u8 to, u32 total size, u32 offset, bytes (the host
+                    // relays a chunk whose `to` is another guest)
 };
+
+constexpr size_t kBlobChunk = 15000;           // bytes of a blob per frame
+constexpr size_t kMaxBlob = 4 * 1024 * 1024;   // larger blobs are refused
 
 constexpr size_t kMaxFrame = 16384;            // larger frames are a protocol violation
 constexpr size_t kMaxOutBuffer = 1024 * 1024;  // a peer this far behind is dropped
@@ -418,10 +423,13 @@ static void decode_joint(float* rel, const PoseJoint& a, const PoseJoint& b, flo
 }
 
 bool Remote::sample(double now, PlayerState* out) const {
+  return sample_at(now - clock_offset - kInterpDelayMs, out);  // drawn time, in the sender's clock
+}
+
+bool Remote::sample_at(double t, PlayerState* out) const {
   if (snaps.empty()) {
     return false;
   }
-  double t = now - clock_offset - kInterpDelayMs;  // drawn time, in the sender's clock
   const PlayerState& newest = snaps.back();
   if (t >= newest.time_ms) {
     // Late packets: keep moving along the last velocity for at most 250 ms, then hold.
@@ -575,6 +583,8 @@ void Session::leave(const std::string& reason) {
   m_actors.clear();
   m_actor_offset_known.fill(false);
   m_events.clear();
+  m_blob.clear();
+  m_blob_got = 0;
   m_banned.clear();
   if (m_mode != Mode::Offline && !reason.empty()) {
     lg::info("[multiplayer] {}", reason);
@@ -704,6 +714,23 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         }
         return;
       }
+      case MSG_BLOB: {
+        if (p.slot < 0 || len < 10) {
+          return;
+        }
+        std::vector<u8> copy(data, data + len);
+        copy[0] = (u8)p.slot;  // never trust the sender's claim
+        if (copy[1] == 0) {
+          store_blob(copy.data(), copy.size());
+        } else {
+          for (auto* o : m_peers) {
+            if (o->slot == copy[1]) {
+              o->queue(MSG_BLOB, copy.data(), copy.size());
+            }
+          }
+        }
+        return;
+      }
       case MSG_EVENT: {
         if (p.slot < 0 || len != sizeof(Event)) {
           return;
@@ -761,10 +788,63 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         route_event(ev, ev.from);
       }
       return;
+    case MSG_BLOB:
+      if (len >= 10 && data[1] == m_local_slot) {
+        store_blob(data, len);
+      }
+      return;
     default:
       drop(p, "Protocol error");
       return;
   }
+}
+
+void Session::store_blob(const u8* data, size_t len) {
+  u32 total, offset;
+  memcpy(&total, data + 2, 4);
+  memcpy(&offset, data + 6, 4);
+  size_t n = len - 10;
+  if (total == 0 || total > kMaxBlob || (size_t)offset + n > total) {
+    return;
+  }
+  if (offset == 0 || m_blob.size() != total) {
+    m_blob.assign(total, 0);  // a new blob starts
+    m_blob_got = 0;
+  }
+  memcpy(m_blob.data() + offset, data + 10, n);
+  m_blob_got += n;
+}
+
+void Session::send_blob(int to, const u8* bytes, size_t size) {
+  if (m_local_slot < 0 || size == 0 || size > kMaxBlob || to < 0 || to >= kMaxPlayers) {
+    return;
+  }
+  for (size_t at = 0; at < size; at += kBlobChunk) {
+    size_t n = std::min(kBlobChunk, size - at);
+    std::vector<u8> frame(10 + n);
+    frame[0] = (u8)m_local_slot;
+    frame[1] = (u8)to;
+    u32 total = (u32)size, offset = (u32)at;
+    memcpy(frame.data() + 2, &total, 4);
+    memcpy(frame.data() + 6, &offset, 4);
+    memcpy(frame.data() + 10, bytes + at, n);
+    for (auto* p : m_peers) {
+      // the host sends to the guest's peer; a guest sends to the host, which relays
+      if ((m_mode == Mode::Host && p->slot == to) || m_mode == Mode::Client) {
+        p->queue(MSG_BLOB, frame.data(), frame.size());
+      }
+    }
+  }
+}
+
+size_t Session::take_blob(u8* out, size_t max) {
+  size_t n = std::min(blob_ready(), max);
+  if (n) {
+    memcpy(out, m_blob.data(), n);
+  }
+  m_blob.clear();
+  m_blob_got = 0;
+  return n;
 }
 
 void Session::update(PlayerState local, double now) {
@@ -927,7 +1007,7 @@ bool Session::get_player(int slot, double now, PlayerState* out) const {
   if (slot < 0 || slot >= kMaxPlayers || slot == m_local_slot || m_mode == Mode::Offline) {
     return false;
   }
-  return m_remotes[slot].sample(now, out);
+  return m_remotes[slot].sample_at(drawn_time(slot, now), out);
 }
 
 void Session::send_event(Event ev) {
@@ -961,7 +1041,10 @@ void Session::store_actors(int source, const u8* data, size_t len, double recv) 
       track.snaps.clear();
     }
     track.snaps.emplace_back(sent, st);
-    while (track.snaps.size() > 4) {
+    while (track.snaps.size() > 2 && sent - track.snaps.front().first > kActorHistoryMs) {
+      track.snaps.pop_front();
+    }
+    while (track.snaps.size() > 64) {
       track.snaps.pop_front();
     }
     track.last_seen = recv;
@@ -991,15 +1074,28 @@ int Session::get_actors(double now, ActorState* out, int max) {
   for (auto it = m_actors.begin(); it != m_actors.end();) {
     auto& track = it->second;
     auto& snaps = track.snaps;
-    if (now - track.last_seen > 1000.0 || snaps.empty()) {
-      it = m_actors.erase(it);  // its owner stopped sending it: gone, out of range or left
+    // its owner stopped sending it: gone, out of range or left (a shot: hit something)
+    double ttl = !snaps.empty() && (snaps.back().second.flags & kActorShot) ? 250.0 : 1000.0;
+    if (snaps.empty() || now - track.last_seen > ttl) {
+      it = m_actors.erase(it);
       continue;
     }
     if (n < max) {
       // drawn at the same time as its owner's player state, so props stay on the puppet
       double t = drawn_time(track.source, now);
       if (t >= snaps.back().first) {
+        // late: along its last velocity a little, then held
         out[n] = snaps.back().second;
+        if (snaps.size() >= 2) {
+          const auto& [ta, a] = snaps[snaps.size() - 2];
+          const auto& [tb, b] = snaps.back();
+          if (tb - ta > 1.0 && dist(a.trans, b.trans) < 40960.f) {
+            float f = (float)(std::min(t - tb, kMaxExtrapolateMs) / (tb - ta));
+            for (int k = 0; k < 3; k++) {
+              out[n].trans[k] = b.trans[k] + (b.trans[k] - a.trans[k]) * f;
+            }
+          }
+        }
       } else if (t <= snaps.front().first) {
         out[n] = snaps.front().second;
       } else {
@@ -1035,8 +1131,17 @@ void Session::note_actor_clock(int source, double sent, double recv) {
   known = true;
 }
 
+double Session::offset_of(int source) const {
+  const auto& remote = m_remotes[source];
+  if (!m_actor_offset_known[source]) {
+    return remote.clock_offset;
+  }
+  return remote.snaps.empty() ? m_actor_offset[source]
+                              : std::min(m_actor_offset[source], remote.clock_offset);
+}
+
 double Session::drawn_time(int source, double now) const {
-  return now - m_actor_offset[source] - kInterpDelayMs;
+  return now - offset_of(source) - kInterpDelayMs;
 }
 
 void Session::add_pose(u32 id, const float* frame, const float* bones, int count, bool effects) {
@@ -1369,6 +1474,9 @@ struct Script {
   size_t next = 0;
   double start_ms = -1;
   bool loaded = false;
+  // wait-joined / wait-player: the script clock stops until the game says go on
+  bool paused = false;
+  double paused_at = 0;
 
   Script() {
     const char* path = getenv("MP_TEST_SCRIPT");
@@ -1461,6 +1569,23 @@ void pc_mp_send_event(u32 ev) {
   }
 }
 
+// (pc-mp-send-blob to addr size): send `size` bytes at `addr` to player `to` (MSG_BLOB).
+void pc_mp_send_blob(u32 to, u32 addr, u32 size) {
+  if (addr && size <= mp::kMaxBlob) {
+    mp::session().send_blob((int)to, Ptr<u8>(addr).c(), size);
+  }
+}
+
+// (pc-mp-blob-ready) -> size of a blob fully received, 0 while none.
+u64 pc_mp_blob_ready() {
+  return mp::session().blob_ready();
+}
+
+// (pc-mp-blob-take addr max) -> bytes copied to `addr` (the blob is then forgotten).
+u64 pc_mp_blob_take(u32 addr, u32 max) {
+  return addr ? mp::session().take_blob(Ptr<u8>(addr).c(), max) : 0;
+}
+
 // (pc-mp-pop-event dest) -> #t when an event was copied into dest.
 u64 pc_mp_pop_event(u32 dest) {
   mp::Event ev;
@@ -1516,6 +1641,8 @@ u64 pc_mp_config_load(u32 dest) {
         cfg->color = std::stoi(val);
       } else if (key == "enabled") {
         cfg->enabled = std::stoi(val);
+      } else if (key == "mode") {
+        cfg->mode = std::stoi(val);
       }
     } catch (...) {
       lg::warn("[multiplayer] ignored bad line in {}: {}", config_path().string(), line);
@@ -1534,8 +1661,9 @@ void pc_mp_config_save(u32 src) {
   auto address = std::string(cfg->address, strnlen(cfg->address, sizeof(cfg->address)));
   file_util::create_dir_if_needed_for_file(config_path());
   file_util::write_text_file(
-      config_path(), fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\n", name,
-                                 address, cfg->character, cfg->color, cfg->enabled));
+      config_path(),
+      fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\n", name,
+                  address, cfg->character, cfg->color, cfg->enabled, cfg->mode));
 }
 
 // (pc-mp-send-actors states count): send the `count` mp-actor-state this player simulates.
@@ -1624,15 +1752,13 @@ u64 pc_mp_clock(u32 slot) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Level code sandbox
+// Art load sandbox
 // ---------------------------------------------------------------------------------------------
-// A level loaded for a distant player links its code into the running game: its defun, define
-// and deftype of names our own levels already use point those names at its copy, and a deftype of
-// an existing type resets that type's methods to its parent's (new_type in kscheme.cpp). The
-// sandbox notes every symbol, the methods of every type and some global tables before that level
-// loads, and puts back each entry that held a value and now points into the level's memory (or,
-// for methods, changed at all: only that level links code meanwhile). Names only that level
-// defines stay: its art and particle groups are what copies need from it.
+// An art group loaded alone for a distant player's objects (loado, multiplayer-world.gc) logs
+// itself in: it may take texture page and particle table entries, and a linked object may set
+// names. The sandbox notes every symbol, the methods of every type and the tables GOAL names
+// before the load and puts back every entry that held a value and changed. The load runs in one
+// call, no other game code runs meanwhile: every change is the load's.
 
 struct SandboxType {
   u32 sym;   // symbol of the type
@@ -1702,9 +1828,9 @@ void pc_mp_sandbox_watch(u32 addr, u32 count, u32 stride) {
   }
 }
 
-// (pc-mp-sandbox-restore lo hi) -> entries put back: a noted word that held a value (not 0, not
-// #f) and now points into [lo, hi), and any changed method of a noted type.
-u64 pc_mp_sandbox_restore(u32 lo, u32 hi) {
+// (pc-mp-sandbox-restore) -> entries put back: a noted word that held a value (not 0, not #f) and
+// changed, and any changed method of a noted type.
+u64 pc_mp_sandbox_restore() {
   auto& sb = sandbox();
   if (!sb.active) {
     return 0;
@@ -1712,7 +1838,7 @@ u64 pc_mp_sandbox_restore(u32 lo, u32 hi) {
   u64 n = 0;
   for (auto& [at, old] : sb.words) {
     u32& cur = *Ptr<u32>(at).c();
-    if (cur != old && cur >= lo && cur < hi && old != 0 && old != s7.offset) {
+    if (cur != old && old != 0 && old != s7.offset) {
       cur = old;
       n++;
     }
@@ -1741,12 +1867,14 @@ void pc_mp_sandbox_end() {
   sb.types = {};
 }
 
-// (pc-mp-art-file-exists name) -> #t when the art group file out/jak3/obj/<name>-ag.go is there
-// (what loado reads for an art group loaded alone).
-u64 pc_mp_art_file_exists(u32 name) {
+// (pc-mp-art-file-size name) -> size in bytes of the art group file out/jak3/obj/<name>-ag.go
+// (what loado reads for an art group loaded alone), 0 when it is not there.
+u64 pc_mp_art_file_size(u32 name) {
   auto path =
       file_util::get_jak_project_dir() / "out" / "jak3" / "obj" / (goal_string(name) + "-ag.go");
-  return to_symbol(fs::exists(path));
+  std::error_code err;
+  auto size = fs::file_size(path, err);
+  return err ? 0 : (u64)size;
 }
 
 // (pc-mp-render-level name add?): add or remove a level whose renderer data is kept for the
@@ -1785,15 +1913,34 @@ u64 pc_mp_test_poll(u32 dest) {
   if (s.start_ms < 0) {
     s.start_ms = now;
   }
-  if (now - s.start_ms < s.steps[s.next].at_ms) {
+  if (s.paused || now - s.start_ms < s.steps[s.next].at_ms) {
     return to_symbol(false);
   }
   auto* str = Ptr<String>(dest).c();
   const auto& cmd = s.steps[s.next++].command;
+  if (s.next == s.steps.size()) {
+    lg::info("[mp-test] script finished");  // the runner stops the games after it
+  }
   size_t n = std::min<size_t>(cmd.size(), str->len > 0 ? str->len - 1 : 0);
   memcpy(str->data(), cmd.data(), n);
   str->data()[n] = 0;
   return to_symbol(true);
+}
+
+// (pc-mp-test-pause on?) stops (#t) or restarts (#f) the script clock: the steps after a wait keep
+// their spacing from when the wait ends.
+void pc_mp_test_pause(u32 on) {
+  auto& s = mp::test::script();
+  double now = mp::now_ms();
+  bool want = on != s7.offset;
+  if (want && !s.paused) {
+    s.paused = true;
+    s.paused_at = now;
+  } else if (!want && s.paused) {
+    s.paused = false;
+    s.start_ms += now - s.paused_at;
+    lg::info("[mp-test] script waited {:.1f} s", (now - s.paused_at) / 1000.0);
+  }
 }
 
 // (pc-mp-test-screenshot name) saves the next frame as <config>/screenshots/<name>.png.
@@ -1816,10 +1963,95 @@ void pc_mp_test_pad(u32 buttons, u32 lx, u32 ly) {
   pad.active = pad.buttons != 0 || pad.lx != 128 || pad.ly != 128;
 }
 
+#ifdef _WIN32
+// ---------------------------------------------------------------------------------------------
+// Crash report
+// ---------------------------------------------------------------------------------------------
+// An access violation in GOAL code ends the game with no trace in the log. This prints the GOAL
+// function holding the faulting instruction (the global function or method whose code starts last
+// before it) and the GOAL return addresses found on the stack, then lets the crash go on.
+
+// Name and start of the GOAL function whose code starts last at or before EE offset `at`.
+std::string goal_function_at(u32 at, u32* start) {
+  std::string best;
+  u32 best_start = 0;
+  u32 fn_type = u32_in_fixed_sym(jak3_symbols::FIX_SYM_FUNCTION_TYPE);
+  auto is_function = [&](u32 v) {
+    return v >= 0x84000 && v < (u32)EE_MAIN_MEM_SIZE && (v & 7) == 4 && *Ptr<u32>(v - 4).c() == fn_type;
+  };
+  auto scan = [&](u32 sym) {
+    u32 v = symbol_value(sym);
+    if (is_function(v) && v <= at && v > best_start) {
+      best_start = v;
+      best = sym_to_cstring(Ptr<Symbol4<u32>>(sym));
+    }
+    if (is_type_object(v)) {
+      auto type = Ptr<Type>(v);
+      for (u32 i = 0; i < type->num_methods; i++) {
+        u32 m = type->get_method(i).offset;
+        if (is_function(m) && m <= at && m > best_start) {
+          best_start = m;
+          best = fmt::format("{} method {}", sym_to_cstring(Ptr<Symbol4<u32>>(sym)), i);
+        }
+      }
+    }
+  };
+  for (u32 sym = s7.offset; sym < LastSymbol.offset; sym += 4) {
+    scan(sym);
+  }
+  for (u32 sym = SymbolTable2.offset; sym < s7.offset; sym += 4) {
+    scan(sym);
+  }
+  *start = best_start;
+  return best;
+}
+
+LONG WINAPI report_goal_crash(EXCEPTION_POINTERS* info) {
+  static bool reported = false;
+  auto* rec = info->ExceptionRecord;
+  u64 base = (u64)g_ee_main_mem;
+  u64 rip = info->ContextRecord->Rip;
+  if (reported || rec->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || rip < base ||
+      rip >= base + EE_MAIN_MEM_SIZE) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  reported = true;
+  u32 start = 0;
+  auto name = goal_function_at((u32)(rip - base), &start);
+  printf("[multiplayer] crash: access violation at #x%llx (address #x%llx) in GOAL %s +#x%x\n",
+         (unsigned long long)(rip - base), (unsigned long long)rec->ExceptionInformation[1],
+         name.c_str(), (u32)(rip - base) - start);
+  // GOAL code runs on the native stack: words pointing into GOAL code are return addresses (or
+  // stale ones), the callers
+  auto* stack = (u64*)info->ContextRecord->Rsp;
+  int found = 0;
+  for (int i = 0; i < 256 && found < 10; i++) {
+    u64 w = stack[i];
+    if (w > base + 0x84000 && w < base + EE_MAIN_MEM_SIZE) {
+      u32 caller = 0;
+      auto caller_name = goal_function_at((u32)(w - base), &caller);
+      if (caller) {
+        printf("[multiplayer] crash:   from GOAL %s +#x%x\n", caller_name.c_str(),
+               (u32)(w - base) - caller);
+        found++;
+      }
+    }
+  }
+  fflush(stdout);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 }  // namespace
 
 void init_multiplayer_functions() {
+#ifdef _WIN32
+  AddVectoredExceptionHandler(0, report_goal_crash);
+#endif
   make_function_symbol_from_c("pc-mp-send-actors", (void*)pc_mp_send_actors);
+  make_function_symbol_from_c("pc-mp-send-blob", (void*)pc_mp_send_blob);
+  make_function_symbol_from_c("pc-mp-blob-ready", (void*)pc_mp_blob_ready);
+  make_function_symbol_from_c("pc-mp-blob-take", (void*)pc_mp_blob_take);
   make_function_symbol_from_c("pc-mp-get-actors", (void*)pc_mp_get_actors);
   make_function_symbol_from_c("pc-mp-add-pose", (void*)pc_mp_add_pose);
   make_function_symbol_from_c("pc-mp-add-emitter", (void*)pc_mp_add_emitter);
@@ -1834,9 +2066,10 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-sandbox-restore", (void*)pc_mp_sandbox_restore);
   make_function_symbol_from_c("pc-mp-sandbox-end", (void*)pc_mp_sandbox_end);
   make_function_symbol_from_c("pc-mp-render-level", (void*)pc_mp_render_level);
-  make_function_symbol_from_c("pc-mp-art-file-exists", (void*)pc_mp_art_file_exists);
+  make_function_symbol_from_c("pc-mp-art-file-size", (void*)pc_mp_art_file_size);
   make_function_symbol_from_c("pc-mp-test-active?", (void*)pc_mp_test_active);
   make_function_symbol_from_c("pc-mp-test-poll", (void*)pc_mp_test_poll);
+  make_function_symbol_from_c("pc-mp-test-pause", (void*)pc_mp_test_pause);
   make_function_symbol_from_c("pc-mp-test-screenshot", (void*)pc_mp_test_screenshot);
   make_function_symbol_from_c("pc-mp-test-pad", (void*)pc_mp_test_pad);
   make_function_symbol_from_c("pc-mp-host", (void*)pc_mp_host);

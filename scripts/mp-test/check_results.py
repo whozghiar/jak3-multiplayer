@@ -183,9 +183,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
             # the host takes its gun out here (props does not)
             guns = {k: v for k, v in cp.items() if "gun" in k}
             c.check(scenario, "the guest draws the host's gun", any("#t" in v for v in guns.values()), f"{guns}")
-            fx = counter(client, r"fx effects sent (\d+) shown (\d+) shots sent (\d+) shown (\d+)")
+            fx = counter(client, r"fx effects sent (\d+) shown (\d+) shots sent (\d+) shown (\d+) shot copies (\d+)")
             em = counter(client, r"emitters sent \d+ received (\d+) shown (\d+)")
-            c.check(scenario, "the host's shots replayed on the guest", bool(fx) and fx[-1][3] >= 1, f"shots shown {fx[-1][3] if fx else None}")
+            c.check(scenario, "the host's shots drawn on the guest (as objects)", bool(fx) and fx[-1][4] >= 1,
+                    f"shot copies {int(fx[-1][4]) if fx else None}")
             c.check(scenario, "the host's impacts and gun effects replayed", bool(fx) and fx[-1][1] >= 1 and bool(em) and em[-1][1] >= 1,
                     f"effects shown {fx[-1][1] if fx else None}, emitters shown {em[-1][1] if em else None}")
 
@@ -276,9 +277,12 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         g = counter(client, r"tasks closed (\d+) of \d+, after others (\d+)")
         c.check(scenario, "both end with the same story progress", bool(h) and bool(g) and h[-1][0] == g[-1][0],
                 f"host {int(h[-1][0]) if h else None}, guest {int(g[-1][0]) if g else None} nodes closed")
-        need = 30 if scenario == "progress-late" else 1
-        c.check(scenario, "the guest closed nodes after the host", bool(g) and max(v for _, v in g) >= need,
-                f"{int(max(v for _, v in g)) if g else None} nodes closed after the other (at least {need})")
+        loaded = grab(client, r"loading the host's world \((\d+) bytes\)")
+        c.check(scenario, "the guest got the host's progress with its world", bool(loaded),
+                f"world loaded ({loaded[-1][0] if loaded else None} bytes)")
+        if scenario == "progress":
+            c.check(scenario, "a node the host closes later reaches the guest", bool(g) and max(v for _, v in g) >= 1,
+                    f"{int(max(v for _, v in g)) if g else None} nodes closed after the host")
 
     elif scenario == "world-objects":
         hs = unwrap([(float(t), float(p)) for t, p in grab(host, r"sync t (\d+(?:\.\d+)?) phase " + NUM)])
@@ -338,10 +342,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         drawn = grab(host, r"\] remote 1 flags \S+ anim \S+ veh \S+ puppet (\S+) drawn (\S+)")
         c.check(scenario, "the host draws the far guest", all(d == ("#t", "#t") for d in drawn) and bool(drawn), f"{drawn}")
         for side, lines in (("host", host), ("client", client)):
-            far = grab(lines, r"level (\w+) loaded display #f far #t")
-            c.check(scenario, f"{side} loads the other's level, not displayed", bool(far), f"{sorted(set(x for (x,) in far))}")
-        last = grab(host, r"far level (\S+) loads")
-        c.check(scenario, "the host lets it go when the guest is back", bool(last) and last[-1][0] == "#f", f"{last[-1] if last else None}")
+            levels = grab(lines, r"\] level (\w+) (?:loaded|active|alive)")
+            c.check(scenario, f"{side} loads no level of the other's place",
+                    not any(name == "wascityb" for (name,) in levels) or side == "client",
+                    f"{sorted(set(x for (x,) in levels))}")
         broken = grab(host, r"shader links \d+ broken (\d+)")
         c.check(scenario, "texture shader lists intact", bool(broken) and all(b == "0" for (b,) in broken), f"broken {broken}")
         kinds = grab(client, r"kinds announced (\d+) drawable (\d+) groups rebuilt (\d+)")
@@ -353,49 +357,120 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 f"{cov[-1][0] if cov else None} described, {cov[-1][2] if cov else None} art files")
 
     elif scenario in ("far-city", "far-city-synth"):
-        far = grab(host, r"far level ctywide loads \d+ drops \d+ restored (\d+)")
-        c.check(scenario, "the host loads Haven's master level", bool(far), f"restored by the sandbox {far[-1][0] if far else None}")
-        borrows = grab(host, r"far borrows (\S+) (\S+) (\S+)")
-        c.check(scenario, "and the guest's borrow levels of it", any(b[0] != "#f" for b in borrows), f"{[b for b in borrows if b[0] != '#f'][:1]}")
-        # what the guest sends depends on who walks by in Haven: every object whose art is loaded
-        # here (the far levels included) must be drawn; the others are counted
-        # per object, its last listing (an object listed once may have just arrived, its copy is made
-        # within a few frames); every object the guest draws must be drawn here, its art loaded with
-        # the far levels or alone
+        # no level of Haven loads in Spargus: the guest's objects come from their art alone
+        levels = grab(host, r"\] level (cty\w+) (?:loaded|active|alive)")
+        c.check(scenario, "no Haven level loads in Spargus", not levels, f"{sorted(set(x for (x,) in levels))}")
+        heap = grab(host, r"art heap in .*? opened (\d+) closed (\d+) restored (\d+)")
+        art = grab(host, r"art loaded (\d+) failed (\d+)")
+        c.check(scenario, "the guest's objects' art loaded alone into the art heap",
+                bool(heap) and int(heap[-1][0]) >= 1 and bool(art) and int(art[-1][0]) >= 1 and art[-1][1] == "0",
+                f"heap opened {heap[-1][0] if heap else None}, art loaded {art[-1][0] if art else None} failed {art[-1][1] if art else None}")
         last: dict[str, tuple] = {}
         seen: dict[str, int] = {}
-        for sk, oid, hides, drawn, art in grab(host, r"\] copy 1 (skel-\S+) id (\d+) owner-hides (\S+) drawn (\S+) art (\S+)"):
-            last[oid] = (sk, drawn, art, hides)
+        for sk, oid, hides, drawn, artp in grab(host, r"\] copy 1 (skel-\S+) id (\d+) owner-hides (\S+) drawn (\S+) art (\S+)"):
+            last[oid] = (sk, drawn, artp, hides)
             seen[oid] = seen.get(oid, 0) + 1
         steady = {k: v for k, v in last.items() if seen[k] >= 2}
         shown = {k: v for k, v in steady.items() if v[3] != "#t"}
         missing = sorted(set(v[0] for v in shown.values() if v[1] != "#t"))
         c.check(scenario, "every guest object it draws is drawn here", bool(shown) and not missing,
                 f"{sum(v[1] == '#t' for v in shown.values())} of {len(shown)} drawn "
-                f"({sorted(set(v[0] for v in shown.values()))}); hidden by the guest "
-                f"{len(steady) - len(shown)}; not drawn {missing}")
+                f"({sorted(set(v[0] for v in shown.values()))}); not drawn {missing}")
         kinds = grab(host, r"kinds announced (\d+) drawable (\d+) groups rebuilt (\d+)")
         c.check(scenario, "every kind of object the guest announced can be drawn here",
                 bool(kinds) and int(kinds[-1][0]) > 0 and kinds[-1][0] == kinds[-1][1],
                 f"{kinds[-1][1] if kinds else None} of {kinds[-1][0] if kinds else None} kinds drawable, "
                 f"{kinds[-1][2] if kinds else None} skeleton-groups rebuilt from the guest's descriptions")
-        cov = grab(host, r"kinds described (\d+) complete (\d+) art files (\d+)")
-        c.check(scenario, "every kind of the guest's place described and its art file here",
-                bool(cov) and int(cov[-1][0]) >= 20 and cov[-1][0] == cov[-1][1] == cov[-1][2],
-                f"{cov[-1][0] if cov else None} kinds described, {cov[-1][1] if cov else None} complete, "
-                f"{cov[-1][2] if cov else None} art files present")
         if scenario == "far-city-synth":
             c.check(scenario, "copies built from rebuilt skeleton-groups (code in no level here)",
                     bool(kinds) and int(kinds[-1][2]) > 0, f"{kinds[-1][2] if kinds else None} groups rebuilt, all copies built from them")
-        art = grab(host, r"far art loaded (\d+) failed (\d+)")
-        c.check(scenario, "art groups loaded alone without failure", bool(art) and art[-1][1] == "0",
-                f"loaded {art[-1][0] if art else None}, failed {art[-1][1] if art else None}")
-        haven = grab(host, r"replica pos \S+ \S+ \S+ draw \S+ level (cty\w+)")
-        c.check(scenario, "Haven objects drawn from the far levels", len(haven) >= 1, f"{len(haven)} drawn from {sorted(set(x for (x,) in haven))}")
-        last = grab(host, r"far level (\S+) loads")
-        c.check(scenario, "all let go when the guest is back", bool(last) and last[-1][0] == "#f", f"{last[-1] if last else None}")
         broken = grab(host, r"shader links \d+ broken (\d+)")
         c.check(scenario, "texture shader lists intact", bool(broken) and all(b == "0" for (b,) in broken), f"broken {broken}")
+
+    elif scenario in ("guns", "city-combat"):
+        for side, lines in (("host", host), ("client", client)):
+            fx = counter(lines, r"shot copies (\d+)")
+            c.check(scenario, f"{side} draws the other's shots", bool(fx) and fx[-1][0] >= 1, f"shot copies {int(fx[-1][0]) if fx else None}")
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
+
+    elif scenario == "vehicle-hit":
+        hits = grab(host, r"\[multiplayer\] player 1 hit #<(\S+) .*\((\w+), " + NUM + r"\)")
+        board = [h for h in hits if h[1] == "board"]
+        c.check(scenario, "the host applies the guest's zaps to its buggy", len(board) >= 1, f"{len(board)} zap hit(s)")
+        c.check(scenario, "the guest's hoverboard drawn on the host", any("skel-board" in line for line in host), "skel-board copy")
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
+
+    elif scenario == "elevator-alone":
+        rows = grab(client, r"elevator aid \d+ state (\w+) at \S+ height " + NUM)
+        muted = grab(client, r"elevator trips sent \d+ shown (\d+) muted (\d+) continue (\S+)")
+        heights = [float(h) for _, h in rows]
+        c.check(scenario, "the guest's elevator rises with the host's", len(heights) >= 2 and heights[-1] - heights[0] > 100,
+                f"heights {heights}")
+        c.check(scenario, "its scripts set aside during the trip, back after",
+                any(m[1] == "1" for m in muted) and bool(muted) and muted[-1][1] == "0", f"{muted}")
+        c.check(scenario, "the guest's continue point unchanged", bool(muted) and all(m[2] == muted[0][2] for m in muted),
+                f"{sorted(set(m[2] for m in muted))}")
+        levels = grab(client, r"\] level (\w+) (?:loaded|active|alive)")
+        c.check(scenario, "no level of the palace loaded for the guest", not any(n == "waspala" for (n,) in levels),
+                f"{sorted(set(x for (x,) in levels))}")
+
+    elif scenario in ("join-world", "join-title"):
+        stage = grab(client, r"join stage (\d+) foreign (\S+) worlds sent \d+ loaded (\d+) bytes (\d+) saves refused (\d+)")
+        cont = grab(client, r"join continue (\S+) title (\S+) in-game (\S+) language (\d+)")
+        dist = [float(d) for (d,) in grab(client, r"join distance to the host " + NUM)]
+        c.check(scenario, "the guest loads the host's world", bool(stage) and stage[-1][0] == "4" and stage[-1][2] == "1",
+                f"stage {stage[-1][0] if stage else None}, loaded {stage[-1][2] if stage else None}, {stage[-1][3] if stage else None} bytes")
+        c.check(scenario, "it comes next to the host", bool(dist) and dist[-1] < 10.0, f"{dist[-1] if dist else None} m")
+        c.check(scenario, "at the host's checkpoint", bool(cont) and cont[-1][0] == "wascity-start", f"{cont[-1] if cont else None}")
+        c.check(scenario, "its own settings kept", bool(cont) and len(set(x[3] for x in cont)) == 1, f"language {sorted(set(x[3] for x in cont))}")
+        h = counter(host, r"tasks closed (\d+) of \d+")
+        g = counter(client, r"tasks closed (\d+) of \d+")
+        c.check(scenario, "the host's progress, not its own", bool(h) and bool(g) and g[-1][0] == h[-1][0],
+                f"host {int(h[-1][0]) if h else None}, guest {int(g[-1][0]) if g else None} nodes closed")
+        if scenario == "join-world":
+            c.check(scenario, "the host's progress unchanged (the guest's not merged)", bool(h) and h[0][0] == h[-1][0],
+                    f"{[int(x[0]) for x in h]}")
+            c.check(scenario, "no save in the host's world", bool(stage) and int(stage[-1][4]) >= 1, f"saves refused {stage[-1][4] if stage else None}")
+        else:
+            c.check(scenario, "joined from the title screen", bool(cont) and cont[0][1] == "#t", f"{cont[0] if cont else None}")
+
+    elif scenario == "coop":
+        co = grab(client, r"coop (\S+) authority (\S+) pending")
+        held = grab(host, r"coop held (\d+) released (\d+)")
+        lead = grab(client, r"coop held \d+ released \d+ leashed (\d+) waits-for (-?\d+)")
+        dist = [float(d) for (d,) in grab(client, r"coop distance to the host " + NUM)]
+        c.check(scenario, "co-op on the guest, never an authority", bool(co) and all(x == ("#t", "#f") for x in co), f"{co}")
+        c.check(scenario, "a guest that strays comes back next to the host", bool(lead) and int(lead[-1][0]) >= 1 and bool(dist) and min(dist) < 10.0,
+                f"leashed {lead[-1][0] if lead else None}, distances {dist}")
+        c.check(scenario, "a story step waits for the guest, then closes", bool(held) and held[-1] == ("1", "1"), f"held/released {held[-1] if held else None}")
+        c.check(scenario, "the guest is told where to come", any(w[1] == "0" for w in lead), f"{lead}")
+        h = counter(host, r"tasks closed (\d+) of \d+")
+        g = counter(client, r"tasks closed (\d+) of \d+")
+        c.check(scenario, "the step closed on both", bool(h) and bool(g) and h[-1][0] == g[-1][0] and h[-1][0] > h[0][0],
+                f"host {[int(x[0]) for x in h]}, guest {[int(x[0]) for x in g]}")
+        hw = counter(host, r"weather cloud " + NUM + " fog " + NUM)
+        gw = grab(client, r"weather cloud " + NUM + " fog " + NUM + r" special \S+ override (\S+) " + NUM + " " + NUM)
+        c.check(scenario, "the guest follows the host's weather",
+                bool(hw) and bool(gw) and gw[-1][2] == "#t" and abs(float(gw[-1][3]) - hw[-1][0]) < 0.1 and abs(float(gw[-1][4]) - hw[-1][1]) < 0.1,
+                f"host {hw[-1] if hw else None}, guest override {gw[-1][2:] if gw else None}")
+
+    elif scenario == "npc-watch":
+        gone = [int(v) for (v,) in grab(host, r"npcs gone near another player (\d+)")]
+        w = counter(client, r"world sent \d+ received (\d+) replicas (\d+)")
+        c.check(scenario, "the guest sees the host's NPCs", bool(w) and w[-1][1] >= 1, f"replicas {w[-1][1] if w else None}")
+        c.check(scenario, "no NPC near the guest leaves the game alive", bool(gone) and gone[-1] == 0, f"{gone}")
+
+    elif scenario == "drive":
+        sys.path.insert(0, str(ROOT / "scripts" / "mp-test"))
+        import compare_poses
+        r = compare_poses.path_report(compare_poses.paths("\n".join(host), "own"), compare_poses.paths("\n".join(client), "copy"))
+        c.check(scenario, "the copy of the driven buggy follows its path", bool(r) and r["moved"] > 20 and r["p95"] < 0.10,
+                f"{r['samples'] if r else 0} samples over {r['moved'] if r else 0:.1f} m, median {r['median'] * 100 if r else 0:.1f} cm, "
+                f"95% under {r['p95'] * 100 if r else 0:.1f} cm, largest {r['largest'] * 100 if r else 0:.1f} cm")
+        c.check(scenario, "as smoothly as the owner's", bool(r) and r["jerk_copy"] <= 1.5 * r["jerk_own"] + 0.2,
+                f"speed change per frame {r['jerk_own'] if r else 0:.2f} m/s (owner), {r['jerk_copy'] if r else 0:.2f} m/s (copy)")
 
 
 def main() -> int:

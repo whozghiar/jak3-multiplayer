@@ -71,11 +71,13 @@
   (elevator 12)   ;; an elevator of entity iarg 0 started a trip here, to path position fvec x
   (scene 13)      ;; a cutscene started here: iarg 0 = scene index (text = its name) or -1 for the
                   ;; last part (text = continue point, iarg 1 = scene count), iarg 2 = wait flag
-  (levels 14)     ;; the levels of the sender's place: iarg 0 = index, iarg 1 = count, text = name
   (art-level 15)  ;; a skeleton the sender sends (text) has its art in level iarg 0-3 (16 chars)
   (skel-def 16)   ;; a skeleton-group the sender sends, in 3 parts (iarg 0): 0 name, jgeo janim,
                   ;; max-lod, longest edge, bounds; 1 art group name, mgeo, shadow and joints,
                   ;; lod distances 0-3; 2 lod distances 4-5, global effects
+  (world-request 17) ;; to the host: a guest that joined asks for the host's world (blob reply)
+  (coop-wait 18)  ;; co-op: the sender waits for the others at story step iarg 0 (-1: no more),
+                  ;; fvec = where
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -86,6 +88,7 @@
   (sync-time 1) ;; guests follow the host's time of day
   (pvp 2)       ;; players can hit each other
   (progress 3)  ;; players share their story progress (closed task nodes)
+  (coop 4)      ;; co-op mode (else free roam)
   )
 
 ;; One player's state. 192 bytes, mirrors mp::PlayerState.
@@ -135,7 +138,7 @@
    (character int32)
    (color     int32)
    (enabled   int32)
-   (pad       int32)
+   (mode      int32)   ;; game mode when hosting: 0 free roam, 1 co-op
    )
   :size-assert #x40
   )
@@ -191,6 +194,41 @@
 (define *mp-prompt-slot* -1)
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
+
+;; Joining the host's world, and co-op (both described with their code, below).
+(deftype mp-join-state (structure)
+  ((stage    int32)      ;; guest: 0 in its own world, 1 world asked, 2 loading it, 3 going to the
+                         ;; host, 4 in the host's world
+   (since    time-frame) ;; when the stage began (real clock)
+   (foreign? symbol)     ;; playing in another player's world: nothing is saved
+   (sent     int32)      ;; counters for the test log
+   (loaded   int32)
+   (bytes    int32)
+   (blocked  int32)      ;; saves refused
+   )
+  )
+
+(define *mp-join* (new 'global 'mp-join-state))
+(set! (-> *mp-join* foreign?) #f)
+
+(deftype mp-coop-state (structure)
+  ((far-since  time-frame)  ;; guest: when it went beyond the leash
+   (pending    int32 8)     ;; task nodes held until every player is there
+   (pending-count int32)
+   (spot       vector :inline) ;; where the held node closed
+   (wait-from  int32)       ;; another player waits for us at wait-spot (-1 none)
+   (wait-spot  vector :inline)
+   (wait-time  time-frame)
+   (held       int32)       ;; counters for the test log
+   (released   int32)
+   (leashed    int32)
+   (closing?   symbol)      ;; closing a held node: let it through
+   )
+  )
+
+(define *mp-coop* (new 'global 'mp-coop-state))
+(set! (-> *mp-coop* wait-from) -1)
+(set! (-> *mp-coop* closing?) #f)
 
 ;; Values wider than 32 bits. A global symbol only holds 32 bits (goalc writes symbol values with a
 ;; 32-bit store): a handle kept in one loses its pid (upper half) and never resolves again.
@@ -471,6 +509,7 @@
   (set! (-> *mp-config* character) 0)
   (set! (-> *mp-config* color) 0)
   (set! (-> *mp-config* enabled) 0)
+  (set! (-> *mp-config* mode) 0)
   (pc-mp-config-load *mp-config*)
   (string<-charp *mp-name* (-> *mp-config* name))
   (string<-charp *mp-address* (-> *mp-config* address))
@@ -483,11 +522,21 @@
 ;; Session control (called from the start menu)
 ;; ------------------------------------------------------------------------------------------------
 
+(defun mp-apply-mode! ()
+  "The game mode of the config (Options > Multiplayer > Game mode) in the server settings."
+  (if (= (-> *mp-config* mode) 1)
+      (logior! *mp-world* (mp-world-flag coop))
+      (logclear! *mp-world* (mp-world-flag coop))
+      )
+  (none)
+  )
+
 (defun mp-host! ()
   "Start a server on the port of the address field."
   ;; only from offline: a menu button also fires on the confirm that deselects it
   (when (= *mp-mode* (mp-mode offline))
     (mp-config-save!)
+    (mp-apply-mode!)
     (pc-mp-host *mp-address* MP_MAX_PLAYERS)
     (pc-mp-message *mp-status*)
     (mp-show-message *mp-status*)
@@ -547,7 +596,8 @@
         )
     (set! (-> st seg-mask) (the-as uint 0))
     (cond
-      ((not *target*)
+      ;; joining: still at the title screen or loading the host's world
+      ((or (not *target*) (and (> (-> *mp-join* stage) 0) (< (-> *mp-join* stage) 3)))
        (logior! (-> st flags) (mp-flag hidden))
        )
       (else
@@ -629,8 +679,9 @@
           (now (pc-mp-get-player i (-> *mp-players* state i)))
           )
       (set! (-> *mp-players* valid i) now)
-      ;; a player who joins gets our story progress (and sends us theirs)
-      (if (and now (not was) (mp-online?) (logtest? *mp-world* (mp-world-flag progress)))
+      ;; a player who joins gets the host's story progress (it plays in the host's world, its own
+      ;; progress is not merged)
+      (if (and now (not was) (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag progress)))
           (mp-send-all-progress i)
           )
       ;; no announcement once the session is over: the reason it ended stays on screen
@@ -1315,17 +1366,22 @@
   (the-as (function game-task-node-info symbol int) (method-of-type game-task-node-info open!))
   )
 
+(define-extern mp-coop-hold? (function game-task-node-info symbol)) ;; "Co-op mode", below
+
 (defmethod open! ((this game-task-node-info) (arg0 symbol))
   "Stock behavior (closes the node and the parents it needs); the other players close it too
-   (multiplayer mod, no-op offline)."
-  (let* ((was-closed? (logtest? (-> this flags) (game-task-node-flag closed)))
-         (result (*mp-stock-task-node-open!* this arg0))
-         )
-    (if (and (not was-closed?) (logtest? (-> this flags) (game-task-node-flag closed)))
-        (mp-on-task-closed this)
+   (multiplayer mod, no-op offline). In co-op it waits until every player is there."
+  (if (and (not (logtest? (-> this flags) (game-task-node-flag closed))) (mp-coop-hold? this))
+      0
+      (let* ((was-closed? (logtest? (-> this flags) (game-task-node-flag closed)))
+             (result (*mp-stock-task-node-open!* this arg0))
+             )
+        (if (and (not was-closed?) (logtest? (-> this flags) (game-task-node-flag closed)))
+            (mp-on-task-closed this)
+            )
+        result
         )
-    result
-    )
+      )
   )
 
 ;; ------------------------------------------------------------------------------------------------
@@ -1340,10 +1396,322 @@
 (define-extern mp-on-vehicle-taken (function mp-event none :behavior mp-manager))
 (define-extern mp-nearest-replica-vehicle (function vector int))
 (define-extern mp-take-replica-vehicle (function int symbol :behavior mp-manager))
+
+;; ------------------------------------------------------------------------------------------------
+;; The host's world for a guest
+;; ------------------------------------------------------------------------------------------------
+
+;; A guest who joins plays in the host's world, whatever its own save: the host writes its game into
+;; a save in memory (save-game, engine/game/game-save.gc) and sends it (pc-mp-send-blob); the guest
+;; loads it as the stock Load Game does (initialize! 'game: the host's checkpoint, a loading screen,
+;; its progress, equipment and world), then goes next to the host. The guest's memory card is never
+;; read nor written for it, its own settings (language, screen, subtitles) stay its own, and while it
+;; plays in the host's world it saves nothing (auto-save-command, below): its save stays as it was.
+;; From the title screen too (Options > Multiplayer > Join the server).
+
+(define-extern mp-draw-prompt (function text-id none)) ;; overlay, below
+(define-extern mp-player-count (function int)) ;; multiplayer-menu.gc
+(define-extern mp-draw-text (function dma-buffer string int int float int))
+
+(define *mp-world-save* (the-as game-save #f)) ;; the save sent or received, allocated once
+
+(define-extern pc-mp-send-blob (function int pointer int none))
+(define-extern pc-mp-blob-ready (function int))
+(define-extern pc-mp-blob-take (function pointer int int))
+
+(defun mp-world-save-buffer ()
+  "The in-memory save: as large as a memory card save (#x1e000 bytes of tags)."
+  (if (not *mp-world-save*)
+      (set! *mp-world-save* (new 'global 'game-save #x1e000))
+      )
+  *mp-world-save*
+  )
+
+(defbehavior mp-send-world-save mp-manager ((to int))
+  "Host: our game, written into the in-memory save, to player `to` (who just joined)."
+  (let ((save (mp-world-save-buffer)))
+    (save-game *game-info* save "multiplayer")
+    (let ((size (+ (-> save type size) (-> save length))))
+      (pc-mp-send-blob to (the-as pointer (&-> save type)) (the-as int size))
+      (+! (-> *mp-join* sent) 1)
+      (set! (-> *mp-join* bytes) (the-as int size))
+      (format 0 "[multiplayer] world sent to player ~D (~D bytes, continue ~S)~%" to size (-> *game-info* current-continue name))
+      )
+    )
+  (none)
+  )
+
+(defun mp-save-keep-own-settings ((save game-save))
+  "Our own settings stay ours: the tags of `save` that set the language, the screen, subtitles,
+   camera and hints become sfx-volume tags, which load-game skips (pc-settings keeps them)."
+  (let ((tag (the-as game-save-tag (-> save tag)))
+        (end (the-as pointer (&-> save tag 0 user-int8 (-> save length))))
+        )
+    (while (< (the-as int tag) (the-as int end))
+      (case (-> tag elt-type)
+        (((game-save-elt language)
+          (game-save-elt screenx)
+          (game-save-elt screeny)
+          (game-save-elt play-hints)
+          (game-save-elt video-mode)
+          (game-save-elt aspect-ratio)
+          (game-save-elt camera-stick-dir)
+          (game-save-elt subtitle-language)
+          (game-save-elt stereo-mode)
+          (game-save-elt brightness)
+          (game-save-elt contrast)
+          (game-save-elt audio-language)
+          (game-save-elt flip-horizontal)
+          (game-save-elt flip-vertical)
+          )
+         (set! (-> tag elt-type) (game-save-elt sfx-volume))
+         )
+        )
+      (set! tag (the-as game-save-tag (&+ (the-as pointer tag) (logand -16 (+ (* (-> tag elt-size) (-> tag elt-count)) 31)))))
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-load-world-save mp-manager ()
+  "Guest: the host's world arrived: load it as the stock Load Game does (game-save.gc, auto-save
+   restore). #t when it is loading."
+  (let* ((save (mp-world-save-buffer))
+         (n (pc-mp-blob-take (the-as pointer (&-> save type)) (the-as int (+ (-> save type size) #x1e000))))
+         )
+    ;; the type word came from the host's memory
+    (set! (-> save type) game-save)
+    (cond
+      ((and (> n (the-as int (-> save type size))) (= (-> save version) 4))
+       (mp-save-keep-own-settings save)
+       (set! (-> *mp-join* foreign?) #t)
+       (+! (-> *mp-join* loaded) 1)
+       (set! (-> *mp-join* bytes) n)
+       (format 0 "[multiplayer] loading the host's world (~D bytes)~%" n)
+       (set! (-> *game-info* mode) 'play)
+       (initialize! *game-info* 'game save (the-as string #f) (the-as resetter-spec #f))
+       (set-master-mode 'game)
+       #t
+       )
+      (else
+        (format 0 "[multiplayer] the host's world could not be read (~D bytes, version ~D)~%" n (-> save version))
+        #f
+        )
+      )
+    )
+  )
+
+(defun mp-in-game? ()
+  "#t when our player is in the game, out of the title screen and of a loading screen."
+  (and *target*
+       (not (= (level-status? *level* 'title #f) 'active))
+       (-> *target* next-state)
+       (not (= (-> *target* next-state name) 'target-continue))
+       (not (= (-> *target* next-state name) 'target-title))
+       )
+  )
+
+;; MOD multiplayer -- no save while in another player's world (engine/game/game-save.gc). The card
+;; operations go through auto-save-command: the pause menu's saves, checkpoints and missions'
+;; auto-saves, a new game's first save.
+(define-perm *mp-stock-auto-save-command* (function symbol int int process-tree symbol (pointer auto-save))
+  auto-save-command
+  )
+
+(defun auto-save-command ((arg0 symbol) (arg1 int) (arg2 int) (arg3 process-tree) (arg4 symbol))
+  "Stock behavior (multiplayer mod): no save is written while the player plays in another player's
+   world, its own save stays as it was; the menu that asked is told it failed. Back at the title
+   screen, or loading its own save, the player is in its own world again."
+  (when (and (-> *mp-join* foreign?)
+             (or (= arg0 'restore) (= (level-status? *level* 'title #f) 'active))
+             )
+    (set! (-> *mp-join* foreign?) #f)
+    )
+  (cond
+    ((and (-> *mp-join* foreign?)
+          (or (= arg0 'save) (= arg0 'save-last) (= arg0 'auto-save) (= arg0 'create-file) (= arg0 'format-card) (= arg0 'unformat-card))
+          )
+     (+! (-> *mp-join* blocked) 1)
+     (format 0 "[multiplayer] no save in another player's world (~A)~%" arg0)
+     (if (and arg3 (type? arg3 process))
+         (send-event (the-as process arg3) 'notify 'error (mc-status-code no-process))
+         )
+     (the-as (pointer auto-save) #f)
+     )
+    (else
+      (*mp-stock-auto-save-command* arg0 arg1 arg2 arg3 arg4)
+      )
+    )
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Co-op mode
+;; ------------------------------------------------------------------------------------------------
+
+;; The host picks the game mode (Options > Multiplayer > Game mode). In free roam every player goes
+;; where it wants in the shared world. In co-op the players share one place: a guest never
+;; simulates NPCs of its own (the host's are shown everywhere it goes), a guest that strays more than
+;; MP_COOP_LEASH from the host comes back next to it, everyone follows the host's weather, and a
+;; story step (a task node) only closes once every player stands where it closed: the player there
+;; waits for the others, who are told where to go.
+
+(defconstant MP_COOP_LEASH (meters 150))
+(defconstant MP_COOP_TOGETHER (meters 25))
+
+
+(defun mp-coop? ()
+  "#t in a co-op session."
+  (and (mp-online?) (logtest? *mp-world* (mp-world-flag coop)))
+  )
+
+(defun mp-everyone-near? ((pos vector) (radius float))
+  "#t when every other player stands within `radius` of `pos` (or there is no other player)."
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i)))
+      (if (and st (< radius (vector-vector-distance (-> st trans) pos)))
+          (return #f)
+          )
+      )
+    )
+  #t
+  )
+
+(defun mp-coop-hold? ((node game-task-node-info))
+  "Co-op: hold the closure of `node` (#t) when it closes on our player's doing while another player
+   is away from here; it closes once everyone came (mp-update-coop). Closures from another player
+   (shared progress), from loading a world, from a cutscene, or while alone pass."
+  (when (and (mp-coop?)
+             (not *mp-progress-replaying*)
+             (not (-> *mp-coop* closing?))
+             (> (mp-player-count) 0)
+             *target*
+             (mp-in-game?)
+             (not (and *scene-player* (-> *scene-player* 0)))
+             (not (mp-everyone-near? (-> *target* control trans) MP_COOP_TOGETHER))
+             )
+    (let ((cs *mp-coop*)
+          (index (get-idx-in-task-list node))
+          (known? #f)
+          )
+      (dotimes (i (-> cs pending-count))
+        (if (= (-> cs pending i) index)
+            (set! known? #t)
+            )
+        )
+      (when (and (not known?) (< (-> cs pending-count) 8))
+        (set! (-> cs pending (-> cs pending-count)) index)
+        (+! (-> cs pending-count) 1)
+        (vector-copy! (-> cs spot) (-> *target* control trans))
+        (+! (-> cs held) 1)
+        (format 0 "[multiplayer] co-op: task node ~D waits for the other players~%" index)
+        ;; the others are told where to come
+        (let ((ev (new 'stack 'mp-event)))
+          (set! (-> ev kind) (mp-event-kind coop-wait))
+          (set! (-> ev to) -1)
+          (set! (-> ev iarg 0) index)
+          (vector-copy! (-> ev fvec) (-> *target* control trans))
+          (pc-mp-send-event ev)
+          )
+        )
+      #t
+      )
+    )
+  )
+
+(defun mp-apply-coop-wait ((ev mp-event))
+  "Another player waits for us at a story step (iarg 0 = node, -1 none any more)."
+  (let ((cs *mp-coop*))
+    (cond
+      ((>= (-> ev iarg 0) 0)
+       (set! (-> cs wait-from) (-> ev from))
+       (vector-copy! (-> cs wait-spot) (-> ev fvec))
+       (set-time! (-> cs wait-time))
+       )
+      ((= (-> cs wait-from) (-> ev from))
+       (set! (-> cs wait-from) -1)
+       )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-coop mp-manager ()
+  "Co-op, every frame: the held story steps close once every player is there; a guest beyond the
+   leash comes back next to the host; the host's weather."
+  (let ((cs *mp-coop*))
+    (cond
+      ((not (mp-coop?))
+       (set! (-> cs pending-count) 0)
+       (set! (-> cs wait-from) -1)
+       )
+      (else
+        ;; held steps: everyone is there, they close (and with shared progress, everywhere)
+        (when (and (> (-> cs pending-count) 0) (mp-everyone-near? (-> cs spot) MP_COOP_TOGETHER))
+          (set! (-> cs closing?) #t)
+          (dotimes (i (-> cs pending-count))
+            (let ((node (-> *game-info* sub-task-list (-> cs pending i))))
+              (if (not (logtest? (-> node flags) (game-task-node-flag closed)))
+                  (open! node 'event)
+                  )
+              )
+            )
+          (set! (-> cs closing?) #f)
+          (+! (-> cs released) (-> cs pending-count))
+          (format 0 "[multiplayer] co-op: everyone is here, ~D task node(s) close~%" (-> cs pending-count))
+          (set! (-> cs pending-count) 0)
+          (mp-send-event (mp-event-kind coop-wait) -1 -1 0.0)
+          )
+        ;; the leash
+        (when (and (= *mp-mode* (mp-mode client)) (= (-> *mp-join* stage) 4) (mp-in-game?))
+          (let ((host (mp-remote-state 0)))
+            (cond
+              ((or (not host) (< (vector-vector-distance (-> *target* control trans) (-> host trans)) MP_COOP_LEASH))
+               (set! (-> cs far-since) 0)
+               )
+              ((zero? (-> cs far-since))
+               (set-time! (-> cs far-since))
+               )
+              ((time-elapsed? (-> cs far-since) (seconds 3))
+               (set! (-> cs far-since) 0)
+               (+! (-> cs leashed) 1)
+               (set! *mp-request-teleport* 0)
+               (mp-show-message "Co-op: back next to the host")
+               )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-coop-wait ()
+  "Co-op: the step another player waits for us at, or ours waiting for the others."
+  (cond
+    ((> (-> *mp-coop* pending-count) 0)
+     (mp-draw-prompt (text-id progress-mp-coop-wait))
+     )
+    ((and (>= (-> *mp-coop* wait-from) 0) *target*)
+     (string<-charp *mp-temp-string* (-> *mp-players* state (-> *mp-coop* wait-from) name))
+     (format
+       (clear *mp-status*)
+       "~S waits for you here (~,,0m m away)"
+       *mp-temp-string*
+       (vector-vector-distance (-> *target* control trans) (-> *mp-coop* wait-spot))
+       )
+     (with-dma-buffer-add-bucket ((buf (-> (current-frame) global-buf)) (bucket-id debug-no-zbuf1))
+       (mp-draw-text buf *mp-status* 256 300 0.5)
+       )
+     )
+    )
+  (none)
+  )
+
+
 (define-extern mp-replay-effect (function mp-event none))
 (define-extern mp-apply-elevator (function mp-event none))
 (define-extern mp-apply-scene (function mp-event none :behavior mp-manager))
-(define-extern mp-apply-levels (function mp-event none))
 (define-extern mp-apply-art-level (function mp-event none))
 (define-extern mp-apply-skel-def (function mp-event none))
 (define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
@@ -1605,6 +1973,10 @@
     (set! (-> ev to) -1)
     (set! (-> ev iarg 0) (the-as int *mp-world*))
     (set! (-> ev fvec x) (-> *time-of-day-context* time))
+    ;; the weather: clouds, fog, and the special weather (storms)
+    (set! (-> ev fvec y) (-> *mood-control* current-interp cloud))
+    (set! (-> ev fvec z) (-> *mood-control* current-interp fog))
+    (set! (-> ev fvec w) (-> *mood-control* current-special-interp))
     (let ((clocks (the-as (pointer int32) (-> ev text))))
       (dotimes (i (-> *mp-synced-clocks* length))
         (set! (-> clocks i) (the-as int (-> *display* clock (-> *mp-synced-clocks* i) frame-counter)))
@@ -1643,6 +2015,19 @@
   (when (and (= *mp-mode* (mp-mode client)) (zero? (-> ev from)))
     (set! *mp-world* (the-as mp-world-flag (-> ev iarg 0)))
     (mp-apply-clocks ev)
+    ;; the host's weather, in co-op or when following its time of day: ours stops changing at random
+    ;; (mood-control override) and takes the host's clouds, fog and special weather
+    (cond
+      ((logtest? *mp-world* (mp-world-flag coop sync-time))
+       (set! (-> *mood-control* overide-weather-flag) #t)
+       (set! (-> *mood-control* overide cloud) (-> ev fvec y))
+       (set! (-> *mood-control* overide fog) (-> ev fvec z))
+       (set! (-> *mood-control* target-special-interp) (-> ev fvec w))
+       )
+      (else
+        (set! (-> *mood-control* overide-weather-flag) #f)
+        )
+      )
     (when (and (logtest? *mp-world* (mp-world-flag sync-time)) *time-of-day*)
       (let* ((host-time (-> ev fvec x))
              (diff (fabs (- host-time (-> *time-of-day-context* time))))
@@ -1676,14 +2061,21 @@
         (((mp-event-kind progress))
          (mp-apply-progress ev)
          )
+        (((mp-event-kind world-request))
+         ;; a host at the title screen or loading has no world to give yet: the guest asks again
+         ;; every 10 s
+         (if (and (= *mp-mode* (mp-mode host)) (mp-in-game?))
+             (mp-send-world-save (-> ev from))
+             )
+         )
+        (((mp-event-kind coop-wait))
+         (mp-apply-coop-wait ev)
+         )
         (((mp-event-kind elevator))
          (mp-apply-elevator ev)
          )
         (((mp-event-kind scene))
          (mp-apply-scene ev)
-         )
-        (((mp-event-kind levels))
-         (mp-apply-levels ev)
          )
         (((mp-event-kind art-level))
          (mp-apply-art-level ev)
@@ -1832,7 +2224,6 @@
                 (set! *mp-ride-slot* (-> self ride-want))
                 (send-event *target* 'change-mode 'grab-ride #t :from (ppointer->process seat))
                 (send-event *target* 'draw #f)
-                (mp-show-message "Press triangle to get off")
                 )
               )
             (set! (-> self ride-want) -1)
@@ -1925,10 +2316,11 @@
           )
       (dotimes (i MP_MAX_PLAYERS)
         (let ((st (mp-remote-state i)))
+          ;; distance to the vehicle where its player state puts it (what is drawn here), whatever
+          ;; the level names of the two players' places
           (when (and st
                      (logtest? (-> st flags) (mp-flag driving))
                      (>= (-> st veh-type) 0)
-                     (mp-level-active? (-> st level))
                      )
             (let ((d (vector-vector-distance (-> *target* control trans) (-> st veh-trans))))
               (when (< d best-dist)
@@ -1982,6 +2374,55 @@
   (none)
   )
 
+(defbehavior mp-update-join mp-manager ()
+  "Guest: ask the host for its world once connected (again after 10 s without it), load it, then go
+   next to the host."
+  (let ((js *mp-join*))
+    (cond
+      ((!= *mp-mode* (mp-mode client))
+       (set! (-> js stage) 0)
+       )
+      ((and (= (-> js stage) 0) (mp-remote-state 0))
+       (mp-send-event (mp-event-kind world-request) 0 0 0.0)
+       (set! (-> js stage) 1)
+       (set-time! (-> js since))
+       )
+      ((= (-> js stage) 1)
+       (cond
+         ((> (pc-mp-blob-ready) 0)
+          (if (mp-load-world-save)
+              (set! (-> js stage) 2)
+              (set! (-> js stage) 0)
+              )
+          (set-time! (-> js since))
+          )
+         ((time-elapsed? (-> js since) (seconds 10))
+          (set! (-> js stage) 0)
+          )
+         )
+       )
+      ;; the loading screen is over: next to the host
+      ((and (= (-> js stage) 2) (time-elapsed? (-> js since) (seconds 1)) (mp-in-game?))
+       (set! *mp-request-teleport* 0)
+       (set! (-> js stage) 3)
+       (set-time! (-> js since))
+       )
+      ;; next to the host once the teleport is over (through the host's continue point when its
+      ;; level is not active here yet, mp-update-pending-teleport), or after 30 s anyway
+      ((and (= (-> js stage) 3)
+            (time-elapsed? (-> js since) (seconds 1))
+            (or (and (< *mp-request-teleport* 0) (< (-> self tp-slot) 0) (mp-in-game?))
+                (time-elapsed? (-> js since) (seconds 30))
+                )
+            )
+       (set! (-> js stage) 4)
+       (format 0 "[multiplayer] in the host's world~%")
+       )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-update-pending-teleport mp-manager ()
   "Finish a teleport to a player once the continue point loaded its level."
   (when (>= *mp-request-teleport* 0)
@@ -2012,6 +2453,8 @@
       (set-time! (-> self world-time))
       (mp-send-world)
       )
+    (mp-update-join)
+    (mp-update-coop)
     )
   (mp-manager-update-puppets)
   (cond
@@ -2145,6 +2588,25 @@
   (none)
   )
 
+(defun mp-draw-prompt ((id text-id))
+  "Prompt `id` (a text with its <PAD_...> button icon), where and as the game draws its own
+   vehicle prompt (vehicle-method-144, levels/city/traffic/vehicle/vehicle-util.gc)."
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* 22 320 0.0 (font-color default) (font-flags shadow kerning)))
+        (lang (-> *setting-control* user-default language))
+        )
+    (set-width! ctx 350)
+    (set-height! ctx 80)
+    (set! (-> ctx scale) (if (or (= lang (language-enum korean)) (= lang (language-enum russian)))
+                             0.9
+                             0.7
+                             )
+          )
+    (set! (-> ctx flags) (font-flags shadow kerning large))
+    (print-game-text (lookup-text! *common-text* id #f) ctx #f 44 (bucket-id hud-draw-hud-alpha))
+    )
+  (none)
+  )
+
 (defun mp-draw-overlay ()
   "Draw the multiplayer overlay. Runs from the hook, after the frame's draw."
   (when (and *target* (not (paused?)) (not (movie?)))
@@ -2163,16 +2625,27 @@
               )
           )
         )
-      (when (>= *mp-prompt-replica* 0)
-        (mp-draw-text buf "Triangle: take this vehicle" 256 330 0.5)
-        )
-      (when (>= *mp-prompt-slot* 0)
-        (string<-charp *mp-temp-string* (-> *mp-players* state *mp-prompt-slot* name))
-        (format (clear *mp-status*) "Triangle: steal ~S's vehicle. Hold: ride along" *mp-temp-string*)
-        (mp-draw-text buf *mp-status* 256 330 0.5)
-        )
       (when (< (- (mp-now) (-> *mp-globals* message-time)) (seconds 4))
         (mp-draw-text buf *mp-message* 256 360 0.5)
+        )
+      )
+    ;; prompts with their button icon, as the game draws its own (outside the bucket above: they
+    ;; fill their own DMA)
+    (cond
+      ((>= *mp-prompt-slot* 0)
+       (mp-draw-prompt (text-id progress-mp-prompt-steal))
+       )
+      ((>= *mp-prompt-replica* 0)
+       (mp-draw-prompt (text-id progress-mp-prompt-take))
+       )
+      ((>= *mp-ride-slot* 0)
+       (mp-draw-prompt (text-id progress-mp-prompt-get-off))
+       )
+      ((and (> (-> *mp-join* stage) 0) (< (-> *mp-join* stage) 3))
+       (mp-draw-prompt (text-id progress-mp-joining))
+       )
+      (else
+        (mp-draw-coop-wait)
         )
       )
     )
@@ -2204,6 +2677,8 @@
 ;; Automated tests (multiplayer-test.gc), inert unless MP_TEST_SCRIPT is set.
 (define-extern pc-mp-test-active? (function symbol))
 (define-extern mp-test-update (function none))
+
+(define-extern mp-keep-seen-npcs (function none)) ;; multiplayer-world.gc
 
 (defun mp-frame-hook ()
   "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
@@ -2238,6 +2713,7 @@
          )
        )
      (mp-draw-overlay)
+     (mp-keep-seen-npcs)
      )
     ((or (!= *mp-mode* (mp-mode offline)) (handle->process (-> *mp-globals* manager)))
      (mp-shutdown)

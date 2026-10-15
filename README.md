@@ -11,29 +11,38 @@
 ---
 
 ## Overview
-Jak 3 online: host or join a server from the pause menu and explore the world together as Jak or Daxter.
+Jak 3 online: host or join a server, from the title screen or the pause menu, and play the
+host's world together as Jak or Daxter, in free roam or in co-op.
 
 - **Target Game:** Jak 3
 - **Repository:** [`whozghiar/jak3-multiplayer`](https://github.com/whozghiar/jak3-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
 
 ## Key Features
-- **Host or join from the start menu:** START > Options > Multiplayer. Type the server address
+- **Host or join, even from the title screen:** Options > Multiplayer. Type the server address
   (`ip:port`) and your player name with the D-pad, then host or join. Up to 8 players.
+- **The host's world for everyone:** a player who joins loads the host's game (its progress,
+  equipment and place, after a loading screen) and appears next to the host. Their own save is
+  neither loaded nor overwritten: nothing is saved while they play in the host's world.
+- **Two game modes, chosen by the host:**
+  - **Free roam:** everyone goes where they want; a player who goes far from the others keeps a
+    living world around them.
+  - **Co-op:** the players stay together. A guest who strays too far comes back next to the
+    host, the weather is the host's, and a mission step only completes once every player is
+    there: the player who reached it waits, and the others are told where to come.
 - **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere.
 - **Your color:** ten colors, shown as a small square before your name and as your dot on the
   minimap.
 - **See each other:** every player appears with their name and health bar over their head, as a
-  dot on the minimap, with Daxter on their shoulder, their gun, their shots and the vehicle they
-  drive, in their own outfit, moving exactly as they move on their own screen, with their effects
-  and sounds.
+  dot on the minimap, with Daxter on their shoulder, their gun and its laser sight, their shots,
+  their hoverboard and the vehicle they drive, in their own outfit, moving exactly as they move
+  on their own screen, with their effects and sounds.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
-  with their movements, effects and sounds. A player who goes far from the others keeps a living
-  world around them, which the players near them share; your game loads that faraway place in the
-  background, so its people and vehicles show up even across the map. Enemies killed, crates
-  broken and pickups taken disappear for everybody.
+  with their movements, effects and sounds, and they react to every player's shots. A player who
+  goes far from the others keeps a living world around them, which the players near them share.
+  Enemies killed, crates broken and pickups taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
   triangle to ride next to them when it has two seats. Guests can also take the host's traffic
-  vehicles.
+  vehicles. The prompt shows the button, like the game's own.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
 - **Players can hit each other:** punches and shots between players hurt and knock back (the host
   can turn it off).
@@ -42,8 +51,9 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 - **Shared story:** a mission completed by one player is completed for everybody, with its
   reward; a player who joins catches up with the others; cutscenes play for the players together
   (the host can turn it off).
-- **Same world:** doors open for whoever stands at them, elevators move for everyone, moving and
-  floating platforms are in the same place on every screen, and they feel every player's weight.
+- **Same world:** doors open for whoever stands at them, an elevator is one elevator for
+  everyone (where one player rides it, it rides on every screen), moving and floating platforms
+  are in the same place on every screen, and they feel every player's weight.
 - **Administration for the host:** kick or ban a player, teleport players to you, allow or forbid
   cheats for guests and players hitting each other, share story progress and your time of day,
   stop the server.
@@ -55,8 +65,9 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 3. Set **Player name**, **Character**, **Color** and **Server address**. To edit a text field:
    confirm, then up / down to change a letter, left / right to move, square to delete, confirm
    to save (triangle cancels).
-4. The host picks **Host a server**; the others enter the host's address and pick **Join the
-   server**.
+4. The host picks the **Game mode** (Free roam or Co-op) and **Host a server**; the others enter
+   the host's address and pick **Join the server**, in game or from the title screen (Options >
+   Multiplayer).
 
 | Action | Control |
 |---|---|
@@ -71,8 +82,10 @@ Jak 3 online: host or join a server from the pause menu and explore the world to
 > host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
 > mod.
 
-Each player keeps their own save, health and items. Story progress is shared: missions completed
-by anyone are completed for all.
+A player who joins plays in the host's world: its progress, items and place. Their own save stays
+as it was: it is not loaded, and nothing is saved while they play in the host's world (load your
+own save, or go back to the title screen, to save again). Story progress is shared: missions
+completed by anyone are completed for all.
 
 ## Download & Play via OpenGOAL Launcher (Players)
 

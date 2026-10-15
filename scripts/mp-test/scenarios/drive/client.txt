@@ -1,0 +1,12 @@
+# Driving, guest side: stands 8 m from the host's buggy and logs its copy's root every frame while
+# the host drives away.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+54 goto-player 0 8 0
+55 face-player 0
+57 log-path v-toad 420
+60 screenshot driving
+64 log

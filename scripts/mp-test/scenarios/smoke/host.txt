@@ -5,6 +5,7 @@
 40 log
 40 screenshot boot
 42 host 0.0.0.0:7777
+44.9 wait-player 1
 58 log-levels
 58 log-shaders
 60 log

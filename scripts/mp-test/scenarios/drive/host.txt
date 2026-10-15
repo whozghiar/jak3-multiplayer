@@ -1,0 +1,12 @@
+# Driving, host side: gets in a buggy and drives straight for 6 s, logging the buggy's root every
+# frame (each state it sends). The guest logs its copy's root every frame: the copy's path against
+# the host's (compare_poses.py), how smoothly a driven vehicle moves elsewhere.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 15
+57 log-path v-toad 420
+57.2 press x 6000
+64 log

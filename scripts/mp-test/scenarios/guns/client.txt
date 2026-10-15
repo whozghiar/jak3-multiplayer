@@ -1,0 +1,47 @@
+# Every gun mod, guest side: watches the host fire each of the 12, then fires each itself.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 7
+53 face-player 0
+102 log
+105 face-player 0
+106 gun 26
+107 press r1 1200
+108.5 log
+110 gun 27
+111 press r1 1200
+112.5 log
+114 gun 28
+115 press r1 1200
+116.5 log
+118 gun 29
+119 press r1 1200
+120.5 log
+122 gun 30
+123 press r1 1200
+124.5 log
+126 gun 31
+127 press r1 1200
+128.5 log
+130 gun 32
+131 press r1 1200
+132.5 log
+134 gun 33
+135 press r1 1200
+136.5 log
+138 gun 34
+139 press r1 1200
+140.5 log
+142 gun 35
+143 press r1 1200
+144.5 log
+146 gun 36
+147 press r1 1200
+148.5 log
+150 gun 37
+151 press r1 1200
+152.5 log
+156 log

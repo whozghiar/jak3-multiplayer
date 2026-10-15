@@ -1,0 +1,13 @@
+# Joining the host's world, host side: plays its save (Spargus); the guest, elsewhere with a
+# different progress, joins: it gets the host's world and comes next to the host. The host's own
+# progress stays as it was (the guest's is not merged).
+1 enable
+1 name Host
+1 color 1
+1 mode 0
+30 log-tasks
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+75 log-join
+75 log-tasks
+76 log

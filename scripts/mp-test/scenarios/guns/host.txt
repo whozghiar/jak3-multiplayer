@@ -1,0 +1,47 @@
+# Every gun mod, both ways: the host fires each of the 12 while the guest watches, then the guest fires
+# each while the host watches. A copy of a shot that crashes the viewer stops that instance.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 face-player 1
+55 gun 26
+56 press r1 1200
+57.5 log
+59 gun 27
+60 press r1 1200
+61.5 log
+63 gun 28
+64 press r1 1200
+65.5 log
+67 gun 29
+68 press r1 1200
+69.5 log
+71 gun 30
+72 press r1 1200
+73.5 log
+75 gun 31
+76 press r1 1200
+77.5 log
+79 gun 32
+80 press r1 1200
+81.5 log
+83 gun 33
+84 press r1 1200
+85.5 log
+87 gun 34
+88 press r1 1200
+89.5 log
+91 gun 35
+92 press r1 1200
+93.5 log
+95 gun 36
+96 press r1 1200
+97.5 log
+99 gun 37
+100 press r1 1200
+101.5 log
+104 gun
+105 face-player 1
+153 log

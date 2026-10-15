@@ -1643,6 +1643,15 @@
   (progress-mp-color-cyan #x1527)
   (progress-mp-color-pink #x1528)
   (progress-mp-color-gray #x1529)
+  (progress-mp-prompt-take #x152a)
+  (progress-mp-prompt-steal #x152b)
+  (progress-mp-prompt-get-off #x152c)
+  (progress-mp-mode #x1530)
+  (progress-mp-mode-free #x1531)
+  (progress-mp-mode-coop #x1532)
+  (progress-mp-title #x1533)
+  (progress-mp-coop-wait #x1534)
+  (progress-mp-joining #x1535)
   )
 ;; ---text-id
 

@@ -7,6 +7,7 @@
 40 log-tasks
 41 close-task
 42 log-tasks
+44.9 wait-player 1
 60 close-task
 62 log-tasks
 70 log-tasks
