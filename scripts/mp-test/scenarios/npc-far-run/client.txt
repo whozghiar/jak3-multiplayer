@@ -1,0 +1,17 @@
+# NPCs near a player far from the host's camera, guest side: 60 m from the host, among the host's
+# NPCs; they must keep moving (log-motion 60: the copies drawn within 60 m, moved in 2 s).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+54 goto-player 0 60 0
+58 log-me
+62 log-motion 60
+64 log-motion 60
+72 log-motion 60
+74 log-motion 60
+82 log-motion 60
+84 log-motion 60
+84.5 screenshot far
+100 log

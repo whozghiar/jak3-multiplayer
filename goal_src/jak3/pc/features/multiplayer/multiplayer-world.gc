@@ -766,6 +766,8 @@
       (set! (-> st flags) (mp-actor-flag owned shot))
       (set! (-> st seg-mask) (the-as uint 0))
       (set! (-> st skel 0) (the-as uint 0))
+      ;; its type after the empty name: its copy draws what the shot carries along (a light trail)
+      (copyn-charp<-string (&-> st skel 1) (symbol->string (-> proc type symbol)) 30)
       (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
       (+! *mp-collect-count* 1)
       )
@@ -785,6 +787,8 @@
     )
   #f
   )
+
+(define-extern mp-collect-weapon (function process object))
 
 (defun mp-pack-laser ((st mp-actor-state))
   "Our gun's state `st`: the laser sight as our gun draws it (gun-info-method-9), where it starts
@@ -835,6 +839,7 @@
         )
       )
     (iterate-process-tree *target* (the-as (function object object) mp-collect-shot) *null-kernel-context*)
+    (iterate-process-tree *target* (the-as (function object object) mp-collect-weapon) *null-kernel-context*)
     (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
       (let ((veh (handle->process (-> *target* pilot vehicle))))
         (when (and veh (type? veh process-drawable))
@@ -1044,6 +1049,7 @@
 
 (define-extern mp-replica-vanished (function process-drawable string none))
 
+(define *mp-test-hide-copies* #f) ;; test switch (hide-copies): every copy hidden
 (define *mp-trace-vanish* #f) ;; trace-vanish: log each copy that vanished, faded or died near us
 
 (defconstant MP_LINGER_HOLD (seconds 3)) ;; a copy left in our view holds this long (a late state)
@@ -1195,7 +1201,11 @@
           (logclear! (-> self focus-status) (focus-status dead))
           )
       )
-    (move-to-point! (-> self root) (-> st trans))
+    (let ((was (vector-copy! (new 'stack-no-clear 'vector) (-> self root trans))))
+      (move-to-point! (-> self root) (-> st trans))
+      ;; its cloth, if it has one: reset after a jump, hidden while the copy is off screen
+      (mp-cloth-follow self (< (meters 10) (vector-vector-distance was (-> self root trans))))
+      )
     (quaternion-copy! (-> self root quat) (-> st quat))
     (let ((scale (if (< 0.01 (-> st trans w))
                      (-> st trans w)
@@ -1234,6 +1244,9 @@
         )
       )
     (mp-replica-fade)
+    (if *mp-test-hide-copies*
+        (logior! (-> self draw status) (draw-control-status no-draw))
+        )
     ;; 0 means the host's NPC does not use body segments: keep the default
     (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
         (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
@@ -1592,6 +1605,10 @@
     )
   )
 
+;; test log (log-weapons): wave concussor and mass inverter copies drawn here, arc frames drawn,
+;; needle lazer trails
+(define *mp-weapons-shown* (new 'static 'boxed-array :type int32 0 0 0 0))
+
 (defbehavior mp-fx-copy-init-by-other mp-fx-copy ((st mp-actor-state))
   "A copy of shot `st`: an intangible point that plays the owner's emitters and sounds."
   (set! (-> self id) (-> st id))
@@ -1614,6 +1631,20 @@
   (dotimes (i MP_FX_TRACKERS)
     (set! (-> self fx-group i) -1)
     (set! (-> self fx-tracker i) (the-as handle #f))
+    )
+  ;; the needle lazer's shot draws a light trail where it flies (its type follows the empty name,
+  ;; mp-add-shot): a stock trail that follows this copy, dying with it
+  (when (string-charp= "gun-blue-shot-3" (&-> st skel 1))
+    (+! (-> *mp-weapons-shown* 3) 1)
+    (light-trail-tracker-spawn
+      light-trail-tracker-projectile
+      :to self
+      :param-list ((tracked-obj (process->handle self))
+       (appearance *blue-shot-trail*)
+       (max-num-crumbs (the int (* 0.2 (the float (-> *blue-shot-trail* max-age)))))
+       (track-immediately? #t)
+       )
+      )
     )
   (go mp-fx-copy-idle)
   )
@@ -1974,6 +2005,42 @@
   )
 
 
+;; MOD multiplayer -- an object this machine simulates runs as near another player as near our camera.
+;; The stock run-logic? pauses an actor-pause process farther than *ACTOR-bank* pause-dist (50 m) from
+;; the camera, and an idle enemy off screen (engine/entity/entity.gc, engine/ai/enemy.gc): the NPCs
+;; near another player but far from our camera stood frozen on that player's screen. define-perm
+;; keeps the stock methods when this file is reloaded in a REPL session.
+(define *mp-run-near-others* #t) ;; test switch (run-near-others): #f for the counter-test
+
+(define-perm *mp-stock-pd-run-logic?* (function process-drawable symbol)
+  (the-as (function process-drawable symbol) (method-of-type process-drawable run-logic?))
+  )
+
+(define-perm *mp-stock-enemy-run-logic?* (function enemy symbol)
+  (the-as (function enemy symbol) (method-of-type enemy run-logic?))
+  )
+
+(defun mp-near-other-player? ((proc process-drawable))
+  "#t when another player stands within pause distance of `proc` (the distance the stock pause
+   allows from our camera), while online."
+  (and *mp-run-near-others*
+       (mp-online?)
+       (> (mp-player-count) 0)
+       (nonzero? (-> proc root))
+       (< (mp-remote-distance (-> proc root trans)) (+ (-> *ACTOR-bank* pause-dist) (-> proc root pause-adjust-distance)))
+       )
+  )
+
+(defmethod run-logic? ((this process-drawable))
+  "Stock answer, or #t near another player (multiplayer mod, the stock answer offline)."
+  (or (*mp-stock-pd-run-logic?* this) (mp-near-other-player? this))
+  )
+
+(defmethod run-logic? ((this enemy))
+  "Stock answer, or #t near another player (multiplayer mod, the stock answer offline)."
+  (or (*mp-stock-enemy-run-logic?* this) (mp-near-other-player? this))
+  )
+
 (defun mp-keep-seen-npcs ()
   "Authority, after the frame's draw (per-frame hook): the NPCs we send within 60 m of another
    player are marked on screen for the next frame's logic. Citizens, guards and traffic leave when
@@ -2052,6 +2119,421 @@
           (mp-world-client-stop)
           )
       )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Weapons that are not shots
+;; ------------------------------------------------------------------------------------------------
+
+;; The wave concussor (red 2), the mass inverter (dark 2) and the arc wielder (blue 2) are not
+;; projectiles: a shockwave process, a gravity field and a lightning tracker under the gun or the
+;; player. The player's machine tells the others when one goes off (weapon event); they draw it
+;; with the stock visual pieces, their damage code left out: the owner's applies the blows, to
+;; copies and to other players' puppets. The needle lazer's (blue 3) shots are sent as shots: their
+;; light trail is drawn on their copies (mp-fx-copy-init-by-other).
+
+;; A copy of the wave concussor's explosion: the stock shockwave from its explosion on, hurting
+;; nobody, without the shooter's pad buzz.
+(deftype mp-red2-copy (gun-red-2-shockwave)
+  ()
+  )
+
+(defmethod find-targets-and-attack! ((this mp-red2-copy))
+  "A copy hurts nobody: the owner's wave applies the blows."
+  (none)
+  )
+
+(defstate explode (mp-red2-copy)
+  :virtual #t
+  :enter (behavior ()
+    ;; the stock enter (engine/target/gun/gun-red-shot.gc), without the pad buzz, the sound placed
+    (sound-play "red2-shot" :position (-> self origin))
+    (set-time! (-> self state-time))
+    (set! (-> self max-radius) (lerp (-> self min-charge-radius) (-> self max-charge-radius) (-> self strength)))
+    (let ((f0-15 (/ (-> self max-radius) (meters 20))))
+      (let ((f1-5 (/ (* 2.0 (- (* 163840.0 f0-15) (-> self max-radius))) (square f0-15))))
+        (set! (-> *part-id-table* 353 init-specs 9 initial-valuef) (* 1.2 f1-5))
+        )
+      (let ((v1-15 (the int (* 150.0 f0-15))))
+        (set! (-> *part-id-table* 354 init-specs 3 initial-valuef) (the-as float (+ v1-15 -25)))
+        (set! (-> *part-id-table* 354 init-specs 3 random-rangef) (the-as float (+ v1-15 -5)))
+        )
+      )
+    (adjust-height-and-radius self)
+    (set! (-> self current-intensity) (-> self strength))
+    (spawn-ring self)
+    (set! (-> self num-collision-pts-to-generate)
+          (the int (fmax 6.0 (fmin 64.0 (* 64.0 (/ (-> self max-ground-radius) (-> self max-charge-radius))))))
+          )
+    (generate-order-array self)
+    (set! (-> self current-ring-alpha) 1.0)
+    (set! (-> self current-burst-alpha) 1.0)
+    (set! (-> self current-warp-alpha) 1.0)
+    )
+  )
+
+(defbehavior mp-red2-copy-init-by-other mp-red2-copy ((pos vector) (strength float))
+  "The stock init (gun-red-2-shockwave-init-by-other) at `pos` with `strength`, straight to its
+   explosion: no charge (its particles follow our own player's gun)."
+  (set! (-> self current-intensity) 0.0)
+  (set! (-> self current-radius) 0.0)
+  (set! (-> self current-warp-radius) 0.0)
+  (set! (-> self current-burst-radius) 0.0)
+  (set! (-> self height-off-ground) 0.0)
+  (set! (-> self current-ring-radius) 0.0)
+  (set! (-> self current-ring-alpha) 0.0)
+  (set! (-> self total-explode-time) (seconds 0.7))
+  (set! (-> self min-charge-radius) 12288.0)
+  (set! (-> self max-charge-radius) 73728.0)
+  (set! (-> self total-charge-time) (seconds 1))
+  (set! (-> self base-damage) 5.0)
+  (set! (-> self ring-expansion-time) (seconds 0.35))
+  (set! (-> self burst-expansion-time) (seconds 0.3))
+  (set! (-> self warp-expansion-time) (seconds 0.4))
+  (set! (-> self explosion-0) (the-as handle #f))
+  (set! (-> self explosion-1) (the-as handle #f))
+  (set! (-> self ammo-drained) 0.0)
+  (set! (-> self snd-charge) (new-sound-id))
+  (set! (-> self num-previously-attacked-targets) 0)
+  (set! (-> self start-pilot?) #f)
+  (set! (-> self charge-part-tracker) (the-as handle #f))
+  (dotimes (v1-49 64)
+    (set! (-> self eventual-collision-points v1-49 found?) #f)
+    )
+  (set! (-> self next-computed-collision-point) 0)
+  (set! (-> self show-scorch-marks?) #f)
+  (set! (-> self generating-marks?) #f)
+  (set! (-> self generated-particles?) #f)
+  (vector-copy! (-> self origin) pos)
+  (set! (-> self strength) (fmax 0.0 (fmin 1.0 strength)))
+  (go-virtual explode)
+  )
+
+;; A copy of the mass inverter's field: the stock field (rings, rising particles), lifting nobody.
+(deftype mp-dark2-copy (gun-gravity)
+  ()
+  )
+
+(defmethod gun-gravity-method-22 ((this mp-dark2-copy) (arg0 symbol))
+  "A copy lifts nobody (the stock one spawns gravity-spinners on what it finds): only the radius
+   its rising particles follow, from its rings once they spread (as the stock)."
+  (when arg0
+    (let ((closest (handle->process (-> this ring-closest)))
+          (furthest (handle->process (-> this ring-furthest)))
+          (near 0.0)
+          (far (-> this current-radius))
+          )
+      (if closest
+          (set! near (* (-> (the-as gravity-ring closest) max-radius) (-> (the-as gravity-ring closest) ring-scale-t)))
+          )
+      (if furthest
+          (set! far (* (-> (the-as gravity-ring furthest) max-radius) (-> (the-as gravity-ring furthest) ring-scale-t)))
+          )
+      (set! (-> this current-radius) (* 0.5 (+ (* 0.85 near) (* 0.85 far))))
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-dark2-copy-init-by-other mp-dark2-copy ((pos vector) (total float))
+  "The stock init (gun-gravity-init-by-other) at `pos`, for `total` seconds of spread (the owner's,
+   longer with its upgrade), without the shooter's pad buzz."
+  (set! (-> self root) (new 'process 'trsqv))
+  (vector-copy! (-> self root trans) pos)
+  (let ((cq (new 'stack-no-clear 'collide-query)))
+    (vector+float*! (-> cq start-pos) (-> self root trans) *up-vector* 24576.0)
+    (set! (-> cq move-dist quad) (the-as uint128 0))
+    (set! (-> cq move-dist y) -81920.0)
+    (set! (-> cq radius) 40.96)
+    (set! (-> cq collide-with) (collide-spec backgnd pusher))
+    (set! (-> cq ignore-process0) #f)
+    (set! (-> cq ignore-process1) #f)
+    (set! (-> cq ignore-pat) (new 'static 'pat-surface :noentity #x1 :nojak #x1 :probe #x1 :noendlessfall #x1 :board #x1))
+    (set! (-> cq action-mask) (collide-action solid))
+    (if (>= (fill-and-probe-using-line-sphere *collide-cache* cq) 0.0)
+        (set! (-> self root trans y) (-> cq best-other-tri intersect y))
+        )
+    )
+  (set! (-> self max-radius) 122880.0)
+  (set! (-> self total-time) (if (< 0.0 total) total 1.0))
+  (vector-copy! (-> self start-pos) pos)
+  (set! (-> self ring-closest) (the-as handle #f))
+  (set! (-> self ring-furthest) (the-as handle #f))
+  (set! (-> self part) (create-launch-control group-gravity-gun-rise self))
+  (set! (-> self gravity-sound) (new-sound-id))
+  (go-virtual expand)
+  )
+
+;; The arc wielder: its arc as each player's machine draws it (the points of setup-draw!), sent every
+;; frame it is drawn; one tracker per player draws it here.
+(deftype mp-arc (structure)
+  ((time  time-frame)
+   (info  gun-blue-2-lightning-info :inline)
+   (proc  handle)
+   )
+  )
+
+(deftype mp-arcs (structure)
+  ((arc mp-arc 8 :inline)
+   )
+  )
+
+(define *mp-arcs* (new 'global 'mp-arcs))
+
+(dotimes (i 8)
+  (set! (-> *mp-arcs* arc i proc) (the-as handle #f))
+  )
+
+(defun mp-send-arc ((info gun-blue-2-lightning-info))
+  "Our arc of this frame: its first point (fvec) and up to five more, spread along it, in 2 cm from
+   the first (text, int16: 5 points of 6 bytes fill 30 of its 32), and whether it ends in sparks."
+  (let ((ev (new 'stack 'mp-event))
+        (n (max 1 (min 32 (-> info num-pts))))
+        )
+    (set! (-> ev kind) (mp-event-kind weapon))
+    (set! (-> ev to) -1)
+    (set! (-> ev iarg 0) 33)
+    (vector-copy! (-> ev fvec) (-> info pts 0))
+    (let ((sent (min 5 (+ n -1)))
+          (v (the-as (pointer int16) (-> ev text)))
+          )
+      (set! (-> ev iarg 1) (+ sent 1))
+      (set! (-> ev iarg 2) (if (-> info should-draw-terminal-sparks?) 1 0))
+      ;; points 1 .. n-1, evenly spread, the last one always
+      (let ((step (/ (the float (+ n -2)) (the float (max 1 (+ sent -1))))))
+      (dotimes (k sent)
+        (let ((p (-> info pts (+ 1 (the int (* step (the float k)))))))
+          (dotimes (c 3)
+            (set! (-> v (+ (* k 3) c)) (the int (fmax -32767.0 (fmin 32767.0 (/ (- (-> p data c) (-> info pts 0 data c)) 81.92)))))
+            )
+          )
+        )
+        )
+      )
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- our player's arc goes to the others. define-perm keeps the stock method when
+;; this file is reloaded in a REPL session.
+(define-perm *mp-stock-arc-setup-draw!* (function gun-blue-2-lightning-tracker gun-blue-2-lightning-info none)
+  (the-as (function gun-blue-2-lightning-tracker gun-blue-2-lightning-info none)
+          (method-of-type gun-blue-2-lightning-tracker setup-draw!)
+          )
+  )
+
+(defmethod setup-draw! ((this gun-blue-2-lightning-tracker) (arg0 gun-blue-2-lightning-info))
+  "Stock method, then our player's arc goes to the others (multiplayer mod, no-op offline)."
+  (*mp-stock-arc-setup-draw!* this arg0)
+  (if (and (mp-online?) *target* (= (ppointer->process (-> this parent)) *target*))
+      (mp-send-arc arg0)
+      )
+  (none)
+  )
+
+(defstate mp-arc-shown (gun-blue-2-lightning-tracker)
+  :trans (behavior ()
+    (let ((arc (-> *mp-arcs* arc (max 0 (min 7 (-> self last-probe-index))))))
+      (cond
+        ((< (- (mp-now) (-> arc time)) (seconds 0.1))
+         ;; drawn as its player's machine draws it (the bolts' own inner points at random), the
+         ;; bolts switched on as the stock active state's enter does (faded or new ones draw nothing)
+         (dotimes (i (-> self lt-array length))
+           (if (nonzero? (lightning-bolt-method-14 (-> self lt-array i)))
+               (lightning-bolt-method-13 (-> self lt-array i) 0)
+               )
+           )
+         (set! (-> self should-draw-this-frame?) #t)
+         (setup-draw! self (-> arc info))
+         (spawn (-> self part) (-> arc info pts 0))
+         )
+        (else
+          ;; it stopped: the bolts fade out, as the stock tracker's
+          (dotimes (i (-> self lt-array length))
+            (let ((bolt (-> self lt-array i)))
+              (if (zero? (lightning-bolt-method-14 bolt))
+                  (lightning-bolt-method-13 bolt 2)
+                  )
+              (lightning-bolt-method-11 bolt)
+              (lightning-bolt-method-12 bolt)
+              )
+            )
+          )
+        )
+      )
+    )
+  :code (behavior ()
+    ;; ends 3 s after the last arc: the next one starts a new tracker
+    (until (< (seconds 3) (- (mp-now) (-> *mp-arcs* arc (max 0 (min 7 (-> self last-probe-index))) time)))
+      (suspend)
+      )
+    )
+  )
+
+(defbehavior mp-arc-init-by-other gun-blue-2-lightning-tracker ((slot int))
+  "The stock tracker's init (gun-blue-2-lightning-init-by-other), drawing player `slot`'s arc: its
+   six bolts and muzzle flare, none of its own logic (the arc, its damage and the ammo it uses are
+   the owner's)."
+  (set! (-> self root) (new 'process 'trsqv))
+  ;; no skeleton: the bolts are drawn without one, and its art is loaded only with this machine's
+  ;; own arc wielder (missing, it sends the process to process-drawable-art-error)
+  (set! (-> self lt-array) (new 'process 'boxed-array lightning-bolt 6))
+  (dotimes (i 4)
+    (set! (-> self lt-array i) (new 'process 'lightning-bolt))
+    (init! (-> self lt-array i) 12 6 *blue-light-test*)
+    )
+  (set! (-> self lt-array 4) (new 'process 'lightning-bolt))
+  (init! (-> self lt-array 4) 12 5 *blue-light-test-big*)
+  (set! (-> self lt-array 5) (new 'process 'lightning-bolt))
+  (init! (-> self lt-array 5) 12 5 *blue-light-test-big*)
+  (set! (-> self revolve-angle) 0.0)
+  (set! (-> self sway-angle) 0.0)
+  (set! (-> self part) (create-launch-control group-gun-blue-2-muzzle-flare self))
+  (set! (-> self last-spark-time) 0)
+  (set! (-> self spark-time-interval) 0)
+  (set! (-> self snd-lightning) (new-sound-id))
+  (set! (-> self snd-spin) (new-sound-id))
+  (set! (-> self should-draw-this-frame?) #f)
+  (set! (-> self last-probe-index) slot)
+  (go mp-arc-shown)
+  )
+
+(defun mp-receive-arc ((ev mp-event))
+  "Another player's arc of this frame: keep its points, start the tracker that draws it."
+  (let* ((slot (max 0 (min 7 (-> ev from))))
+         (arc (-> *mp-arcs* arc slot))
+         (info (-> arc info))
+         (n (max 1 (min 6 (-> ev iarg 1))))
+         (v (the-as (pointer int16) (-> ev text)))
+         )
+    (vector-copy! (-> info pts 0) (-> ev fvec))
+    (set! (-> info pts 0 w) 1.0)
+    (dotimes (k (+ n -1))
+      (let ((p (-> info pts (+ k 1))))
+        (dotimes (c 3)
+          (set! (-> p data c) (+ (-> ev fvec data c) (* 81.92 (the float (-> v (+ (* k 3) c))))))
+          )
+        (set! (-> p w) 1.0)
+        )
+      )
+    (set! (-> info num-pts) n)
+    (set! (-> info should-draw-terminal-sparks?) (= (-> ev iarg 2) 1))
+    (set! (-> info should-draw-extension?) #f)
+    (set! (-> arc time) (mp-now))
+    (when (not (handle->process (-> arc proc)))
+      (let ((proc (process-spawn
+                    gun-blue-2-lightning-tracker
+                    :init mp-arc-init-by-other
+                    slot
+                    :name "mp-arc"
+                    :to *entity-pool*
+                    ;; the stock tracker's size (create-lightning-tracker-if-necessary): its six bolts
+                    ;; fill most of it, a smaller heap ends in process-drawable-art-error "memory"
+                    :stack-size #x29400
+                    )
+                  )
+            )
+        (if proc
+            (set! (-> arc proc) (ppointer->handle proc))
+            )
+        )
+      )
+    )
+  (none)
+  )
+
+;; Our wave concussor and mass inverter go off: tell the others once (they draw their copies).
+(deftype mp-weapons-seen (structure)
+  ((proc  handle 8)
+   (next  int32)
+   )
+  )
+
+(define *mp-weapons-seen* (new 'global 'mp-weapons-seen))
+
+(defun mp-weapon-new? ((proc process))
+  "#t the first time `proc` is seen here (then remembered)."
+  (let ((ws *mp-weapons-seen*)
+        (h (process->handle proc))
+        )
+    (dotimes (i 8)
+      (if (= (-> ws proc i) h)
+          (return #f)
+          )
+      )
+    (set! (-> ws proc (-> ws next)) h)
+    (set! (-> ws next) (logand (+ (-> ws next) 1) 7))
+    #t
+    )
+  )
+
+(defun mp-send-weapon ((gun int) (pos vector) (a float))
+  "A weapon effect of ours went off at `pos` (parameter `a`): to everyone."
+  (let ((ev (new 'stack 'mp-event)))
+    (set! (-> ev kind) (mp-event-kind weapon))
+    (set! (-> ev to) -1)
+    (set! (-> ev iarg 0) gun)
+    (vector-copy! (-> ev fvec) pos)
+    (set! (-> ev iarg 1) (the-as int a))
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defun mp-collect-weapon ((proc process))
+  "iterate-process-tree callback, under our player: a wave concussor's shockwave that exploded, a
+   mass inverter's field, each told once."
+  (cond
+    ((and (type? proc gun-red-2-shockwave)
+          (not (type? proc mp-red2-copy))
+          (-> proc next-state)
+          (= (-> proc next-state name) 'explode)
+          (mp-weapon-new? proc)
+          )
+     (mp-send-weapon 27 (-> (the-as gun-red-2-shockwave proc) origin) (-> (the-as gun-red-2-shockwave proc) strength))
+     )
+    ((and (type? proc gun-gravity) (not (type? proc mp-dark2-copy)) (mp-weapon-new? proc))
+     (mp-send-weapon 36 (-> (the-as gun-gravity proc) start-pos) (-> (the-as gun-gravity proc) total-time))
+     )
+    )
+  #f
+  )
+
+(defun mp-replay-weapon ((ev mp-event))
+  "Another player's weapon effect: draw its copy here (no damage: the owner's applies it)."
+  (case (-> ev iarg 0)
+    ((27)
+     (+! (-> *mp-weapons-shown* 0) 1)
+     (format 0 "[multiplayer] wave concussor of player ~D at ~,,1m ~,,1m ~,,1m~%" (-> ev from) (-> ev fvec x) (-> ev fvec y) (-> ev fvec z))
+     (process-spawn
+       mp-red2-copy
+       :init mp-red2-copy-init-by-other
+       (-> ev fvec)
+       (the-as float (-> ev iarg 1))
+       :name "mp-red2-copy"
+       :to *entity-pool*
+       :stack *kernel-dram-stack*
+       )
+     )
+    ((36)
+     (+! (-> *mp-weapons-shown* 1) 1)
+     (format 0 "[multiplayer] mass inverter of player ~D at ~,,1m ~,,1m ~,,1m~%" (-> ev from) (-> ev fvec x) (-> ev fvec y) (-> ev fvec z))
+     (process-spawn
+       mp-dark2-copy
+       :init mp-dark2-copy-init-by-other
+       (-> ev fvec)
+       (the-as float (-> ev iarg 1))
+       :name "mp-dark2-copy"
+       :to *entity-pool*
+       )
+     )
+    ((33)
+     (+! (-> *mp-weapons-shown* 2) 1)
+     (mp-receive-arc ev)
+     )
     )
   (none)
   )
@@ -3198,8 +3680,11 @@
            )
           ;; the gun's laser particles (207-212) take their direction from globals of the machine that
           ;; draws them: the gun's copy draws its laser itself (mp-draw-laser)
+          ;; Dark and Light Jak's auras (173, 187, 623): a puppet draws them on its own body
+          ;; (mp-puppet-apply-powers); replayed, every launch of a frame came from one place
           ((and (> (-> em count) 0)
                 (not (and (>= (-> em index) 207) (<= (-> em index) 212)))
+                (not (and (type? proc mp-puppet) (or (= (-> em index) 173) (= (-> em index) 187) (= (-> em index) 623))))
                 (mp-launcher-usable? (-> em index) (-> em home))
                 (mp-launcher-replayable? (-> *part-id-table* (-> em index)) (the-as process #f))
                 )

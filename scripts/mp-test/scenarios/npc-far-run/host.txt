@@ -1,0 +1,12 @@
+# NPCs near a player far from the host's camera, host side: stands still in Spargus while the
+# guest stands 60 m away (past the 50 m from the camera where the game pauses its actors). Logs
+# the NPCs it sends near the guest, how many the stock pause stops and how many run.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+62 log-paused 60
+72 log-paused 60
+82 log-paused 60
+100 log

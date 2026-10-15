@@ -1,0 +1,22 @@
+# Two places at once, guest side: next to the host in Spargus, then in Haven City's port (it
+# simulates its own NPCs there), then back next to the host. Its NPCs must keep moving everywhere
+# (log-motion), and no level of Spargus loads in Haven (log-levels).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+60 log-motion
+62 log-motion
+63 continue ctyport-start
+80 log-motion
+82 log-motion
+82 log-levels
+82 screenshot haven
+84 log-motion
+86 log-motion
+90 goto-player 0
+110 log-motion
+112 log-motion
+112 log-levels
+112 log

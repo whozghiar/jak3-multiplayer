@@ -1,0 +1,18 @@
+# Two places at once, the other way, host side: goes to Haven City's port, leaving the guest in
+# Spargus, then comes back. Its NPCs keep moving in Haven (log-motion).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+60 log-motion
+62 log-motion
+63 continue ctysluma-start
+80 log-motion
+82 log-motion
+82 log-levels
+82 screenshot haven
+95 goto-player 1
+110 log-motion
+112 log-motion
+112 log

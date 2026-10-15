@@ -1,0 +1,36 @@
+# The four guns that are not shots seen and felt on another machine, host side: fires the wave
+# concussor (red 2), mass inverter (dark 2), arc wielder (blue 2) and needle lazer (blue 3) at the
+# guest 7 m away, then watches the guest fire them back, with screenshots during each, the copies
+# counted (log-weapons) and the hits taken (log). Health is topped up before each gun: the
+# Wastelanders around shoot back at whoever hits them.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 face-player 1
+54.5 cheat health
+55 gun 27
+56 press r1 1200
+59 cheat health
+60 gun 36
+61 press r1 200
+65 cheat health
+66 gun 33
+67 press r1 2500
+71 cheat health
+72 gun 34
+73 press r1 1500
+77 gun
+78 face-player 1
+80 cheat health
+86 cheat health
+90.6 screenshot red2
+92 cheat health
+96.2 screenshot dark2
+98 cheat health
+99.4 screenshot arc
+104 cheat health
+106.3 screenshot blue3
+108 log-weapons
+108.5 log

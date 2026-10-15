@@ -508,6 +508,54 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
         c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
 
+    elif scenario == "guns-fx":
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
+        for side, lines in (("host", host), ("client", client)):
+            shown = counter(lines, r"weapons shown red2 (\d+) dark2 (\d+) arc (\d+) blue3 (\d+)")
+            red2, dark2, arc, blue3 = shown[-1] if shown else (0, 0, 0, 0)
+            c.check(scenario, f"{side} draws the other's wave concussor, mass inverter, arc and needle trails",
+                    red2 >= 1 and dark2 >= 1 and arc >= 30 and blue3 >= 1,
+                    f"red2 {int(red2)} dark2 {int(dark2)} arc frames {int(arc)} blue3 trails {int(blue3)}")
+        kinds = {side: {k for (k,) in grab(lines, r"\[multiplayer\] pvp blow to player \d+ by (\S+)")}
+                 for side, lines in (("host", host), ("client", client))}
+        # the arc and the needle lazer lock onto enemies, not players: they hurt a player whose way
+        # they cross, which the Wastelanders shooting back around can take from them in a run
+        area = {"gun-red-2-shockwave", "gravity-spinner"}
+        for side in ("host", "client"):
+            c.check(scenario, f"{side}'s wave concussor and mass inverter hurt the other player",
+                    area <= kinds[side], f"{sorted(kinds[side])}")
+        both = kinds["host"] | kinds["client"]
+        c.check(scenario, "an arc and a needle lazer hurt the other player",
+                {"gun-blue-shot-2", "gun-blue-shot-3"} <= both, f"{sorted(both)}")
+        for side, lines in (("host", host), ("client", client)):
+            taken = grab(lines, r"\[multiplayer\] pvp hit by player \d+, damage (\S+)")
+            c.check(scenario, f"{side} takes those blows", len(taken) >= 3, f"{len(taken)} hits")
+
+    elif scenario == "powers":
+        shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")
+        c.check(scenario, "the host shows the guest's Dark Jak (blend shapes)",
+                bool(shown) and float(shown[0][0]) > 0.9 and float(shown[0][1]) > 0.9, f"{shown[:1]}")
+        c.check(scenario, "then its Light Jak (no dark shape, its glow)",
+                len(shown) >= 2 and float(shown[1][1]) < 0.1 and int(shown[1][2], 16) != 0, f"{shown[1:2]}")
+
+    elif scenario in ("far-split", "far-split-host"):
+        for side, lines in (("host", host), ("client", client)):
+            far = [float(d) for (d,) in grab(lines, r"\] stretch \d+ bone \d+ at (\S+)")]
+            c.check(scenario, f"{side}: no part of the other's model stretched across the world (cloth)",
+                    all(d < 5.0 for d in far), f"farthest bone from the root {max(far) if far else None} m")
+        motion = counter(host + client, r"motion own (\d+) moved (\d+) copies (\d+) moved (\d+)")
+        c.check(scenario, "NPCs near each player keep moving (own and copies)",
+                any(m[1] > 0 for m in motion) and any(m[3] > 0 for m in motion),
+                f"{[tuple(int(v) for v in m) for m in motion[:8]]}")
+
+    elif scenario == "npc-far-run":
+        paused = counter(host, r"near another player (\d+) stock-paused \d+ run (\d+)")
+        c.check(scenario, "the host's NPCs near the distant guest run", bool(paused) and all(n == r for n, r in paused) and any(n > 0 for n, r in paused),
+                f"near/run {[(int(n), int(r)) for n, r in paused]}")
+        motion = counter(client, r"motion own \d+ moved \d+ copies (\d+) moved (\d+)")
+        c.check(scenario, "the guest sees them move", any(m[1] > 0 for m in motion), f"{[(int(a), int(b)) for a, b in motion]}")
+
     elif scenario == "drive":
         sys.path.insert(0, str(ROOT / "scripts" / "mp-test"))
         import compare_poses

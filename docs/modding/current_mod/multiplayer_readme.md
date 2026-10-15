@@ -97,6 +97,7 @@ Each blow or shot counts once, on the machine that owns the victim:
 | Blow | Detected on | Applied by |
 |---|---|---|
 | A player's punch or shot on another player | the attacker's machine (its hurtbox for that player) | the victim, as a stock hit with knockback (`pvp` event) |
+| A player's area weapon (wave concussor, mass inverter, arc wielder, needle lazer) on another player | the attacker's machine: the stock weapon finds that player's hurtbox (4.2) | the victim (`pvp` event); the other machines draw a copy that hurts nobody (4.5) |
 | A player's punch or shot on an NPC replica | the attacker's machine | the host, on the real NPC, from the attacker's puppet (`actor-hit`) |
 | An NPC's melee on a player's puppet | the host | that player (`hit` event) |
 | An NPC's shot | every machine, on its own player, with its copy of the shot | locally; puppets ignore shots |
@@ -413,6 +414,31 @@ effects and for the time before the first pose: a clip not loaded here falls bac
 stance, or to the crouch for a driver or passenger. Its `mp-hurtbox` child sits in the actor hash,
 where the player's attacks look. A model change (character, outfit) respawns the puppet.
 
+The hurtbox is a `process-focusable` of kind crate, in the actor hash: its collide shape is made
+with `(collide-list-enum usually-hit-by-player)`, while the puppet's own `hit-by-others` shape is
+not in it. The area weapons search the actor hash for focusables of given kinds (crate, enemy,
+civilian...) and find the hurtbox, which hands every blow to the puppet. It answers no target
+search (`get-search-info-flag` returns none: neither the guns' aim nor an enemy picks it) and
+gives its sphere's center as its aim point (`get-trans`: the stock method reads a draw-control,
+which the hurtbox has not). A blow sent by a mass inverter's spinner (a child of what it lifts)
+counts as the player its attack-info names; a blow doing no damage (the lift itself) is no hit.
+
+Dark Jak and Light Jak: the player's state carries, in free bits of its flags, the Dark Jak and
+Light Jak blends (`darkjak-interp`, `lightjak-interp`), the light look (no textures, rim lights),
+the invisible fade, the scarf and the goggles (`mp-pack-powers`). The puppet applies them as
+`target-draw-process` does: blend-shape overrides for the face and claws, the global effects, the
+fade. It tints its model purple for Dark Jak, since the game's dark texture swap is one palette
+for every model of Jak, and draws the auras on its own body: dark sparks and lightning, Light
+Jak's glow (`mp-puppet-apply-powers`). The override array lives in the puppet's heap and
+`mp-puppet` relocates it itself, because joint-control's relocate leaves `override` out. Left
+behind after a heap compaction, the puppet's writes landed in other processes and crashed the
+game when an arc wielder fired, its large heap forcing a compaction.
+
+Cloth: Jak's scarf is a cloth strip drawn apart from the model and rebuilt only while the model
+is on screen. A puppet or copy that jumps more than 10 m resets its cloth, and its strips are
+emptied while it is off screen or hidden (`mp-cloth-follow`). Before, the scarf stayed stretched
+from the old place to the new one, across the world.
+
 ### 4.3 Shared vehicles
 
 - **Drawing:** the vehicle a player drives, and its wheels, are that player's props: the others
@@ -438,6 +464,38 @@ While it is not an authority (1.4), a player turns its ambient traffic off
 NPC to sleep: `sleep` process mask, not drawn, collision off; one on its screen within 60 m sleeps
 once out of view (60 s at most after the switch). Everything is restored when it becomes an
 authority or the session ends.
+
+### 4.5 Area weapons
+
+The wave concussor (red 2), the mass inverter (dark 2) and the arc wielder (blue 2) are not
+shots: they are a shockwave process, a gravity field and a lightning tracker. The shooter's
+machine sends a `weapon` event:
+
+- when one goes off (`mp-collect-weapon`: the shockwave entering `explode`, a new `gun-gravity`);
+- every frame its arc is drawn (`setup-draw!` wrapped): the arc's first point and five more, in
+  2 cm steps, in the event's 32 bytes of text.
+
+The others draw copies made of the stock pieces, with their damage left out:
+
+- `mp-red2-copy`: the explosion, its ring and scorch marks, without the pad buzz;
+- `mp-dark2-copy`: the rings and rising particles, without spinners;
+- one `gun-blue-2-lightning-tracker` per player, drawing the arc received (`mp-arc-shown`). Its
+  six bolts are switched on as the stock `active` state does, and it gets the stock tracker's heap
+  (`#x29400`): smaller, the bolts end in `process-drawable-art-error` "memory". Its skeleton is
+  left out, because that art is loaded only with a machine's own arc wielder.
+
+The needle lazer's (blue 3) shots are shots (1.4): their copy draws the light trail the shot
+carries (`light-trail-tracker-projectile`), from the type name sent in its state.
+
+### 4.6 Players far apart
+
+Each machine loads the levels of its own place only, and a distant player's objects are drawn
+from their art loaded alone (1.6), so two places never overlap.
+
+An actor more than 50 m from the camera of the machine that simulates it stops running
+(`run-logic?`, `*ACTOR-bank* pause-dist`). `mp-near-other-player?` also keeps running the NPCs
+within that distance of another player (`run-near-others` test switch), so the NPCs around a
+player far from the authority are not frozen.
 
 ## 5. Testing in game
 
@@ -522,6 +580,11 @@ A script line is `<seconds> <command>`:
 | `log-vanished`, `trace-vanish` | What vanished on our screen within 40 m while alive: own NPCs put to sleep, copies removed or hidden at once (count; each, with why), and copies that faded out instead; each copy that dies here (`copy died <skeleton> [vehicle]`). |
 | `log-path <skeleton\|shot> <frames>` | An object's root (every shot's, with its id) every frame: on its owner each state it sends, on a viewer each state drawn, stamped with the owner's clock (`compare_poses.py` compares the copy's path with the owner's, shot by shot). |
 | `log-laser <frames>` | The gun's laser sight every frame, where it starts and ends: the owner's as its game computes it (`laser-point`, `laser-hit-point`), the copy's as drawn, stamped with the owner's clock (`compare_poses.py laser_report`). |
+| `log-weapons` | Other players' area weapons drawn here (wave concussors, mass inverters, arc frames, needle trails), and each arc received: its points, its tracker, its bolts. |
+| `log-aimable` | What the area weapons find within 20 m of us: each focusable of the actor hash, its process mask, focus, collision action and sphere. |
+| `power <dark\|light>`, `log-power` | Turn into Dark Jak or Light Jak (unlocked, with its eco); our state and what each puppet shows (blend, dark, global effects, fade). |
+| `log-stretch`, `hide-puppets <0\|1>`, `hide-copies <0\|1>` | Each puppet's bone farthest from its root, and the copies with a bone over 5 m away (a stretched scarf); hide the puppets or the copies (counter-tests). |
+| `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
 
 Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano; `check_results.py`: 253 checks passed, 1 failed, 35 scenarios, no crash, before the last changes; the failure, `v1-city-combat` checking a vehicle's copy dying, no vehicle destroyed in that run, was dropped for that scenario (`v1-city-dark1-host` destroys one for sure) and the run again passed 6 of 6. The last changes (the laser sight sent by its owner and passing through it, each blow's answer logged, `goto-npc` with a distance, `press` with a stick) were checked by `guard-hit`, `shot-path` and `laser`, and the first 7 scenarios of a full run (`smoke` to `npc-handoff`, no crash) stopped there on the user's request; the others were not run again after them):
 
@@ -564,6 +627,10 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `scene` | Cutscenes | The host starts a Spargus cutscene: it plays on both machines (screenshots of the same shot), both players placed in it. |
 | `float` | Physics objects | The volcano's lava platforms, 270 m from both players: at the same stamp, the guest's are within 7 cm in height and 0.002 in tilt of the host's (they were 2.25 s out of phase before). |
 | `float-weight` | A player standing on a remote-driven platform | The guest stands on a lava platform its machine moves where the host's is: carried 18 m in 2 s with it; each machine sends the other player's weight to its platform (counters); both slide into the lava as the platform sinks, as in the stock game. |
+| `guns-fx` | The area weapons, both ways | Each player fires the wave concussor, mass inverter, arc wielder and needle lazer at the other 7 m away, health topped up before each (the Wastelanders hit by them shoot back): no crash; each draws the other's (1 explosion, 1 field, 165 arc frames, 9 to 24 needle trails) and takes their blows (`pvp blow ... by gun-red-2-shockwave`, `gravity-spinner`, `gun-blue-shot-2`, `gun-blue-shot-3`). |
+| `powers` | Dark Jak and Light Jak on another machine | The guest turns into Dark Jak, then Light Jak, 7 m from the host: the host's puppet shows the dark blend shapes (1.00), then Light Jak's look (rim lights, effect `#x90`) and glow. |
+| `far-split`, `far-split-host` | Players in two regions | One goes from Spargus to Haven City's port and back while the other stays: no part of a model stretched across the world (farthest bone 2.6 m from its root), NPCs moving on both sides. |
+| `npc-far-run` | NPCs near a distant guest | The guest 60 m from the host: the host's NPCs near it run (none paused) and the guest sees them move. |
 
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
@@ -624,8 +691,32 @@ public IP.
   way, with jitter), not a real link's losses or bandwidth limits.
 - Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
+- Another player's Dark Jak has no dark texture swap (a purple tint instead) and keeps its eyes;
+  Light Jak's wings and shield are not drawn (their art is loaded only with our own Light Jak).
+- The wave concussor's charge glow is not drawn on its copy (its particles follow our own gun);
+  its explosion darkens the screen of every player near it, as the shooter's.
+- The arc wielder and the needle lazer lock onto enemies, civilians and vehicles, not onto
+  players: they hurt a player whose way they cross, and turn to hostile NPCs near it first.
+  Beyond 6 m the wave concussor needs a clear line over the ground (stock rules).
+- NPCs frozen around a player far from the authority were not reproduced in the scenarios; the
+  stock pause rule is extended to other players as a safeguard (4.6).
 
 ## 7. Change log
+
+- **2026-10-15 (evening):** another player's area weapons, Dark and Light Jak, distant players.
+  - *Area weapons.* The wave concussor, mass inverter and arc wielder of another player are drawn
+    from `weapon` events (4.5), the needle lazer's trail on its shots' copies. They hurt the other
+    players: the hurtbox is a crate-kind focusable the area weapons find (4.2).
+  - *Dark Jak, Light Jak.* Their blend shapes, look, fade and auras show on the puppet (4.2).
+  - *Players far apart.* A scarf left stretched across the world by a teleport (cloth) is reset
+    and hidden off screen. NPCs near another player keep running (4.6).
+  - *Crashes fixed.* The puppet's blend-shape override array, not relocated by a heap compaction,
+    corrupted other processes (the arc wielder crashed the game); an arc event overflowed its
+    32-byte text by 4 bytes.
+  - *Tests.* Scenarios `guns-fx`, `powers`, `far-split`, `far-split-host`, `npc-far-run`; test
+    commands `log-weapons`, `log-aimable`, `power`, `log-power`, `log-stretch`, `log-motion`,
+    `log-paused`, `run-near-others`, `hide-puppets`, `hide-copies`; the receiver logs each PvP hit
+    and the attacker each blow, with what dealt it.
 
 - **2026-10-15:** a session of the user's crashes, sync and UX reports.
   - *Crashes.* Another place's levels are no longer loaded (their code reset Spargus' traffic

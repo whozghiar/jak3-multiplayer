@@ -1,0 +1,29 @@
+# Two places at once, the other way, guest side: stays in Spargus while the host goes to Haven
+# City: it takes over its own NPCs there (they must move, not stay asleep or frozen: log-motion),
+# and no level of Haven loads here (log-levels).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+58 log-stretch
+60 log-motion
+62 log-motion
+66 log-stretch
+66.5 screenshot after-teleport
+70 log-motion
+72 log-motion
+75 log
+80 log-motion
+82 log-motion
+83 log-motion 300
+85 log-motion 300
+82 log-levels
+82 screenshot spargus
+82 log-stretch
+84 log-motion
+86 log-motion
+87 log
+110 log-motion
+112 log-motion
+112 log

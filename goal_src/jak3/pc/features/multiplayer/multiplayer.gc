@@ -78,6 +78,9 @@
   (world-request 17) ;; to the host: a guest that joined asks for the host's world (blob reply)
   (coop-wait 18)  ;; co-op: the sender waits for the others at story step iarg 0 (-1: no more),
                   ;; fvec = where
+  (weapon 19)     ;; a weapon effect that is not a shot: iarg 0 = gun (27 wave concussor, 36 mass
+                  ;; inverter, 33 arc wielder), fvec = where, iarg 1-2 = its parameters (float
+                  ;; bits), text = the arc's points (33)
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -571,6 +574,37 @@
 ;; Local player -> network
 ;; ------------------------------------------------------------------------------------------------
 
+(defun mp-pack-powers ((tgt target) (st mp-player-state))
+  "Dark Jak and Light Jak as our model shows them, in the free bits of the state's flags: bits 8-15
+   darkjak-interp, 16-23 lightjak-interp (0-255), 24 no-textures and 25 rim-lights (the light look,
+   target-effect te0-te2 and te3-te5), 26-29 the invisible fade (force-fade 16-128 as 1-15, 0 off),
+   30 scarf and 31 goggles (blend shapes, target-draw-process). The puppet applies them
+   (mp-puppet-apply-powers)."
+  (let ((f (the-as uint (-> st flags)))
+        (fx (-> tgt target-effect))
+        )
+    (set! f (logior f (shl (the int (* 255.0 (fmax 0.0 (fmin 1.0 (-> tgt darkjak-interp))))) 8)))
+    (set! f (logior f (shl (the int (* 255.0 (fmax 0.0 (fmin 1.0 (-> tgt lightjak-interp))))) 16)))
+    (if (logtest? fx (target-effect te0 te1 te2))
+        (set! f (logior f (shl 1 24)))
+        )
+    (if (logtest? fx (target-effect te3 te4 te5))
+        (set! f (logior f (shl 1 25)))
+        )
+    (if (logtest? (-> tgt draw status) (draw-control-status force-fade))
+        (set! f (logior f (shl (max 1 (min 15 (/ (+ (the-as int (-> tgt draw force-fade)) -8) 8))) 26)))
+        )
+    (if (< 0.5 (-> tgt scarf-interp))
+        (set! f (logior f (shl 1 30)))
+        )
+    (if (< 0.5 (-> tgt goggles-interp))
+        (set! f (logior f (shl 1 31)))
+        )
+    (set! (-> st flags) (the-as mp-flag f))
+    )
+  (none)
+  )
+
 (defun mp-build-local-state ()
   "Describe the local player in *mp-local*. Runs every frame from the hook, even paused."
   (let ((st *mp-local*))
@@ -618,6 +652,7 @@
           (if (and (logtest? (-> tgt draw status) (draw-control-status no-draw)) (< *mp-ride-slot* 0))
               (logior! (-> st flags) (mp-flag hidden))
               )
+          (mp-pack-powers tgt st)
           ;; current animation, as an index in the art group (the same on every machine)
           (let ((skel (-> tgt skel))
                 (ag (-> tgt draw art-group))
@@ -725,6 +760,17 @@
 (define-extern mp-pose-postbind (function draw-control cspace-array joint-control none))
 (define-extern mp-play-emitters (function process-drawable uint (pointer int32) (pointer handle) none))
 
+(defmethod relocate ((this mp-puppet) (offset int))
+  "The process heap is compacted (dead-pool-heap compact): the override array of Dark Jak's blend
+   shapes (mp-puppet-init-by-other) lives in our heap but joint-control's relocate leaves that
+   pointer out (the stock players never move), so it moves here. Left behind, every frame's
+   override writes (mp-puppet-apply-powers) landed in whatever process was later put there."
+  (if (and (nonzero? (-> this skel)) (-> this skel override) (nonzero? (-> this skel override)))
+      (&+! (-> this skel override) offset)
+      )
+  (call-parent-method this offset)
+  )
+
 (defun mp-puppet-pose-id ((slot int))
   "Id under which a player's own model is sent in pose batches (its props use their pid)."
   (the-as uint (logior (shl slot 24) #xffffff))
@@ -805,6 +851,119 @@
   (none)
   )
 
+(define *mp-test-hide-puppets* #f) ;; test switch (hide-puppets): remote players' puppets hidden
+
+(defbehavior mp-puppet-apply-powers mp-puppet ((st mp-player-state))
+  "Dark Jak and Light Jak as their player shows them (mp-pack-powers): Dark Jak's face and claws
+   (blend shapes, as target-draw-process), Light Jak's look (no textures, rim lights), the
+   invisible fade, and their auras drawn here: Dark Jak's particles and lightning
+   (target-darkjak-process), Light Jak's glow (target-lightjak-do-effect). Their replayed launches
+   are left out (mp-play-emitters): these, on the puppet's own body, replace them. The dark texture
+   swap is global (one palette for every model of Jak): a dark tint stands for it. Light Jak's
+   wings live in art loaded only for our own player's light mode: not shown here."
+  (let* ((f (the-as uint (-> st flags)))
+         (dark (* 0.003921569 (the float (logand (shr f 8) 255))))
+         (light (* 0.003921569 (the float (logand (shr f 16) 255))))
+         (fade (the-as int (logand (shr f 26) 15)))
+         (ov (-> self skel override))
+         )
+    (when (and ov (nonzero? ov))
+      (cond
+        ((and (= dark 0.0) (= light 0.0))
+         (set! (-> ov 0) 0.0)
+         )
+        (else
+          (set! (-> ov 0) 1.0)
+          (set! (-> ov 8) (if (logtest? f (shl 1 30)) 1.0 0.0))
+          (set! (-> ov 5) (if (logtest? f (shl 1 31)) 1.0 0.0))
+          (set! (-> ov 2) dark)
+          (set! (-> ov 6) dark)
+          (set! (-> ov 7) dark)
+          (set! (-> ov 4) dark)
+          )
+        )
+      )
+    (if (logtest? f (shl 1 24))
+        (logior! (-> self draw global-effect) (draw-control-global-effect no-textures))
+        (logclear! (-> self draw global-effect) (draw-control-global-effect no-textures))
+        )
+    (if (logtest? f (shl 1 25))
+        (logior! (-> self draw global-effect) (draw-control-global-effect rim-lights))
+        (logclear! (-> self draw global-effect) (draw-control-global-effect rim-lights))
+        )
+    ;; Dark Jak's grey skin is a texture swap shared by every model of Jak (set-darkjak-texture-morph!):
+    ;; a dark tint stands for it on the puppet, as strong as the player's transformation
+    (let ((k (* 0.3 dark)))
+      (set-vector! (-> self draw color-mult) (- 1.0 k) (- 1.0 (* 1.1 k)) (- 1.0 (* 0.6 k)) 1.0)
+      (set-vector! (-> self draw color-emissive) (* 0.25 k) 0.0 (* 0.5 k) 0.0)
+      )
+    (cond
+      ((> fade 0)
+       (logior! (-> self draw status) (draw-control-status force-fade))
+       (set! (-> self draw force-fade) (the-as uint (+ (* fade 8) 8)))
+       )
+      (else
+        (logclear! (-> self draw status) (draw-control-status force-fade))
+        )
+      )
+    (when (not (logtest? (-> self draw status) (draw-control-status no-draw)))
+      ;; Dark Jak: dark sparks over the body, and a lightning arc now and then
+      (when (and (< 0.5 dark) (zero? fade))
+        (launch-particles (-> *part-id-table* 173) (process-drawable-random-point! self (new 'stack-no-clear 'vector)))
+        (if (rand-vu-percent? 0.1)
+            (process-drawable-shock-effect
+              self
+              (-> *lightning-spec-id-table* 7)
+              lightning-probe-callback
+              (-> *part-id-table* 187)
+              0
+              0
+              40960.0
+              )
+            )
+        )
+      ;; Light Jak: its glow over the body
+      (when (< 0.5 light)
+        (dotimes (i 6)
+          (launch-particles (-> *part-id-table* 623) (process-drawable-random-point! self (new 'stack-no-clear 'vector)))
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-cloth-follow ((proc process-drawable) (jump? symbol))
+  "The cloth of a copy (Jak's scarf...), simulated around its joints: reset when the copy jumped
+   far in one frame (`jump?`: a teleport; its anchors moved, the rest stayed: stretched across the
+   world), and its strips emptied while the copy is not drawn on screen. A cloth's strip is drawn
+   on its own and only rebuilt while its owner is on screen (cloth-on-skeleton post-physics-update):
+   left as it was, the scarf of a player who went far stayed stretched over the others' screens."
+  (when (and (nonzero? (-> proc draw)) (-> proc draw cloth-instances) (nonzero? (-> proc draw cloth-instances)))
+    (if jump?
+        (process-drawable-reset-all-cloth proc)
+        )
+    (when (or (logtest? (-> proc draw status) (draw-control-status no-draw))
+              (not (logtest? (-> proc draw status) (draw-control-status on-screen)))
+              )
+      (dotimes (i (-> proc draw cloth-instances length))
+        (let ((c (-> proc draw cloth-instances i)))
+          (if (nonzero? (-> c strip))
+              (set! (-> c strip num-verts) (the-as uint 0))
+              )
+          (if (nonzero? (-> c strip2))
+              (set! (-> c strip2 num-verts) (the-as uint 0))
+              )
+          (if (nonzero? (-> c strip3))
+              (set! (-> c strip3 num-verts) (the-as uint 0))
+              )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-puppet-update mp-puppet ()
   "Copy the player's state onto the puppet: place, visibility, tint, animation, vehicle."
   (let ((st (if (-> self local?)
@@ -821,6 +980,9 @@
           ;; the passenger's own view: always shown, in the seat
           (set! shown? #t)
           )
+        (if (and *mp-test-hide-puppets* (not (-> self local?)))
+            (set! shown? #f)
+            )
         ;; a passenger sits in its driver's seat as this machine sees that vehicle: its own reported
         ;; position comes through the network twice and would trail behind the vehicle
         (let ((driver (cond
@@ -836,15 +998,19 @@
                         )
                       )
               )
-          (cond
-            ((and driver (logtest? (-> driver flags) (mp-flag driving)))
-             (move-to-point! (-> self root) (-> driver seat-trans))
-             (quaternion-copy! (-> self root quat) (-> driver veh-quat))
-             )
-            (else
-              (move-to-point! (-> self root) (-> st trans))
-              (quaternion-copy! (-> self root quat) (-> st quat))
+          (let ((was (vector-copy! (new 'stack-no-clear 'vector) (-> self root trans))))
+            (cond
+              ((and driver (logtest? (-> driver flags) (mp-flag driving)))
+               (move-to-point! (-> self root) (-> driver seat-trans))
+               (quaternion-copy! (-> self root quat) (-> driver veh-quat))
+               )
+              (else
+                (move-to-point! (-> self root) (-> st trans))
+                (quaternion-copy! (-> self root quat) (-> st quat))
+                )
               )
+            ;; Jak's scarf (cloth): reset after a jump, hidden while the puppet is off screen
+            (mp-cloth-follow self (< (meters 10) (vector-vector-distance was (-> self root trans))))
             )
           )
         (vector-copy! (-> (the-as collide-shape-moving (-> self root)) transv) (-> st vel))
@@ -862,6 +1028,9 @@
             (set! (-> self focus-status) (focus-status disable))
             )
           )
+        (if (and (not (-> self local?)) (not (-> self daxter?)))
+            (mp-puppet-apply-powers st)
+            )
         ;; body segments shown (helmet, gun holster...), like the player's own model
         (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
             (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
@@ -917,10 +1086,27 @@
 ;; stay in the player collide list with (collide-spec jak) so enemies can focus it, but the
 ;; player's attacks only look at *collide-hit-by-others-list* (the actor hash) and at collide-as
 ;; bits like bot or civilian (target-collide-set!, gun shots' collide-with). This child sits there,
-;; follows the puppet, and hands every hit to it. A plain process-drawable: no enemy focuses it.
-(deftype mp-hurtbox (process-drawable)
-  ((root collide-shape :override)
-   )
+;; follows the puppet, and hands every hit to it. The area weapons (wave concussor, mass inverter,
+;; needle lazer, blasts) search the actor hash for focusables of given kinds: the hurtbox is one,
+;; of kind crate (no faction of the AI picks it as an enemy), offered to no target search
+;; (get-search-info-flag): neither the guns' aim nor an enemy focuses it.
+(deftype mp-hurtbox (process-focusable)
+  ()
+  )
+
+(defmethod get-trans ((this mp-hurtbox) (mode int))
+  "Where the weapons aim: the sphere's center (modes 2, 3 and 10), else the root. The stock method
+   reads the draw-control, which the hurtbox has not."
+  (if (or (= mode 2) (= mode 3) (= mode 10))
+      (the-as vector (-> this root root-prim prim-core))
+      (-> this root trans)
+      )
+  )
+
+(defmethod get-search-info-flag ((this mp-hurtbox))
+  "Nothing: the guns' aim (target-gun-find-track) and the enemies' searches pass over the hurtbox;
+   the area weapons find it by its process mask."
+  (search-info-flag)
   )
 
 (defun mp-from-local-player? ((proc process))
@@ -962,14 +1148,22 @@
         (move-to-point! (-> self root) (-> puppet root trans))
         ;; no hit while the player is not drawn or not hittable, nor while it sits in a vehicle:
         ;; the sphere would be inside the vehicle and stop it (the vehicle's copy takes the hits)
-        (let ((st (mp-remote-state (-> puppet slot))))
-          (set! (-> self root root-prim prim-core collide-as)
-                (if (or (logtest? (-> puppet focus-status) (focus-status disable dead))
-                        (and st (logtest? (-> st flags) (mp-flag driving riding)))
-                        )
-                    (collide-spec)
-                    (collide-spec bot civilian)
-                    )
+        (let* ((st (mp-remote-state (-> puppet slot)))
+               (off? (or (logtest? (-> puppet focus-status) (focus-status disable dead))
+                         (and st (logtest? (-> st flags) (mp-flag driving riding)))
+                         )
+                     )
+               )
+          (set! (-> self root root-prim prim-core collide-as) (if off?
+                                                                   (collide-spec)
+                                                                   (collide-spec bot civilian)
+                                                                   )
+                )
+          ;; the area weapons skip a disabled focusable
+          (set! (-> self focus-status) (if off?
+                                           (focus-status disable)
+                                           (focus-status)
+                                           )
                 )
           )
         )
@@ -995,6 +1189,7 @@
       )
     (set! (-> self root) cshape)
     )
+  (logior! (-> self mask) (process-mask crate))
   (let ((puppet (the-as mp-puppet (ppointer->process (-> self parent)))))
     (if puppet
         (move-to-point! (-> self root) (-> puppet root trans))
@@ -1005,18 +1200,27 @@
 
 (defbehavior mp-puppet-hit mp-puppet ((attacker process) (info attack-info))
   "Something hit this remote player here. The local player's blows and shots go to that player as a
-   player hit (with knockback); an enemy's go as an enemy hit. Each attack id counts once."
+   player hit (with knockback); an enemy's go as an enemy hit. Each attack id counts once. A blow
+   whose sender is not ours but names our player as its attacker (the mass inverter's spinners,
+   children of what they lift) is ours too; one doing no damage (the lift itself) is no hit."
   (let ((id (if (and info (logtest? (attack-mask id) (-> info mask)))
                 (-> info id)
                 (the-as uint 0)
+                )
+            )
+        (by (if (and info (logtest? (attack-mask attacker) (-> info mask)))
+                (handle->process (-> info attacker))
                 )
             )
         )
     (when (or (zero? id) (!= id (-> self last-attack)))
       (set! (-> self last-attack) id)
       (cond
-        ((mp-from-local-player? attacker)
-         (when (and *target* (logtest? *mp-world* (mp-world-flag pvp)))
+        ((or (mp-from-local-player? attacker) (and by (mp-from-local-player? by)))
+         (when (and *target*
+                    (logtest? *mp-world* (mp-world-flag pvp))
+                    (not (and info (logtest? (attack-mask damage) (-> info mask)) (= (-> info damage) 0.0)))
+                    )
            (let ((ev (new 'stack 'mp-event))
                  (damage (if (and info (logtest? (attack-mask damage) (-> info mask)))
                              (fmax 1.0 (fmin 3.0 (-> info damage)))
@@ -1024,6 +1228,9 @@
                              )
                          )
                  )
+             (format 0 "[multiplayer] pvp blow to player ~D by ~A (~A), damage ~,,1f~%" (-> self slot) (-> attacker type)
+                     (if (and info (logtest? (attack-mask mode) (-> info mask))) (-> info mode)) damage
+                     )
              (set! (-> ev kind) (mp-event-kind pvp))
              (set! (-> ev to) (-> self slot))
              (vector-copy! (-> ev fvec) (-> *target* control trans))
@@ -1146,6 +1353,12 @@
   (ja-channel-set! 1)
   ;; the bones take the player's own pose once computed
   (set! (-> self skel postbind-function) mp-pose-postbind)
+  ;; Dark Jak's face and claws are blend shapes driven by an override array, as on the player's
+  ;; model (logic-target.gc); not the eyes: their control is shared by every model of Jak
+  (when (and (not daxter?) (not local?))
+    (set! (-> self skel override) (new 'process 'boxed-array float 54))
+    (logior! (-> self skel status) (joint-control-status blend-shape))
+    )
   (dotimes (i MP_FX_TRACKERS)
     (set! (-> self fx-group i) -1)
     (set! (-> self fx-tracker i) (the-as handle #f))
@@ -1716,6 +1929,7 @@
 (define-extern mp-apply-skel-def (function mp-event none))
 (define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
 (define-extern mp-replay-projectile (function mp-event none))
+(define-extern mp-replay-weapon (function mp-event none)) ;; multiplayer-world.gc
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -2122,10 +2336,14 @@
         (((mp-event-kind projectile))
          (mp-replay-projectile ev)
          )
+        (((mp-event-kind weapon))
+         (mp-replay-weapon ev)
+         )
         (((mp-event-kind pvp))
-         (if (and *target* (logtest? *mp-world* (mp-world-flag pvp)))
-             (mp-take-hit (-> ev fvec) (-> ev fvec w))
-             )
+         (when (and *target* (logtest? *mp-world* (mp-world-flag pvp)))
+           (format 0 "[multiplayer] pvp hit by player ~D, damage ~,,1f~%" (-> ev from) (-> ev fvec w))
+           (mp-take-hit (-> ev fvec) (-> ev fvec w))
+           )
          )
         (((mp-event-kind teleport))
          (when (and *target* (!= (-> ev iarg 0) *mp-local-slot*))

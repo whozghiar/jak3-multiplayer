@@ -35,18 +35,21 @@ host's world together as Jak or Daxter, in free roam or in co-op.
 - **See each other:** every player appears with their name and health bar over their head, as a
   dot on the minimap, with Daxter on their shoulder, their gun and its laser sight, their shots,
   their hoverboard and the vehicle they drive, in their own outfit, moving exactly as they move
-  on their own screen, with their effects and sounds.
+  on their own screen, with their effects and sounds. Their Dark Jak and Light Jak show too, and
+  so do their wave concussor, mass inverter, arc wielder and needle lazer.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
   with their movements, effects and sounds, and they react to every player's shots. A player who
-  goes far from the others keeps a living world around them, which the players near them share.
+  goes far from the others keeps a living world around them, which the players near them share,
+  however far apart the players are.
   When players meet or part, the people and vehicles in front of you do not vanish at once: they
   leave when you look away, or fade out. Enemies killed, crates broken and pickups taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
   triangle to ride next to them when it has two seats. Guests can also take the host's traffic
   vehicles. The prompt shows the button, like the game's own.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
-- **Players can hit each other:** punches and shots between players hurt and knock back (the host
-  can turn it off).
+- **Players can hit each other:** punches, shots and blasts between players (the wave concussor,
+  the mass inverter, the arc wielder, the needle lazer too) hurt and knock back (the host can turn
+  it off).
 - **Cheats menu:** in the Mods menu (L3 + SELECT): refill ammo, restore health, dark eco and
   light eco, invincibility, teleport to a zone or to a player.
 - **Shared story:** a mission completed by one player is completed for everybody, with its

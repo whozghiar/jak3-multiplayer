@@ -1,0 +1,39 @@
+# The four guns that are not shots seen and felt on another machine, guest side: 7 m from the
+# host, facing it, takes screenshots while the host fires each at it, then fires them back.
+# Health is topped up before each gun (the Wastelanders around shoot back); it steps back to 7 m
+# before firing (the blows taken pushed it away).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 7
+53 face-player 0
+54 cheat health
+57.6 screenshot red2
+58.5 log
+59 cheat health
+63.2 screenshot dark2
+64.5 log
+65 cheat health
+68.4 screenshot arc
+70.5 log
+71 cheat health
+74.3 screenshot blue3
+76.5 log
+77 log-weapons
+80 cheat health
+81 goto-player 0 7
+82 face-player 0
+88 gun 27
+89 press r1 1200
+92 cheat health
+93 gun 36
+94 press r1 200
+98 cheat health
+98.5 gun 33
+99 press r1 2500
+104 cheat health
+104.5 gun 34
+105 press r1 1500
+109 gun

@@ -1,0 +1,27 @@
+# Two places at once, host side: stays in Spargus while the guest goes to Haven City and back.
+# Its NPCs must keep moving, whatever the guest does (log-motion: drawn within 60 m, moved in 2 s),
+# and no level of Haven loads here (log-levels).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+58 screenshot together
+60 log-motion
+62 log-motion
+62 log-levels
+80 log-motion
+82 log-motion
+82 log-levels
+82 screenshot spargus
+83 hide-puppets 1
+83.1 hide-copies 1
+85 screenshot spargus-hidden
+86.5 hide-puppets 0
+86.6 hide-copies 0
+84 log-motion 300
+86 log-motion 300
+110 log-motion
+112 log-motion
+111 screenshot back
+112 log
