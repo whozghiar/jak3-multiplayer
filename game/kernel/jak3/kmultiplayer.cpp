@@ -1954,13 +1954,15 @@ void pc_mp_test_screenshot(u32 name) {
   lg::info("[mp-test] screenshot {}", label);
 }
 
-// (pc-mp-test-pad buttons lx ly) forces pad 0 input until called with 0 128 128.
-void pc_mp_test_pad(u32 buttons, u32 lx, u32 ly) {
+// (pc-mp-test-pad buttons lx ly rx ry) forces pad 0 input until called with 0 128 128 128 128.
+void pc_mp_test_pad(u32 buttons, u32 lx, u32 ly, u32 rx, u32 ry) {
   auto& pad = mp::g_test_pad;
   pad.buttons = buttons & 0xffff;
   pad.lx = (u8)std::min<u32>(lx, 255);
   pad.ly = (u8)std::min<u32>(ly, 255);
-  pad.active = pad.buttons != 0 || pad.lx != 128 || pad.ly != 128;
+  pad.rx = (u8)std::min<u32>(rx, 255);
+  pad.ry = (u8)std::min<u32>(ry, 255);
+  pad.active = pad.buttons != 0 || pad.lx != 128 || pad.ly != 128 || pad.rx != 128 || pad.ry != 128;
 }
 
 #ifdef _WIN32

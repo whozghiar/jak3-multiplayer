@@ -14,7 +14,9 @@
 ;;   host <ip:port> | join <ip:port> | leave                 session
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> | stick <lx> <ly> <ms>              force pad 0 (0-255, 128 = center)
+;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
 ;;   goto-player <slot> [x z] | face-player <slot>           stand next to / face a remote player
+;;   goto-behind <slot> <meters>                             stand behind a remote player, out of its view
 ;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
 ;;   gun [pickup-type] | board | vehicle <type>              every gun mod (26-37 picks one); hoverboard; a vehicle
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
@@ -33,7 +35,8 @@
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
 ;;   far-levels <0|1>                                        load the art of distant players' objects (default 1)
 ;;   art-range <meters>                                      how far from us that art loads (default 400)
-;;   log-gone                                                NPCs we sent that left near another player, alive
+;;   log-gone | trace-gone                                   NPCs we sent that vanished near another player (count, each)
+;;   log-vanished | trace-vanish                             what vanished on our screen within 40 m, alive (count, each)
 ;;   synth-skels <0|1>                                       copies use the skeleton-groups rebuilt from descriptions
 ;;   log-art-kinds                                           every skeleton another player announced: drawable here?
 ;;   announce-all-kinds | log-kinds-coverage                 describe every kind of our place; check those described
@@ -46,7 +49,7 @@
 (define-extern pc-mp-test-active? (function symbol))
 (define-extern pc-mp-test-poll (function string symbol))
 (define-extern pc-mp-test-screenshot (function string none))
-(define-extern pc-mp-test-pad (function int int int none))
+(define-extern pc-mp-test-pad (function int int int int int none))
 (define-extern pc-mp-test-pause (function symbol none))
 
 ;; wait-joined / wait-player: the script clock stops until the wait is over (mp-test-update).
@@ -229,6 +232,27 @@
 
 (define *mp-test-path* (new 'global 'mp-test-path))
 (set! (-> *mp-test-path* skel) (new 'global 'string 32 (the-as string #f)))
+
+(define *mp-test-trace-gone* #f) ;; trace-gone: log each NPC counted by log-gone
+
+(defun mp-test-note-gone ((st mp-actor-state) (proc process-drawable))
+  "Print an NPC we sent that vanished near another player (trace-gone): its skeleton, why (left the
+   game, inactive, hidden) and its distance to the nearest other player."
+  (when *mp-test-trace-gone*
+    (format
+      0
+      "[mp-test] gone ~S ~S ~,,1m~%"
+      (string<-charp *mp-temp-string* (-> st skel))
+      (cond
+        ((not proc) "left")
+        ((and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) inactive)) "inactive")
+        (else "hidden")
+        )
+      (mp-remote-distance (-> st trans))
+      )
+    )
+  (none)
+  )
 
 (defun mp-test-note-path ((own? symbol) (st mp-actor-state))
   "Print the root of `st` when its skeleton is the one log-path asked for (its own states on the
@@ -940,7 +964,7 @@
         ((string= cmd "press")
          (mp-test-word)
          (let ((bit (mp-test-button (-> *mp-test* word))))
-           (pc-mp-test-pad bit 128 128)
+           (pc-mp-test-pad bit 128 128 128 128)
            (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
            )
          )
@@ -948,7 +972,16 @@
          (let* ((lx (mp-test-int))
                 (ly (mp-test-int))
                 )
-           (pc-mp-test-pad 0 lx ly)
+           (pc-mp-test-pad 0 lx ly 128 128)
+           (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
+           )
+         )
+        ((string= cmd "stick-r")
+         ;; stick-r <rx> <ry> <ms>: the right stick (camera), as a player looking around
+         (let* ((rx (mp-test-int))
+                (ry (mp-test-int))
+                )
+           (pc-mp-test-pad 0 128 128 rx ry)
            (set! (-> *mp-test* pad-until) (+ (mp-now) (/ (* (mp-test-int) 300) 1000)))
            )
          )
@@ -987,6 +1020,31 @@
                )
              )
            )
+         )
+        ((string= cmd "goto-behind")
+         ;; goto-behind <slot> <meters>: stand that far behind the player (against the way it faces),
+         ;; behind its camera, out of its view
+         (let* ((st (mp-remote-state (mp-test-int)))
+                (dist (* (meters 1) (the float (mp-test-int))))
+                )
+           (when (and st *target*)
+             (let ((fwd (vector-z-quaternion! (new 'stack-no-clear 'vector) (-> st quat)))
+                   (pos (vector-copy! (new 'stack-no-clear 'vector) (-> st trans)))
+                   )
+               (set! (-> fwd y) 0.0)
+               (vector-normalize! fwd dist)
+               (vector-! pos pos fwd)
+               (move-to-point! (-> *target* control) pos)
+               )
+             )
+           )
+         )
+        ((string= cmd "log-vanished")
+         ;; copies of other players' NPCs removed or hidden alive within 40 m of us
+         (format 0 "[mp-test] copies vanished near us ~D~%" (-> *mp-world-state* vanished-near))
+         )
+        ((string= cmd "trace-vanish")
+         (set! *mp-trace-vanish* #t)
          )
         ((string= cmd "log-crates")
          (mp-test-crates)
@@ -1319,6 +1377,9 @@
         ((string= cmd "far-levels")
          (set! *mp-far-enabled* (!= (mp-test-int) 0))
          )
+        ((string= cmd "trace-gone")
+         (set! *mp-test-trace-gone* #t)
+         )
         ((string= cmd "log-gone")
          (format 0 "[mp-test] npcs gone near another player ~D~%" (-> *mp-world-state* gone-near))
          )
@@ -1554,7 +1615,7 @@
   "Release forced input when its time is over, end a wait when it is over, then run the due script
    commands."
   (when (and (nonzero? (-> *mp-test* pad-until)) (>= (mp-now) (-> *mp-test* pad-until)))
-    (pc-mp-test-pad 0 128 128)
+    (pc-mp-test-pad 0 128 128 128 128)
     (set! (-> *mp-test* pad-until) 0)
     )
   (when (and (-> *mp-test-wait* kind) (mp-test-wait-over?))

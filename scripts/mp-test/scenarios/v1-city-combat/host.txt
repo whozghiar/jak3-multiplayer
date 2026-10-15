@@ -1,0 +1,21 @@
+# Reproduction on multiplayer-v1.0.0 (bf43da5a3, its sources put back for the run): the
+# `city-combat` script, the crash report's three guns and the hoverboard zap in Haven City.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+40 continue ctyport-start
+62 log-levels
+75 log
+100 log
+105 face-player 1
+106 gun 31
+107 press r1 1500
+110 log
+111 gun 28
+112 press r1 1500
+115 log
+116 gun 35
+117 press r1 2000
+121 log
+128 log

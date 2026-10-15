@@ -1,0 +1,13 @@
+# NPCs when another player comes back, host side: at Haven City's port with the guest, goes away
+# to the slums (the guest, alone, simulates its own NPCs), then comes back next to the guest
+# (the guest shows the host's NPCs again and puts its own to sleep). Fixed times (no wait-joined):
+# the same script also runs on multiplayer-v1.0.0.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+40 continue ctyport-start
+58 continue ctysluma-start
+90 goto-player 1
+92 log-me
+125 log

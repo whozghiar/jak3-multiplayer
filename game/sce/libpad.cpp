@@ -112,6 +112,10 @@ int scePadRead(int port, int /*slot*/, u8* rdata) {
       cpad->leftx = mp::g_test_pad.lx;
       cpad->lefty = mp::g_test_pad.ly;
     }
+    if (mp::g_test_pad.rx != 128 || mp::g_test_pad.ry != 128) {
+      cpad->rightx = mp::g_test_pad.rx;
+      cpad->righty = mp::g_test_pad.ry;
+    }
   }
 
   return 32;

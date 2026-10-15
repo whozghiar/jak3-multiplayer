@@ -1,0 +1,27 @@
+# NPCs when another player comes back, guest side: stands at the port while the host goes away
+# (its own NPCs wake around it) and comes back next to it (they go to sleep, the host's are shown),
+# turning the camera around every 8 s as a player does. Counts what vanishes on its screen within 40 m:
+# its own NPCs put to sleep, copies removed or hidden while their original lived (log-vanished,
+# trace-vanish).
+1 enable
+1 name Guest
+1 color 2
+1 trace-vanish
+40 continue ctyport-start
+45 join 127.0.0.1:7777
+52 goto-player 0
+56 log-me
+60 log-vanished
+62 stick-r 255 128 1500
+70 stick-r 255 128 1500
+78 stick-r 255 128 1500
+86 stick-r 255 128 1500
+88 log-vanished
+94 stick-r 255 128 1500
+100 log-vanished
+102 stick-r 255 128 1500
+110 stick-r 255 128 1500
+118 stick-r 255 128 1500
+121 log-vanished
+121 log
+125 log

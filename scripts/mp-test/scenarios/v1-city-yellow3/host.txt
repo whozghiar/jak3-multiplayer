@@ -1,0 +1,10 @@
+# Reproduction on multiplayer-v1.0.0 (bf43da5a3, its sources put back for the run): in Haven
+# City's port, the guest fires the yellow 3 (gyro burster) alone at the host's guards and traffic.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+40 continue ctyport-start
+62 log-levels
+75 log
+100 log

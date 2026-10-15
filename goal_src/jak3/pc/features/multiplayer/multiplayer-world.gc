@@ -109,6 +109,7 @@
    (replica-count  int32)
    (replica-id     uint32 MP_MAX_REPLICAS)
    (replica        handle MP_MAX_REPLICAS)
+   (vanished-near  int32)        ;; what vanished on our screen within 40 m, alive (test log)
    (suppressed-count int32)
    (suppressed     handle 256)
    (skel-count     int32)
@@ -133,8 +134,8 @@
    (elevator-states int32)      ;; states of another player's trip applied here
    (world-driven  int32)        ;; physics object updates applied from the authority
    (shot-copies   int32)        ;; copies of other players' shots drawn here (test log)
-   (gone-near     int32)        ;; NPCs we sent that left the game within 40 m of another player,
-                                ;; not dying (test log: despawned under another player's eyes)
+   (gone-near     int32)        ;; NPCs we sent shown that left the game or were hidden within 40 m
+                                ;; of another player, not dying (test log: gone under its eyes)
    (hit-remote    uint32 16)    ;; recent blows from other players: sender slot << 28 | its attack id
    (hit-local     uint32 16)    ;; and the attack id each got here
    (hit-next      int32)
@@ -849,6 +850,7 @@
 (define-extern mp-art-heap-close (function none))
 (define-extern mp-elevators-unmute (function symbol none))
 (define-extern mp-test-note-path (function symbol mp-actor-state none)) ;; multiplayer-test.gc
+(define-extern mp-test-note-gone (function mp-actor-state process-drawable none)) ;; multiplayer-test.gc
 (define-extern mp-poll-elevator (function process object))
 (define-extern mp-drive-elevator (function mp-actor-state none))
 (define-extern mp-update-remote-riders (function none))
@@ -868,15 +870,26 @@
       )
     (when (and (> (mp-player-count) 0) (>= (- (mp-now) (-> ws last-send)) (seconds 0.066)))
       (set! (-> ws last-send) (mp-now))
-      ;; the NPCs of the last batch that left meanwhile, alive, near another player (test log)
+      ;; the NPCs of the last batch shown that left meanwhile, or were hidden (citizen go-inactive,
+      ;; traffic sent back to its pool: no-draw, the copy hidden), alive, near another player (test
+      ;; log: what vanished under its eyes)
       (dotimes (i (-> *mp-actors-out* count))
-        (let ((st (-> *mp-actors-out* state i)))
-          (if (and (not (logtest? (-> st flags) (mp-actor-flag owned world dead hidden)))
-                   (not (handle->process (-> *mp-pose* obj i)))
-                   (< (mp-remote-distance (-> st trans)) (meters 40))
-                   )
-              (+! (-> ws gone-near) 1)
+        (let ((st (-> *mp-actors-out* state i))
+              (proc (the-as process-drawable (handle->process (-> *mp-pose* obj i))))
               )
+          (when (and (not (logtest? (-> st flags) (mp-actor-flag owned world dead hidden)))
+                     (< (mp-remote-distance (-> st trans)) (meters 40))
+                     (or (not proc)
+                         (and (not (and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) dead)))
+                              (or (and (type? proc process-focusable) (focus-test? (the-as process-focusable proc) inactive))
+                                  (and (nonzero? (-> proc draw)) (logtest? (-> proc draw status) (draw-control-status no-draw)))
+                                  )
+                              )
+                         )
+                     )
+            (+! (-> ws gone-near) 1)
+            (mp-test-note-gone st proc)
+            )
           )
         )
       (set! *mp-collect-count* 0)
@@ -1001,6 +1014,19 @@
 ;; Guest: replicas
 ;; ------------------------------------------------------------------------------------------------
 
+(define-extern mp-replica-vanished (function process-drawable string none))
+
+(defun mp-in-our-view? ((proc process-drawable))
+  "#t when `proc` is drawn on our screen within 60 m of our player: whatever it does there, our
+   player sees it."
+  (and *target*
+       (nonzero? (-> proc draw))
+       (not (logtest? (-> proc draw status) (draw-control-status no-draw)))
+       (logtest? (-> proc draw status) (draw-control-status on-screen))
+       (< (vector-vector-distance (-> proc root trans) (-> *target* control trans)) (meters 60))
+       )
+  )
+
 ;; One NPC of the host, drawn here. It plays the host's animation (and with it the effects the
 ;; animation carries: footsteps, sounds), takes the host's body variant, and is solid and hittable
 ;; like the real one. Hits go to the host. It is a process-focusable of the original's kind (process
@@ -1009,6 +1035,8 @@
 (deftype mp-replica (process-focusable)
   ((id     uint32)
    (dying? symbol)
+   (linger-since time-frame)       ;; when it began to stay in our view after its owner hid it or
+                                   ;; stopped sending it (0: not lingering)
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
    (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the owner's object emits (mp-play-emitters)
    (fx-tracker handle MP_FX_TRACKERS)
@@ -1126,13 +1154,30 @@
       (set-vector! (-> self root scale) scale scale scale 1.0)
       )
     (cond
+      ;; hidden by its owner (back to the traffic pool, gone inactive) while in our view: it stays,
+      ;; intangible, until our player looks away (2 minutes at most), not vanishing under its eyes
+      ((and (logtest? (-> st flags) (mp-actor-flag hidden))
+            (not (logtest? (-> st flags) (mp-actor-flag dead)))
+            (mp-in-our-view? self)
+            (or (zero? (-> self linger-since)) (< (- (mp-now) (-> self linger-since)) (seconds 120)))
+            )
+       (if (zero? (-> self linger-since))
+           (set! (-> self linger-since) (mp-now))
+           )
+       (set! (-> self root root-prim prim-core collide-as) (collide-spec))
+       )
       ((logtest? (-> st flags) (mp-actor-flag hidden))
+       (if (not (logtest? (-> self draw status) (draw-control-status no-draw)))
+           (mp-replica-vanished self "hidden")
+           )
        (logior! (-> self draw status) (draw-control-status no-draw))
        (set! (-> self root root-prim prim-core collide-as) (collide-spec))
        )
       (else
         (logclear! (-> self draw status) (draw-control-status no-draw))
-        (set! (-> self root root-prim prim-core collide-as) (-> self root backup-collide-as))
+        (if (zero? (-> self linger-since))
+            (set! (-> self root root-prim prim-core collide-as) (-> self root backup-collide-as))
+            )
         )
       )
     ;; 0 means the host's NPC does not use body segments: keep the default
@@ -1338,15 +1383,46 @@
   -1
   )
 
+(define *mp-trace-vanish* #f) ;; trace-vanish: log each copy counted in vanished-near
+
+(defun mp-replica-vanished ((proc process-drawable) (why string))
+  "Test log: copy `proc` is removed or hidden: count it when it was on our screen within 40 m of our
+   player and its owner's object did not die (what our player sees vanish)."
+  (let ((rep (the-as mp-replica proc)))
+    ;; a copy of a shot without a model (mp-fx-copy) has no draw
+    (when (and *target*
+               (nonzero? (-> rep draw))
+               (not (-> rep dying?))
+               (not (logtest? (-> rep net flags) (mp-actor-flag dead)))
+               (not (logtest? (-> rep draw status) (draw-control-status no-draw)))
+               (logtest? (-> rep draw status) (draw-control-status on-screen))
+               (< (vector-vector-distance (-> rep root trans) (-> *target* control trans)) (meters 40))
+               )
+      (+! (-> *mp-world-state* vanished-near) 1)
+      (if *mp-trace-vanish*
+          (format
+            0
+            "[mp-test] vanished ~S ~S ~,,1m~%"
+            (string<-charp *mp-temp-string* (-> rep net skel))
+            why
+            (vector-vector-distance (-> rep root trans) (-> *target* control trans))
+            )
+          )
+      )
+    )
+  (none)
+  )
+
 (defun mp-replica-remove ((i int))
   "Remove entry `i` of the replica table (and its process)."
   (let* ((ws *mp-world-state*)
          (proc (handle->process (-> ws replica i)))
          (last (+ (-> ws replica-count) -1))
          )
-    (if proc
-        (deactivate proc)
-        )
+    (when proc
+      (mp-replica-vanished (the-as process-drawable proc) "removed")
+      (deactivate proc)
+      )
     (set! (-> ws replica-id i) (-> ws replica-id last))
     (set! (-> ws replica i) (-> ws replica last))
     (set! (-> ws replica-count) last)
@@ -1559,6 +1635,25 @@
 ;; Not an authority: our own NPCs sleep while another player's are shown
 ;; ------------------------------------------------------------------------------------------------
 
+(defun mp-own-npc-slept ((proc process-drawable))
+  "Test log: our NPC `proc` is put to sleep: count it in vanished-near when it was on our screen
+   within 40 m of our player (it vanishes under our eyes)."
+  (when (and *target*
+             (nonzero? (-> proc draw))
+             (not (logtest? (-> proc draw status) (draw-control-status no-draw)))
+             (logtest? (-> proc draw status) (draw-control-status on-screen))
+             (< (vector-vector-distance (-> proc root trans) (-> *target* control trans)) (meters 40))
+             )
+    (+! (-> *mp-world-state* vanished-near) 1)
+    (if *mp-trace-vanish*
+        (format 0 "[mp-test] vanished ~A slept ~,,1m~%" (-> proc type)
+                (vector-vector-distance (-> proc root trans) (-> *target* control trans))
+                )
+        )
+    )
+  (none)
+  )
+
 (defun mp-suppress-actor ((proc process-drawable))
   "iterate-process-tree callback: put one of our NPCs to sleep (no logic, not drawn, intangible)."
   (when (and (type? proc process-drawable)
@@ -1568,7 +1663,14 @@
              (not (mp-driven-vehicle? proc))
              (not (logtest? (-> proc mask) (process-mask sleep)))
              (< (-> *mp-world-state* suppressed-count) 256)
+             ;; one our player is looking at sleeps once it looks away: it does not vanish under its
+             ;; eyes when another player's NPCs take over (60 s at most)
+             (not (and (mp-in-our-view? proc)
+                       (< (- (mp-now) (-> *mp-world-state* authority-since)) (seconds 60))
+                       )
+                  )
              )
+    (mp-own-npc-slept proc)
     (logior! (-> proc mask) (process-mask sleep))
     (if (nonzero? (-> proc draw))
         (logior! (-> proc draw status) (draw-control-status no-draw))
@@ -1722,23 +1824,47 @@
                 (seen? #f)
                 )
             (dotimes (j count)
-              (if (= (-> *mp-actors-in* state j id) (-> ws replica-id i))
-                  (set! seen? #t)
-                  )
-              )
-            (if (or (not proc)
-                    (not seen?)
-                    (not (-> proc level))
-                    (not (or (= (-> proc level status) 'active)
-                             (= (-> proc level status) 'reserved)
-                             (= (-> proc level status) 'loaded)
-                             (= (-> proc level status) 'alive)
-                             )
-                         )
+              (when (= (-> *mp-actors-in* state j id) (-> ws replica-id i))
+                (set! seen? #t)
+                ;; shown again by its owner: no longer lingering
+                (if (and proc (not (logtest? (-> *mp-actors-in* state j flags) (mp-actor-flag hidden))))
+                    (set! (-> proc linger-since) 0)
                     )
-                (mp-replica-remove i)
-                (+! i 1)
                 )
+              )
+            (cond
+              ((or (not proc)
+                   (not (-> proc level))
+                   (not (or (= (-> proc level status) 'active)
+                            (= (-> proc level status) 'reserved)
+                            (= (-> proc level status) 'loaded)
+                            (= (-> proc level status) 'alive)
+                            )
+                        )
+                   )
+               (mp-replica-remove i)
+               )
+              (seen?
+               (+! i 1)
+               )
+              ;; its owner no longer sends it (it left, or the owner went away) while it is in
+              ;; our view: it stays where it was, intangible, until our player looks away (2
+              ;; minutes at most)
+              ((and (not (-> proc dying?))
+                    (not (logtest? (-> proc net flags) (mp-actor-flag dead)))
+                    (mp-in-our-view? proc)
+                    (or (zero? (-> proc linger-since)) (< (- (mp-now) (-> proc linger-since)) (seconds 120)))
+                    )
+               (when (zero? (-> proc linger-since))
+                 (set! (-> proc linger-since) (mp-now))
+                 (set! (-> proc root root-prim prim-core collide-as) (collide-spec))
+                 )
+               (+! i 1)
+               )
+              (else
+                (mp-replica-remove i)
+                )
+              )
             )
           )
         )

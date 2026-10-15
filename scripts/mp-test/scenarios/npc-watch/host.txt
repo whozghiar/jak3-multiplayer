@@ -1,13 +1,19 @@
-# NPCs under another player's eyes, host side: in Haven City's slums with its traffic; the guest
-# stands 25 m away for 60 s. The host counts the NPCs it sent that left the game near the guest
-# without dying (log-gone): the game removes NPCs off its own screen, which the guest may see.
+# NPCs under another player's eyes, host side: stands still in Haven City's port with its
+# traffic, its camera behind it looking ahead. The guest stands 30 m behind the host, out of the
+# host's view: the NPCs the guest sees are off the host's screen, where the game sends them away
+# (traffic off screen for 10 s, citizen enemy-common-post). The host counts the NPCs it sent,
+# shown, that left the game or were hidden near the guest without dying (log-gone).
 1 enable
 1 name Host
 1 color 1
-20 continue ctysluma-start
+1 trace-gone
+20 continue ctyport-start
 38 host 0.0.0.0:7777
 44.9 wait-player 1
-50 log-gone
-80 log-gone
-110 log-gone
-112 log
+58 log-me
+60 log-gone
+60.5 screenshot view
+90 log-gone
+120 log-gone
+150 log-gone
+152 log

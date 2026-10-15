@@ -12,7 +12,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 | Layer | File | Role |
 |---|---|---|
 | Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
-| Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, left stick). |
+| Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason). |
 | GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
@@ -164,6 +164,17 @@ touching every part of a vehicle for several frames counts once, as stock code c
   authority sends the NPCs within 100 m of the players it serves (itself, and the players who are
   not authorities and whose nearest authority it is), and drops the copies of another authority's
   NPCs standing nearer to itself than to that player.
+- **Nothing vanishes under a player's eyes.** The game removes what its player does not see:
+  traffic off screen for 10 s goes back to its pool, a citizen off screen goes inactive
+  (`vehicle` post, `citizen` `enemy-common-post`), both hidden (`no-draw`). The authority marks
+  the NPCs it sends within 60 m of another player as on screen (`mp-keep-seen-npcs`). When the
+  roles change (a guest meets or leaves the host), what the player sees would still change at once:
+  its own NPCs put to sleep, the copies of NPCs their owner hides or stops sending removed. So
+  nothing drawn on our screen within 60 m (`mp-in-our-view?`) goes while there: an own NPC sleeps
+  once out of view (60 s at most after the switch); a copy its owner hides or no longer sends
+  stays where it is, intangible, until out of view (`linger-since`, 2 minutes at most). Only a
+  copy whose art leaves with its level goes at once. Measured on the guest
+  (`vanished-near`, `log-vanished`): what was on its screen within 40 m and vanished alive.
 
 ### 1.5 Story progress
 
@@ -297,8 +308,14 @@ An access violation in GOAL code ends the game with no trace in the log. The run
 GOAL function holding the faulting instruction and the GOAL return addresses found on the stack
 (`report_goal_crash`, a vectored exception handler in `kmultiplayer.cpp`):
 `[multiplayer] crash: access violation at #x... in GOAL <function> +#x...`, then `from GOAL ...`
-lines. It found the hoverboard zap's crash (`vector<-cspace!` from `board-zap-track`) and the
-test log's own (`mp-test-log` reading a copy without a model).
+lines. It found the hoverboard zap's crash (`vector<-cspace!` from `board-zap-track`), the
+copy of a destroyed vehicle playing a character's death effect (a call to address 0 from
+`mp-replica-update`) and the test log's own (`mp-test-log` reading a copy without a model).
+
+The crashes of the test session were reproduced on `multiplayer-v1.0.0` (bf43da5a3, the version
+played), its sources put back in the worktree for the run with three test commands and this
+report added (`gun [type]`, `board`, `stick-r`), then the same scripts run on the current version
+(scenarios `v1-*`, 5.2).
 
 ## 2. Requirements and how they are met
 
@@ -326,7 +343,7 @@ Each is marked `MOD multiplayer`.
 | File | Change |
 |---|---|
 | `game/kernel/jak3/kmachine.cpp` | `InitMachine_PCPort` registers the `pc-mp-*` functions. |
-| `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, left stick). |
+| `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | `game/CMakeLists.txt`, `test/CMakeLists.txt` | The new C++ file and its test. |
 | `goal_src/jak3/dgos/game.gd` | The four mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o` and `jak-indax+0-ag.go`. |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
@@ -407,8 +424,9 @@ where the player's attacks look. A model change (character, outfit) respawns the
 
 While it is not an authority (1.4), a player turns its ambient traffic off
 (`set-setting! 'traffic-spawn #f`, held by the manager) and, four times a second, puts every own
-NPC to sleep: `sleep` process mask, not drawn, collision off. Everything is restored when it
-becomes an authority or the session ends.
+NPC to sleep: `sleep` process mask, not drawn, collision off; one on its screen within 60 m sleeps
+once out of view (60 s at most after the switch). Everything is restored when it becomes an
+authority or the session ends.
 
 ## 5. Testing in game
 
@@ -456,8 +474,8 @@ A script line is `<seconds> <command>`:
 |---|---|
 | `enable`, `name <w>`, `color <n>`, `character <n>` | Mod settings. |
 | `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
-| `press <button> <ms>`, `stick <lx> <ly> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; stick 0-255, 128 centered). |
-| `goto-player <slot> [x z]`, `face-player <slot>` | Stand next to a remote player (or x and z meters from it), turn to it. |
+| `press <button> <ms>`, `stick <lx> <ly> <ms>`, `stick-r <rx> <ry> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; sticks 0-255, 128 centered; the right stick turns the camera). |
+| `goto-player <slot> [x z]`, `face-player <slot>`, `goto-behind <slot> <m>` | Stand next to a remote player (or x and z meters from it), turn to it; stand that far behind it, out of its view. |
 | `goto-npc <skeleton prefix>`, `goto-actor <n>` | Stand next to a replicated NPC, facing it. |
 | `goto-crate`, `log-crates` | Stand at the nearest crate; count the live crates. |
 | `gun`, `vehicle <type>`, `cheat <name>`, `zone <n>`, `continue <name>` | Gameplay helpers. |
@@ -484,9 +502,11 @@ A script line is `<seconds> <command>`:
 | `mode <0\|1>`, `title` | Game mode when hosting (free roam, co-op); back to the title screen as the pause menu's quit does. |
 | `log-join`, `try-save` | Joining the host's world: stage, world sent or loaded and its size, saves refused, continue point, title screen or in game, language, distance to the host; an auto-save, as a checkpoint asks it. |
 | `log-coop`, `log-weather` | Co-op: authority, steps held and released, leash returns, the player waited for, distance to the host; the weather (clouds, fog, special, the override). |
+| `log-gone`, `trace-gone` | On the authority: the NPCs it sent, shown, that left the game or were hidden within 40 m of another player without dying (count; each, with why). |
+| `log-vanished`, `trace-vanish` | What vanished on our screen within 40 m while alive: own NPCs put to sleep, copies removed or hidden (count; each, with why). |
 | `log-path <skeleton> <frames>` | An object's root every frame: on its owner each state it sends, on a viewer each state drawn, stamped with the owner's clock (`compare_poses.py` compares the copy's path with the owner's). |
 
-Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 221 checks passed, 0 failed, 30 scenarios):
+Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano, every one run again after the last change; `check_results.py`: 245 checks passed, 1 failed, 34 scenarios; the failure, `world-objects`' cycle phase at 29 ms against a 17 ms bound, two samples stamped 10 to 14 ms late, passed run again with 16 ms):
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -495,7 +515,7 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `pvp-probe` | The attacker's position and state every 0.1 s around the punch | The punch lunge stops on the host's hurtbox. |
 | `npc` | Host NPCs on the guest | 13 replicas drawn, the guest's own NPCs (8 to 10 around it) asleep. |
 | `npc-hit` | A guest's punch on a host NPC | The host applies both blows to its citizen (`player 1 hit ... punch`); in an earlier run the citizen struck back and the guest lost 2 health. |
-| `props`, `combat` | Daxter, gun, shots, impacts, emitters, laser | Daxter on the shoulder and the gun in the aiming pose on the remote puppet; the host's shots drawn on the guest as objects (3 copies), their impacts and the gun's emitters replayed; the gun's laser drawn from the gun's copy, ending on the ground where it points (screenshot). |
+| `props`, `combat` | Daxter, gun, shots, impacts, emitters, laser | Daxter on the shoulder and the gun in the aiming pose on the remote puppet; the host's shots drawn on the guest as objects (2 copies), their impacts and the gun's emitters replayed; the gun's laser drawn from the gun's copy, ending on the ground where it points (screenshot). |
 | `vehicle` | A driven buggy, then stolen | Body and wheels replicated, its emitters (289 shown) and engine sound (932 updates played) on the guest; the driver is ejected and sees the thief's buggy. |
 | `ride` | Passenger seat | The guest, standing 3 m beside the host's two-seat buggy, rides in it; the host drives 27 m with it. |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
@@ -507,12 +527,15 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `far-city-synth` | Objects whose code is in no level here | The same as `far-city`, the host building every copy from the skeleton-groups the guest describes (`synth-skels 1`): 24 groups rebuilt, every object it draws drawn. |
 | `far-city` | A distant player in another region | The guest goes to Haven City's port while the host stays in Spargus (art range raised to 100 km for the test). No Haven level loads in Spargus: the host opens the art heap in `wascitya`'s memory and loads the art groups of what passes by the guest alone (8 in the last run: barge, cars `cara` `carb` `carc`, bikes `bikea` `bikeb` `bikec`, `citizen-norm`; `crimson-guard` too in an earlier one), 0 failed; every object the guest draws is drawn here (3 of 3 in the last run: a barge, a citizen, Daxter; 11 of 11 in an earlier one, with guards and a car). The guest, in Haven, opens its own art heap in `ctywide`'s memory for the host's dog (`dogat`) and closes it when it leaves. `log-shaders`: 0 broken links. |
 | `progress-late` | A guest 40 missions behind joins | It loads the host's world on joining: the same 42 closed nodes as the host, with their rewards, and plays on. |
-| `guns` | Every gun mod, both ways | Each player fires all 12 mods (yellow 1-3, red 1-3, blue 1-3, dark 1-3) 7 m from the other, in Spargus: no crash on either machine; the guest draws 215 copies of the host's shots, the host 148 of the guest's, and the shots hit the other player (hit reactions on both). |
+| `guns` | Every gun mod, both ways | Each player fires all 12 mods (yellow 1-3, red 1-3, blue 1-3, dark 1-3) 7 m from the other, in Spargus: no crash on either machine; the guest draws 214 copies of the host's shots, the host 183 of the guest's, and the shots hit the other player (hit reactions on both). |
 | `city-combat` | The crash report's weapons in Haven City | The guest fires the gyro burster (yellow 3), the plasmite RPG (red 3) and the peace maker (dark 1) at the port, then the host fires the same: no crash. The gyro burster's homing shots pick the host's guards and barges through their copies: the host applies 3 hits to crimson guards and 60 to barges (before, homing weapons saw no copy: copies were not focusable). |
 | `vehicle-hit` | The hoverboard's zap on a vehicle (the host's crash) | The guest on the hoverboard zaps the host's buggy and punches it: the host applies the zaps (`board`) and blows to its buggy and wheels, until the buggy blows up; no crash on the host (the zap's effect, replayed under `*entity-pool*`, crashed it in `board-zap-track`) nor on the guest (the copy of the dead buggy played a character's death effect, a call to address 0). The guest's hoverboard is drawn on the host (`skel-board` copy). |
 | `elevator-alone` | Another player's elevator trip | The host rides the palace elevator up while the guest stays in the street 25 m away: the guest's elevator rises with it (34.6 m to 242.9 m, placed from the host's states), its scripts set aside for the trip and back after; the guest's continue point stays `wascity-start` and no palace level loads for it. Before: the elevator stayed at the bottom (paused out of view) and, arriving, its scripts changed the guest's continue point and levels. |
 | `drive` | Smoothness of a driven vehicle | The host drives a buggy 80 m straight; the guest, 8 m away, logs its copy's root every frame: 351 samples, the copy within 0.1 cm of the host's path (median), 0.2 cm for 95 %, 0.4 cm at most; its speed changes 0.21 m/s per frame, the host's own 0.23 m/s (the copy moves as evenly as the original). |
-| `npc-watch` | NPCs under another player's eyes | The guest stands 25 m from the host in Haven's slums for 60 s, showing the host's NPCs (7 copies): none of the NPCs the host sends near it leaves the game alive (`log-gone` 0). |
+| `npc-watch` | NPCs under another player's eyes | The host stands still at Haven's port, the guest 30 m behind it, out of the host's view, for 90 s, showing the host's NPCs (13 copies): none of the NPCs the host sends near the guest leaves or is hidden alive (`log-gone` 0). |
+| `npc-handoff` | NPCs when players meet or part | At the port, the host goes to the slums (the guest simulates its own NPCs), then comes back next to the guest (the guest shows the host's again), while the guest turns its camera around every 8 s: nothing vanishes on the guest's screen within 40 m (`log-vanished` 0; 12 copies shown again at the end). The same script on `multiplayer-v1.0.0` (with the same count): 9, 3 and 5 vanished in three runs, own NPCs put to sleep in view when the host came back, copies of the host's NPCs hidden in view when it left; 0, 0 and 0 on the current version. |
+| `v1-vehicle-hit` | The hoverboard zap's crash, reproduced | The `vehicle-hit` script without waits. On `multiplayer-v1.0.0`: the host crashes in `board-zap-track` (`vector<-cspace!`), as in the test session. Now: the zaps and blows applied (96 hits on the buggy, its wheels and a wastelander), no crash. |
+| `v1-city-combat`, `v1-city-yellow3` | The gun crashes, reproduced | The `city-combat` script without waits, and the gyro burster (yellow 3) alone at the port's guards. On `multiplayer-v1.0.0`: the guest crashes in both, while firing the plasmite RPG (red 3) and the gyro burster: the copy of a barge its shots destroyed plays a character's death effect, a call to address 0 from `mp-replica-update`. Now: the same blows applied (60 hits on barges; 143 on barges, a car, citizens and a guard), no crash. The peace maker (dark 1) did not crash `multiplayer-v1.0.0` in these scripts nor alone at the port or in Spargus; it destroys vehicles the same way. |
 | `join-world` | A guest with another save joins | The guest, in Haven with 3 more story steps than the host, joins: it loads the host's world (42928 bytes, 3.7 s), comes out at the host's checkpoint in Spargus 1.5 m from the host, with the host's progress (1 node); the host's progress is unchanged (the guest's 3 not merged); its language is kept; an auto-save is refused (`no save in another player's world`). |
 | `join-title` | Joining from the title screen | The guest goes back to the title screen, joins from there: the host's world loads, the guest appears 1.5 m from the host at its checkpoint, with its progress (screenshots: the title screen, then next to the host). |
 | `coop` | Co-op mode | The host hosts in co-op: the guest never simulates NPCs; sent 202 m away, it is back 1.5 m from the host within 3 s (leash). Standing 59 m away, it is told "Host waits for you here" while a story step the host reached is held; coming next to the host, the step closes on both (2 nodes each). The guest follows the host's weather (clouds 0.25, fog 0.5, its own random weather stopped). |
@@ -560,6 +583,12 @@ public IP.
 - Bandwidth to each other player: about 200 KB/s for a player's model, Daxter and gun at 60
   frames a second, plus 36 KB/s per NPC within 40 m of that player and 9 KB/s per NPC farther
   (15 Hz); with a crowd of 10 NPCs nearby and 30 farther, about 0.85 MB/s.
+- A copy its owner no longer simulates stays where it is, frozen and intangible, while the player
+  looks at it (2 minutes at most); an own NPC in view stays awake up to 60 s after another
+  player's NPCs are shown: meanwhile both are seen.
+- The peace maker (dark 1) crash of the test session was not reproduced on `multiplayer-v1.0.0`
+  (two scripts, at the port and in Spargus); it destroys vehicles like the two guns whose crash
+  was reproduced and fixed.
 - Text fields use the D-pad (keyboard arrows work too).
 - TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
 
@@ -590,6 +619,16 @@ public IP.
   - *Tests.* Protocol 5 (`BLOB`), `wait-joined`/`wait-player` in every scenario (the runner waits
     for the scripts' end), new scenarios `guns`, `city-combat`, `vehicle-hit`, `elevator-alone`,
     `drive`, `join-world`, `join-title`, `coop`, `npc-watch`.
+  - *Reproductions on the version played.* `multiplayer-v1.0.0` rebuilt with its own sources:
+    the hoverboard zap crashes the host (`board-zap-track`); the gyro burster and the plasmite RPG
+    crash the guest in Haven (the copy of a barge they destroyed played a character's death
+    effect). Scenarios `v1-vehicle-hit`, `v1-city-combat`, `v1-city-yellow3` run the same scripts
+    on the current version: no crash.
+  - *NPCs vanishing.* Reproduced on `multiplayer-v1.0.0` (`npc-handoff`: 9, 3 and 5 on the
+    guest's screen): own NPCs put to sleep and copies hidden or removed in view when the roles
+    change. Nothing in view goes now (1.4): 0, 0 and 0. Measures `log-vanished` and `log-gone`
+    (hidden NPCs counted too), test commands `stick-r`, `goto-behind`, `trace-gone`,
+    `trace-vanish`; `npc-watch` with the guest out of the host's view.
 - **2026-10-14:** every kind of object of a place checked, not only those passing by: test
   commands `announce-all-kinds` and `log-kinds-coverage` (`pc-mp-art-file-exists`), art and
   skeleton tables raised to 160 kinds (24 of 24 in Haven, 65 of 65 in Spargus). Test command

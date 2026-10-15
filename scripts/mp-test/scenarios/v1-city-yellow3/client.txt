@@ -1,0 +1,20 @@
+# Reproduction on multiplayer-v1.0.0, guest side: joins the host at the port and fires the
+# yellow 3 (gyro burster) three times at the host's guards.
+1 enable
+1 name Guest
+1 color 2
+40 continue ctyport-start
+45 join 127.0.0.1:7777
+52 goto-player 0
+70 log-copies 0
+72 goto-npc skel-crimson-guard
+73 gun 31
+74 press r1 1500
+77 log
+78 goto-npc skel-crimson-guard
+79 press r1 1500
+83 log
+84 goto-npc skel-crimson-guard
+85 press r1 2000
+90 log
+100 log

@@ -1,0 +1,34 @@
+# Reproduction on multiplayer-v1.0.0, guest side: the `city-combat` script (no host world in
+# that version: the guest goes to the port itself first).
+1 enable
+1 name Guest
+1 color 2
+40 continue ctyport-start
+45 join 127.0.0.1:7777
+52 goto-player 0
+68 log-levels
+70 log-copies 0
+72 goto-npc skel-crimson-guard
+73 gun 31
+74 press r1 1500
+77 log
+78 goto-npc skel-crimson-guard
+79 gun 28
+80 press r1 1500
+83 log
+84 goto-npc skel-crimson-guard
+85 gun 35
+86 press r1 2000
+90 log
+91 goto-npc skel-h-bike
+92 board
+94 press circle 100
+95 press circle 100
+96 screenshot zap
+97 log
+103 goto-player 0 0 7
+104 face-player 0
+110 log
+115 log
+121 log
+128 log

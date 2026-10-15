@@ -460,7 +460,25 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         gone = [int(v) for (v,) in grab(host, r"npcs gone near another player (\d+)")]
         w = counter(client, r"world sent \d+ received (\d+) replicas (\d+)")
         c.check(scenario, "the guest sees the host's NPCs", bool(w) and w[-1][1] >= 1, f"replicas {w[-1][1] if w else None}")
-        c.check(scenario, "no NPC near the guest leaves the game alive", bool(gone) and gone[-1] == 0, f"{gone}")
+        c.check(scenario, "no NPC vanishes near the guest", bool(gone) and gone[-1] == 0, f"{gone}")
+
+    elif scenario == "npc-handoff":
+        roles = grab(client, r"\[multiplayer\] this player now (simulates|shows)")
+        c.check(scenario, "the guest simulates its own NPCs while the host is away, then shows the host's",
+                [r for (r,) in roles][-2:] == ["simulates", "shows"], f"{[r for (r,) in roles]}")
+        w = counter(client, r"world sent \d+ received (\d+) replicas (\d+)")
+        c.check(scenario, "the host's NPCs shown again", bool(w) and w[-1][1] >= 1, f"replicas {w[-1][1] if w else None}")
+        gone = [int(v) for (v,) in grab(client, r"copies vanished near us (\d+)")]
+        each = [f"{a} {b}" for (a, b) in grab(client, r"\[mp-test\] vanished (\S+) (\S+)")]
+        c.check(scenario, "nothing vanishes on the guest's screen", bool(gone) and gone[-1] == 0, f"{gone} {each[:6]}")
+
+    elif scenario.startswith("v1-"):
+        # scripts that crashed multiplayer-v1.0.0 (its sources put back): the same blows, no crash
+        hits = grab(host, r"\[multiplayer\] player 1 hit #<(\S+) ")
+        c.check(scenario, "the host applies the guest's blows to its vehicles", len(hits) >= 1,
+                f"{len(hits)} hits ({', '.join(sorted(set(h for (h,) in hits)))})")
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
 
     elif scenario == "drive":
         sys.path.insert(0, str(ROOT / "scripts" / "mp-test"))
