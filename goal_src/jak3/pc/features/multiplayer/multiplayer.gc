@@ -425,6 +425,26 @@
   ((the-as (function process int) (-> veh type method-table 65)) veh)
   )
 
+(defun mp-riding-state? ((state symbol))
+  "#t for the states a passenger rides in: Jak's grab-ride, Daxter held in his mode."
+  (or (= state 'target-grab-ride) (= state 'target-indax-grab))
+  )
+
+;; Where Daxter sits as a passenger, from the seat point in the vehicle's frame: above and behind it
+;; on a bike, behind it in a car. Values adapted from the daxter-seat-offsets of himstan's Jak and
+;; Daxter II Multiplayer (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer,
+;; goal_src/jak2/levels/city/common/target-pilot.gc, ISC license).
+(defun mp-daxter-seat-offset ((vtype int) (quat quaternion) (out vector))
+  "Daxter's offset from a passenger seat of a vehicle of type `vtype` turned by `quat`, in `out`."
+  (if (or (and (>= vtype 0) (<= vtype 2)) (= vtype 6))
+      (set-vector! out 0.0 (meters 0.4) (meters -0.3) 1.0)
+      (set-vector! out 0.0 0.0 (meters -0.4) 1.0)
+      )
+  (vector-orient-by-quat! out out quat)
+  (set! (-> out w) 1.0)
+  out
+  )
+
 (defun mp-vehicle-seat-pos ((veh process) (seat int) (out vector))
   "World position of a vehicle seat, through vehicle method 66 (see mp-vehicle-seat-count)."
   ((the-as (function process vector int none) (-> veh type method-table 66)) veh out seat)
@@ -1015,7 +1035,17 @@
           (let ((was (vector-copy! (new 'stack-no-clear 'vector) (-> self root trans))))
             (cond
               ((and driver (logtest? (-> driver flags) (mp-flag driving)))
-               (move-to-point! (-> self root) (-> driver seat-trans))
+               (if (-> self daxter?)
+                   (move-to-point!
+                     (-> self root)
+                     (vector+!
+                       (new 'stack-no-clear 'vector)
+                       (-> driver seat-trans)
+                       (mp-daxter-seat-offset (-> driver veh-type) (-> driver veh-quat) (new 'stack-no-clear 'vector))
+                       )
+                     )
+                   (move-to-point! (-> self root) (-> driver seat-trans))
+                   )
                (quaternion-copy! (-> self root quat) (-> driver veh-quat))
                )
               (else
@@ -1422,11 +1452,21 @@
   )
 
 (defbehavior mp-seat-follow mp-seat ()
-  "Move to the driver's passenger seat."
+  "Move to the driver's passenger seat; Daxter, held in his mode (target-indax-grab), is moved there
+   with it (Jak's grab-ride follows the seat by itself)."
   (let ((st (mp-remote-state (-> self driver))))
     (when st
       (vector-copy! (-> self root trans) (-> st seat-trans))
       (quaternion-copy! (-> self root quat) (-> st veh-quat))
+      (when (and *target* (= (mp-target-state-name) 'target-indax-grab))
+        (vector+!
+          (-> *target* control trans)
+          (-> st seat-trans)
+          (mp-daxter-seat-offset (-> st veh-type) (-> st veh-quat) (new 'stack-no-clear 'vector))
+          )
+        (quaternion-copy! (-> *target* control quat) (-> st veh-quat))
+        (quaternion-copy! (-> *target* control quat-for-control) (-> st veh-quat))
+        )
       )
     )
   (none)
@@ -1979,8 +2019,6 @@
    (steal-time  time-frame)
    (take-id     uint32)     ;; another player's NPC vehicle to take once Daxter is out of his mode, 0
    (board-veh   handle)     ;; one of our vehicles Daxter gets in once out of his mode
-   (tri-slot    int32)      ;; vehicle under the triangle press, -1
-   (tri-time    time-frame)
    (tp-slot     int32)      ;; player to reach once a continue point is loaded, -1
    (tp-time     time-frame)
    (world-time  time-frame)
@@ -2485,7 +2523,7 @@
 
 (defbehavior mp-stop-riding mp-manager ()
   "Get off a remote player's vehicle."
-  (if (= (mp-target-state-name) 'target-grab-ride)
+  (if (mp-riding-state? (mp-target-state-name))
       (send-event *target* 'end-mode 'grab)
       )
   (send-event *target* 'draw #t)
@@ -2526,17 +2564,18 @@
            ((or (not st) (not (logtest? (-> st flags) (mp-flag driving))))
             (set! (-> self ride-want) -1)
             )
-           ((focus-test? *target* indax)
-            ;; Daxter's mode has its own grab states: back to Jak for the ride
-            (send-event *target* 'end-mode 'indax)
-            )
            ;; on the ground, standing or crouched (next to a vehicle the player may crouch)
-           ((and (not (focus-test? *target* in-air hit grabbed pilot dead)) (!= state 'target-grab-ride))
+           ((and (not (focus-test? *target* in-air hit grabbed pilot dead)) (not (mp-riding-state? state)))
             (let ((seat (process-spawn mp-seat (-> self ride-want) :name "mp-seat" :to self)))
               (when seat
                 (set! (-> self seat) (ppointer->handle seat))
                 (set! *mp-ride-slot* (-> self ride-want))
-                (send-event *target* 'change-mode 'grab-ride #t :from (ppointer->process seat))
+                (if (focus-test? *target* indax)
+                    ;; Daxter rides in his own mode, held (target-indax-grab) and kept on the seat by
+                    ;; mp-seat-follow: Jak's grab-ride would send Jak's model and pose to the others
+                    (send-event *target* 'change-mode 'grab #t)
+                    (send-event *target* 'change-mode 'grab-ride #t :from (ppointer->process seat))
+                    )
                 (send-event *target* 'draw #f)
                 )
               )
@@ -2550,7 +2589,7 @@
          (if (or (not st)
                  (not (logtest? (-> st flags) (mp-flag driving)))
                  (cpad-pressed? 0 triangle)
-                 (!= state 'target-grab-ride)
+                 (not (mp-riding-state? state))
                  )
              (mp-stop-riding)
              )
@@ -2657,7 +2696,7 @@
   )
 
 (defbehavior mp-update-vehicle-interaction mp-manager ()
-  "Next to a remote player's vehicle, on foot: press triangle to steal it, hold it to ride along."
+  "Next to a remote player's vehicle, on foot: press triangle to steal it, L1 + triangle to ride along."
   (set! *mp-prompt-slot* -1)
   (when (and (< *mp-ride-slot* 0)
              (< (-> self ride-want) 0)
@@ -2693,7 +2732,6 @@
       (cond
         ((and (< best 0) (>= *mp-prompt-replica* 0))
          ;; an NPC vehicle another player simulates: press triangle to take it
-         (set! (-> self tri-slot) -1)
          (when (cpad-pressed? 0 triangle)
            (cond
              ((focus-test? *target* indax)
@@ -2708,7 +2746,6 @@
            )
          )
         ((< best 0)
-         (set! (-> self tri-slot) -1)
          ;; Daxter next to one of our vehicles: the stock prompt sends 'change-mode 'pilot, which his
          ;; playable mode ignores; he gets out of it, then in as Daxter (mp-update-steal)
          (when (and (focus-test? *target* indax) (cpad-pressed? 0 triangle))
@@ -2720,22 +2757,20 @@
              )
            )
          )
+        ;; triangle steals; L1 + triangle rides along as a passenger, the binding of himstan's Jak
+        ;; and Daxter II Multiplayer (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer)
         ((cpad-pressed? 0 triangle)
-         (set! (-> self tri-slot) best)
-         (set-time! (-> self tri-time))
-         )
-        ((!= (-> self tri-slot) best)
-         )
-        ((and (cpad-hold? 0 triangle) (time-elapsed? (-> self tri-time) (seconds 0.5)))
-         (set! (-> self tri-slot) -1)
-         (if (mp-seat-free? best)
-             (set! (-> self ride-want) best)
-             (mp-show-message "No free seat in this vehicle")
+         (cond
+           ((cpad-hold? 0 l1)
+            (if (mp-seat-free? best)
+                (set! (-> self ride-want) best)
+                (mp-show-message "No free seat in this vehicle")
+                )
+            )
+           (else
+             (set! (-> self steal-want) best)
              )
-         )
-        ((not (cpad-hold? 0 triangle))
-         (set! (-> self tri-slot) -1)
-         (set! (-> self steal-want) best)
+           )
          )
         )
       )
@@ -2880,7 +2915,6 @@
   (set! (-> self board-veh) (the-as handle #f))
   (set! (-> self ride-want) -1)
   (set! (-> self steal-want) -1)
-  (set! (-> self tri-slot) -1)
   (set! (-> self tp-slot) -1)
   (go mp-manager-active)
   )

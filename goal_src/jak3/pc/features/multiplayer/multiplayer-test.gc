@@ -107,7 +107,10 @@
   )
 
 (defun mp-test-button ((name string))
-  "pad-buttons bit for a button name (the order of the PS2 pad, select = bit 0)."
+  "pad-buttons bit for a button name (the order of the PS2 pad, select = bit 0); l1+triangle for both."
+  (if (string= name "l1+triangle")
+      (return (logior (ash 1 10) (ash 1 12)))
+      )
   (let ((names (new 'static 'boxed-array :type string
                  "select" "l3" "r3" "start" "up" "right" "down" "left"
                  "l2" "r2" "l1" "r1" "triangle" "circle" "x" "square"

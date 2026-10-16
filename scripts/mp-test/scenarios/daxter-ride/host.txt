@@ -1,0 +1,11 @@
+# Passenger test with Daxter, host side: gets in a two-seat buggy (v-snake) and drives off (X); the
+# guest, playing Daxter, rides along.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 13
+64 press x 3000
+66 screenshot driving
+67 log
