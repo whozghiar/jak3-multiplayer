@@ -26,7 +26,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 5;
+constexpr u32 kProtocolVersion = 6;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -67,8 +67,11 @@ struct PlayerState {
   char name[16];        // 128 nickname, null-terminated
   char level[16];       // 144 name of the level the player stands in
   char cont[32];        // 160 name of the player's current continue point
+  u16 ping_ms;          // 192 sender's round trip to the host, 0 for the host, filled by the session
+  u16 pad0;             // 194
+  u32 pad1[3];          // 196
 };
-static_assert(sizeof(PlayerState) == 192, "PlayerState must match mp-player-state");
+static_assert(sizeof(PlayerState) == 208, "PlayerState must match mp-player-state");
 
 // Mirrors the GOAL type `mp-event`. `kind` and the arguments are defined in GOAL.
 struct Event {
@@ -261,6 +264,8 @@ class Session {
   bool pop_event(Event* out);
   // Host only: disconnect a player, optionally refusing its address until the server stops.
   void kick(int slot, bool ban);
+  // Round trip to the host of player `slot` in ms (0 for the host), -1 while unknown.
+  int player_ping(int slot) const;
 
   // Time `source`'s objects are drawn at now, in its clock (ms); the local clock for -1.
   double clock_of(int source, double now_ms) const {
@@ -274,6 +279,7 @@ class Session {
 
  private:
   void handle_frame(Peer& p, u8 type, const u8* data, size_t len);
+  void handle_ping(Peer& p, u8 type, const u8* data, size_t len);
   void route_event(Event ev, int sender_slot);
   void store_actors(int source, const u8* data, size_t len, double recv_ms);
   void store_poses(int source, const u8* data, size_t len, double recv_ms);

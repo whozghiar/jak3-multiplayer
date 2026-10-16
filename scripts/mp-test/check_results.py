@@ -581,6 +581,14 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         copies = [int(v) for (v,) in grab(client, r"shot copies (\d+)")]
         c.check(scenario, "the guest draws the cannon's shells", bool(copies) and copies[-1] > 0, f"shot copies {copies[-1:]}")
 
+    elif scenario == "player-list":
+        own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
+        c.check(scenario, "holding SELECT shows the player list without pausing",
+                any(l == "#t" and p == "#f" for _, l, p in own), f"{own}")
+        c.check(scenario, "the guest knows its ping to the host", any(int(v) > 0 for v, _, _ in own), f"{[v for v, _, _ in own]}")
+        seen = [int(v) for (v,) in grab(host, r"\] ping player 1 (-?\d+)")]
+        c.check(scenario, "the host measures the guest's ping", bool(seen) and seen[-1] > 0, f"{seen}")
+
     elif scenario == "powers":
         shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")
         c.check(scenario, "the host shows the guest's Dark Jak (blend shapes)",

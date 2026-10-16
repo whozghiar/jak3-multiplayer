@@ -123,7 +123,11 @@ enum Msg : u8 {
                     // PoseSound...
   MSG_BLOB = 9,     // both ways: u8 from, u8 to, u32 total size, u32 offset, bytes (the host
                     // relays a chunk whose `to` is another guest)
+  MSG_PING = 10,    // both ways, every second: u32 sender time ms
+  MSG_PONG = 11,    // the answer to a ping: its u32 time sent back
 };
+
+constexpr double kPingIntervalMs = 1000.0;
 
 constexpr size_t kBlobChunk = 15000;           // bytes of a blob per frame
 constexpr size_t kMaxBlob = 4 * 1024 * 1024;   // larger blobs are refused
@@ -164,6 +168,8 @@ struct Session::Peer {
   // Refused or kicked: kept open a moment, its input drained, so the reason is not lost to a reset.
   bool closing = false;
   double close_at = 0;
+  double rtt_ms = -1;     // round trip measured by pings, smoothed; -1 until the first answer
+  double next_ping = 0;
 
   void queue(u8 type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0) {
     size_t len = 1 + na + nb;
@@ -776,6 +782,10 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         route_event(ev, p.slot);
         return;
       }
+      case MSG_PING:
+      case MSG_PONG:
+        handle_ping(p, type, data, len);
+        return;
       default:
         drop(p, "Protocol error");
         return;
@@ -829,10 +839,54 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         store_blob(data, len);
       }
       return;
+    case MSG_PING:
+    case MSG_PONG:
+      handle_ping(p, type, data, len);
+      return;
     default:
       drop(p, "Protocol error");
       return;
   }
+}
+
+// A ping is answered with its time; an answer gives the round trip to that peer.
+void Session::handle_ping(Peer& p, u8 type, const u8* data, size_t len) {
+  if (len != 4) {
+    return;
+  }
+  if (type == MSG_PING) {
+    p.queue(MSG_PONG, data, 4);
+    return;
+  }
+  u32 sent;
+  memcpy(&sent, data, 4);
+  double rtt = (double)(u32)((u32)m_now - sent);
+  p.rtt_ms = p.rtt_ms < 0 ? rtt : p.rtt_ms * 0.7 + rtt * 0.3;
+}
+
+int Session::player_ping(int slot) const {
+  if (m_mode == Mode::Offline || slot < 0 || slot >= kMaxPlayers) {
+    return -1;
+  }
+  if (slot == m_local_slot) {
+    if (m_mode == Mode::Host) {
+      return 0;
+    }
+    return !m_peers.empty() && m_peers[0]->rtt_ms >= 0 ? (int)(m_peers[0]->rtt_ms + 0.5) : -1;
+  }
+  if (m_mode == Mode::Host) {
+    for (auto* p : m_peers) {
+      if (p->slot == slot) {
+        return p->rtt_ms >= 0 ? (int)(p->rtt_ms + 0.5) : -1;
+      }
+    }
+    return -1;
+  }
+  // a guest sees the other players' own measure to the host (the host: 0)
+  if (m_remotes[slot].snaps.empty()) {
+    return -1;
+  }
+  return slot == 0 ? 0 : m_remotes[slot].snaps.back().ping_ms;
 }
 
 void Session::store_blob(const u8* data, size_t len) {
@@ -987,10 +1041,21 @@ void Session::update(PlayerState local, double now) {
     }
   }
 
+  // Ping every peer once a second (the host its guests, a guest the host).
+  for (auto* p : m_peers) {
+    if (!p->dead && p->connected && ((m_mode == Mode::Host && p->slot >= 0) || m_mode == Mode::Client) &&
+        now >= p->next_ping) {
+      p->next_ping = now + kPingIntervalMs;
+      u32 t = (u32)now;
+      p->queue(MSG_PING, &t, 4);
+    }
+  }
+
   // Send the local state.
   if (m_local_slot >= 0 && now - m_last_state_sent >= kStateIntervalMs) {
     m_last_state_sent = now;
     local.time_ms = (u32)now;
+    local.ping_ms = (u16)std::clamp(m_mode == Mode::Client ? player_ping(m_local_slot) : 0, 0, 65535);
     local.name[sizeof(local.name) - 1] = 0;
     u8 s = (u8)m_local_slot;
     for (auto* p : m_peers) {
@@ -1776,6 +1841,12 @@ u64 pc_mp_get_emitters(u32 id, u32 frame, u32 dest, u32 max) {
                                          std::min<int>((int)max, mp::kMaxPoseEmitters));
 }
 
+// (pc-mp-player-ping slot) -> round trip of player `slot` to the host in ms (0 for the host), -1
+// while unknown or offline.
+u64 pc_mp_player_ping(u32 slot) {
+  return (u64)(s64)mp::session().player_ping((s32)slot);
+}
+
 // (pc-mp-clock slot) -> tenths of a ms: this machine's clock for -1, else the time player `slot`'s
 // objects are drawn at now, in that player's clock (evidence lines of the test logs are stamped
 // with it).
@@ -2099,6 +2170,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-get-pose", (void*)pc_mp_get_pose);
   make_function_symbol_from_c("pc-mp-get-emitters", (void*)pc_mp_get_emitters);
   make_function_symbol_from_c("pc-mp-clock", (void*)pc_mp_clock);
+  make_function_symbol_from_c("pc-mp-player-ping", (void*)pc_mp_player_ping);
   make_function_symbol_from_c("pc-mp-sandbox-begin", (void*)pc_mp_sandbox_begin);
   make_function_symbol_from_c("pc-mp-sandbox-watch", (void*)pc_mp_sandbox_watch);
   make_function_symbol_from_c("pc-mp-sandbox-restore", (void*)pc_mp_sandbox_restore);

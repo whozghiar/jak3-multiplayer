@@ -94,7 +94,7 @@
   (coop 4)      ;; co-op mode (else free roam)
   )
 
-;; One player's state. 192 bytes, mirrors mp::PlayerState.
+;; One player's state. 208 bytes, mirrors mp::PlayerState.
 (deftype mp-player-state (structure)
   ((trans      vector     :inline)
    (quat       quaternion :inline)
@@ -117,8 +117,11 @@
    (name       uint8 16)
    (level      uint8 16)
    (cont       uint8 32)
+   (ping-ms    uint16)     ;; the player's round trip to the host (ms), 0 for the host, set by the runtime
+   (pad0       uint16)
+   (pad1       uint32 3)
    )
-  :size-assert #xc0
+  :size-assert #xd0
   )
 
 ;; One network event. 80 bytes, mirrors mp::Event.
@@ -2289,6 +2292,7 @@
   )
 
 (define-extern pc-mp-clock (function int int))
+(define-extern pc-mp-player-ping (function int int))
 
 (define *mp-clock-sync* (new 'global 'mp-clock-sync))
 (set! (-> *mp-clock-sync* known?) #f)
@@ -3012,6 +3016,79 @@
   (none)
   )
 
+;; ------------------------------------------------------------------------------------------------
+;; Player list: SELECT held while online. The binding and the layout (a title, NAME and PING
+;; columns, one row per player in its color) follow himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, multiplayer/ui/mp-player-list.gc, ISC).
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-player-list-shown? ()
+  "#t while SELECT is held in a session (L3 + SELECT is the Mods menu)."
+  (and (mp-online?) *target* (cpad-hold? 0 select) (not (cpad-hold? 0 l3)))
+  )
+
+(defun mp-draw-text-id ((buf dma-buffer) (id text-id) (x int) (y int) (scale float))
+  "Game text `id` centered at x, y (512x416 screen)."
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* x y 0.0 (font-color default) (font-flags shadow kerning middle large))))
+    (set! (-> ctx scale) scale)
+    (draw-string-adv (lookup-text! *common-text* id #f) buf ctx)
+    )
+  (none)
+  )
+
+(defun mp-draw-player-row ((buf dma-buffer) (y int) (name string) (color int) (ping int))
+  "One row of the player list: the color square and the name, then the ping (`name` may be
+   *mp-temp-string*: it is drawn before the ping is written there)."
+  (let ((width (mp-draw-text buf name 206 y 0.5)))
+    (draw-sprite2d-xy buf (- 206 (+ (/ width 2) 10)) (+ y 2) 7 7 (new 'static 'rgba :a #x80) #x3fffff)
+    (draw-sprite2d-xy buf (- 206 (+ (/ width 2) 9)) (+ y 3) 5 5 (mp-color-rgba color) #x3fffff)
+    )
+  (if (< ping 0)
+      (format (clear *mp-temp-string*) "--")
+      (format (clear *mp-temp-string*) "~D ms" ping)
+      )
+  (mp-draw-text buf *mp-temp-string* 346 y 0.5)
+  (none)
+  )
+
+(defun mp-draw-player-list ((buf dma-buffer))
+  "Every player of the session, us first, with its round trip to the host (pc-mp-player-ping)."
+  (let* ((top 64)
+         (rows (+ 1 (mp-player-count)))
+         (y (+ top 44))
+         )
+    (draw-sprite2d-xy buf 126 top 260 (+ 52 (* 18 rows)) (new 'static 'rgba :a #x40) #x3fffff)
+    (mp-draw-text-id buf (text-id progress-mp-players) 256 (+ top 6) 0.65)
+    (mp-draw-text-id buf (text-id progress-mp-col-name) 206 (+ top 26) 0.45)
+    (mp-draw-text-id buf (text-id progress-mp-col-ping) 346 (+ top 26) 0.45)
+    (mp-draw-player-row buf y *mp-name* (-> *mp-config* color) (pc-mp-player-ping *mp-local-slot*))
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (when st
+          (+! y 18)
+          (string<-charp *mp-temp-string* (-> st name))
+          (mp-draw-player-row buf y *mp-temp-string* (-> st color) (pc-mp-player-ping i))
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- SELECT shows the player list while online, instead of pausing the game as the
+;; stock does (engine/draw/drawable.gc, select or start); START still pauses. define-perm keeps the
+;; stock function when this file is reloaded in a REPL session.
+(define-perm *mp-stock-determine-pause-mode* (function none) determine-pause-mode)
+
+(defun determine-pause-mode ()
+  "Stock, except SELECT alone while online (multiplayer mod)."
+  (if (and (mp-online?) (cpad-pressed? 0 select) (not (cpad-hold? 0 l3)) (not (cpad-pressed? 0 start)))
+      (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons select))
+      )
+  (*mp-stock-determine-pause-mode*)
+  (none)
+  )
+
 (defun mp-draw-overlay ()
   "Draw the multiplayer overlay. Runs from the hook, after the frame's draw."
   (when (and *target* (not (paused?)) (not (movie?)))
@@ -3033,6 +3110,9 @@
       (when (< (- (mp-now) (-> *mp-globals* message-time)) (seconds 4))
         (mp-draw-text buf *mp-message* 256 360 0.5)
         )
+      (if (mp-player-list-shown?)
+          (mp-draw-player-list buf)
+          )
       )
     ;; prompts with their button icon, as the game draws its own (outside the bucket above: they
     ;; fill their own DMA)

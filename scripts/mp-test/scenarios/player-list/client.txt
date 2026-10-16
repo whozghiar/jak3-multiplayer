@@ -1,0 +1,11 @@
+# Player list, guest side: holds SELECT, which shows the players with their ping and must not pause
+# the game; logs the pings (log-ping) and takes a screenshot of the list.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+55 press select 3000
+56 log-ping
+57 screenshot list
+59 log-ping

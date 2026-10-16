@@ -1652,6 +1652,9 @@
   (progress-mp-title #x1533)
   (progress-mp-coop-wait #x1534)
   (progress-mp-joining #x1535)
+  (progress-mp-players #x1536)
+  (progress-mp-col-name #x1537)
+  (progress-mp-col-ping #x1538)
   )
 ;; ---text-id
 
