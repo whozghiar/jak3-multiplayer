@@ -11,25 +11,31 @@
 ---
 
 ## Overview
-Jak 3 online: host or join a server, from the title screen or the pause menu, and play the
-host's world together as Jak or Daxter, in free roam or in co-op.
+Jak 3 online: host or join a game from the title screen, meet in a lobby, and play the host's
+world together as Jak or Daxter, in free roam or as a Jak and Daxter co-op duo.
 
 - **Target Game:** Jak 3
 - **Repository:** [`whozghiar/jak3-multiplayer`](https://github.com/whozghiar/jak3-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
 
 ## Key Features
-- **Host or join, even from the title screen:** Options > Multiplayer. Type the server address
-  (`ip:port`) and your player name with the D-pad, then host or join. Up to 8 players.
+- **Host Game and Join Game on the title screen:** the host picks a new game or a save, the
+  others type the host's address (`ip:port`). Everyone meets in a lobby: choose Jak or Daxter and
+  say you are ready; the host chooses the game mode and starts once everyone is ready. Hosting and
+  joining from the pause menu (Options > Multiplayer) work too. Up to 8 players.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
-- **Two game modes, chosen by the host:**
-  - **Free roam:** everyone goes where they want; a player who goes far from the others keeps a
-    living world around them.
-  - **Co-op:** the players stay together. A guest who strays too far comes back next to the
-    host, the weather is the host's, and a mission step only completes once every player is
-    there: the player who reached it waits, and the others are told where to come.
-- **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere.
+- **Two game modes, chosen by the host in the lobby,** with the same rules (shared world,
+  vehicles, weapons, story):
+  - **Free roam:** everyone plays the character they like, Jak or Daxter, and goes where they
+    want; a player who goes far from the others keeps a living world around them.
+  - **Co-op:** Jak and Daxter as a duo. A guest who picks the host's character is offered the
+    other one, and Daxter can jump on a crouching Jak's shoulder (triangle) and ride along until
+    he jumps off (X).
+- **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere. He
+  fights with the guns like Jak, and gets in vehicles and drives them as Daxter.
+- **Player list:** hold SELECT to see every player with their ping. While online, SELECT no longer
+  pauses the game (START does).
 - **Your color:** ten colors, shown as a small square before your name and as your dot on the
   minimap.
 - **See each other:** every player appears with their name and health bar over their head, as a
@@ -43,9 +49,10 @@ host's world together as Jak or Daxter, in free roam or in co-op.
   however far apart the players are.
   When players meet or part, the people and vehicles in front of you do not vanish at once: they
   leave when you look away, or fade out. Enemies killed, crates broken and pickups taken disappear for everybody.
-- **Share vehicles:** next to another player's vehicle, press triangle to steal it, or hold
-  triangle to ride next to them when it has two seats. Guests can also take the host's traffic
-  vehicles. The prompt shows the button, like the game's own.
+- **Share vehicles:** next to another player's vehicle, press triangle to steal it, or L1 +
+  triangle to ride next to them when it has two seats (Daxter rides as Daxter). Guests can also
+  take the host's traffic vehicles. The prompt shows the buttons, like the game's own. The
+  shells and shots of vehicle guns show and hurt on every screen.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
 - **Players can hit each other:** punches, shots and blasts between players (the wave concussor,
   the mass inverter, the arc wielder, the needle lazer too) hurt and knock back (the host can turn
@@ -65,20 +72,27 @@ host's world together as Jak or Daxter, in free roam or in co-op.
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
    multiplayer**. The setting is remembered.
-2. Press **START**, open **Options > Multiplayer**.
-3. Set **Player name**, **Character**, **Color** and **Server address**. To edit a text field:
+2. On the title screen, the host picks **Host Game**, then **New Game** or **Load Game**; the
+   others pick **Join Game**, type the host's address and **Connect**. To edit a text field:
    confirm, then up / down to change a letter, left / right to move, square to delete, confirm
    to save (triangle cancels).
-4. The host picks the **Game mode** (Free roam or Co-op) and **Host a server**; the others enter
-   the host's address and pick **Join the server**, in game or from the title screen (Options >
-   Multiplayer).
+3. In the lobby, everyone picks Jak or Daxter (L1 / R1) and the guests say they are ready (X).
+   The host picks the game mode (square) and starts (X) once everyone is ready: its save menu
+   opens, and the guests follow into its world. Circle opens the multiplayer options (name,
+   color, address), triangle leaves the lobby.
+4. In game, START > **Options > Multiplayer** holds the same settings, the server administration
+   for the host, and hosting or joining without going back to the title screen.
 
 | Action | Control |
 |---|---|
 | Mods menu (cheats, teleports) | L3 + SELECT |
+| Lobby: character / ready or start / game mode | L1 or R1 / X / Square |
+| Lobby: multiplayer options / leave | Circle / Triangle |
+| Player list | Hold SELECT |
 | Steal a player's vehicle | Triangle next to it |
-| Ride as passenger | Hold triangle next to it |
+| Ride as passenger | L1 + Triangle next to it |
 | Get off as passenger | Triangle |
+| Co-op, as Daxter: jump on a crouching Jak's shoulder / jump off | Triangle / X |
 
 > [!NOTE]
 > **Playing over the Internet:** the host must open (forward) TCP port 7777, or the port they
@@ -173,6 +187,12 @@ task boot-game
 ## Technical Documentation
 For the complete technical breakdown, architecture, developer notes and change log, refer to:
 - [`docs/modding/current_mod/multiplayer_readme.md`](docs/modding/current_mod/multiplayer_readme.md)
+
+## Credits
+The title screen's Host Game and Join Game, the lobby, the SELECT player list, the passenger's
+seat and binding (L1 + triangle) and the Jak and Daxter co-op duo follow himstan's
+[Jak and Daxter II Multiplayer](https://github.com/himstan/Jak-And-Daxter-2-Multiplayer)
+(ISC license), rewritten for Jak 3.
 
 ---
 *(AI-assisted)*
