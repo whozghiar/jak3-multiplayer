@@ -549,7 +549,7 @@ check fails.
 The runner starts one game per script of `scripts/mp-test/scenarios/<scenario>/`, each with its
 own `--config-path` folder (a copy of the user's saves and settings, small window, side by side,
 controller ignored when unfocused, vsync off) and the `MP_TEST_SCRIPT` environment variable. Real
-controllers are left out (`SDL_JOYSTICK_<backend>=0`): the scripts drive pad 0 themselves, and a
+controllers are left out (`SDL_JOYSTICK_<backend>=0`, and `SDL_XINPUT_ENABLED=0` for XInput): the scripts drive pad 0 themselves, and a
 controller gone to sleep once hung every instance in SDL's controller detection, halfway through a
 round of scenarios. The debug boot
 loads save slot 1, so both games start in game at the same place. When the scripts are done, it

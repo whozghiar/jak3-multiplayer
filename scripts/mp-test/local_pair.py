@@ -32,10 +32,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_mp_test import GK, ROOT, USER_JAK3, WINDOW_H, WINDOW_W  # noqa: E402
+from run_mp_test import GK, NO_CONTROLLER, ROOT, USER_JAK3, WINDOW_H, WINDOW_W  # noqa: E402
 
 OUT = ROOT / "out" / "mp-local"
-NO_CONTROLLER = {f"SDL_JOYSTICK_{b}": "0" for b in ("HIDAPI", "RAWINPUT", "WGI", "XINPUT", "DIRECTINPUT", "GAMEINPUT")}
 
 
 def prepare(folder: Path, index: int, controller: bool, reset: bool) -> None:

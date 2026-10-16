@@ -36,6 +36,10 @@ SCENARIOS = Path(__file__).resolve().parent / "scenarios"
 GK = ROOT / "out" / "build" / "Release" / "bin" / ("gk.exe" if os.name == "nt" else "gk")
 USER_JAK3 = Path(os.environ.get("APPDATA", Path.home() / ".config")) / "OpenGOAL" / "jak3"
 WINDOW_W, WINDOW_H = 960, 540
+# environment that hides every controller from an instance: each SDL joystick backend off (XInput's
+# switch is SDL_XINPUT_ENABLED, not SDL_JOYSTICK_XINPUT)
+NO_CONTROLLER = dict({f"SDL_JOYSTICK_{b}": "0" for b in ("HIDAPI", "RAWINPUT", "WGI", "DIRECTINPUT", "GAMEINPUT")},
+                     SDL_XINPUT_ENABLED="0")
 
 
 def script_length(script: Path) -> float:
@@ -108,8 +112,7 @@ def main() -> int:
             env["MP_TEST_LATENCY"] = args.latency
         # no real controller: the scripts drive pad 0 themselves (libpad), and a controller gone to
         # sleep once hung every instance in SDL's controller detection
-        for backend in ("HIDAPI", "RAWINPUT", "WGI", "XINPUT", "DIRECTINPUT", "GAMEINPUT"):
-            env[f"SDL_JOYSTICK_{backend}"] = "0"
+        env.update(NO_CONTROLLER)
         log = open(folder / "gk.log", "w", encoding="utf-8", errors="replace")
         cmd = [str(GK), "-v", "--game", "jak3", "--config-path", str(folder),
                "--", "-boot", "-fakeiso", "-debug"]
