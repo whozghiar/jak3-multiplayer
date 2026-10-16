@@ -1123,18 +1123,36 @@
   (search-info-flag)
   )
 
+(defun mp-local-vehicle ()
+  "The vehicle the local player drives, #f when on foot."
+  (if (and *target* (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
+      (handle->process (-> *target* pilot vehicle))
+      )
+  )
+
 (defun mp-from-local-player? ((proc process))
-  "#t when `proc` is the local player or one of its children (gun, shots)."
-  (dotimes (i 4)
-    (cond
-      ((not proc)
-       (return #f)
-       )
-      ((= proc *target*)
-       (return #t)
-       )
-      (else
-        (set! proc (the-as process (ppointer->process (-> proc parent))))
+  "#t when `proc` is the local player or one of its children (gun, shots), the vehicle it drives,
+   or what either fired, a projectile's explosion included: a vehicle's guns spawn their shots under
+   *rigid-body-queue-manager*, their owner-handle naming the vehicle (wcar-toad.gc), and a shell's
+   explosion is the shell's child."
+  (let ((veh (mp-local-vehicle)))
+    (dotimes (i 6)
+      (cond
+        ((not proc)
+         (return #f)
+         )
+        ((or (= proc *target*) (and veh (= proc veh)))
+         (return #t)
+         )
+        ((and (type? proc projectile)
+              (handle->process (-> (the-as projectile proc) owner-handle))
+              (!= (handle->process (-> (the-as projectile proc) owner-handle)) proc)
+              )
+         (set! proc (handle->process (-> (the-as projectile proc) owner-handle)))
+         )
+        (else
+          (set! proc (the-as process (ppointer->process (-> proc parent))))
+          )
         )
       )
     )

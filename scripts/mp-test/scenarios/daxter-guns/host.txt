@@ -1,0 +1,60 @@
+# Guns and Daxter, host side: fires each of the 12 gun mods at the guest, who plays Daxter 7 m
+# away (health topped up and the guest back at 7 m before each: the Wastelanders hit by blasts
+# shoot back, and each blow pushes it away), then drives a buggy the guest steals and fires from.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54.5 cheat health
+54.8 face-player 1
+55 gun 26
+56 press r1 1200
+59.5 cheat health
+59.8 face-player 1
+60 gun 27
+61 press r1 1200
+64.5 cheat health
+64.8 face-player 1
+65 gun 28
+66 press r1 1200
+69.5 cheat health
+69.8 face-player 1
+70 gun 29
+71 press r1 1200
+74.5 cheat health
+74.8 face-player 1
+75 gun 30
+76 press r1 1200
+79.5 cheat health
+79.8 face-player 1
+80 gun 31
+81 press r1 1200
+84.5 cheat health
+84.8 face-player 1
+85 gun 32
+86 press r1 1200
+89.5 cheat health
+89.8 face-player 1
+90 gun 33
+91 press r1 1200
+94.5 cheat health
+94.8 face-player 1
+95 gun 34
+96 press r1 1200
+99.5 cheat health
+99.8 face-player 1
+100 gun 35
+101 press r1 1200
+104.5 cheat health
+104.8 face-player 1
+105 gun 36
+106 press r1 1200
+109.5 cheat health
+109.8 face-player 1
+110 gun 37
+111 press r1 1200
+115 gun
+116 log
+117 vehicle 15
+135 log

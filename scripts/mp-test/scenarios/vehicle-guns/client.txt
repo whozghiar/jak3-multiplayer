@@ -1,0 +1,13 @@
+# A vehicle's gun on another player, guest side: plays Daxter 26 m in front of the host, where its shells come down, who fires
+# its buggy's cannon at it; logs the hits taken and the shots drawn.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 26
+53 face-player 0
+54 cheat health
+60 screenshot cannon
+66 log

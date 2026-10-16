@@ -557,6 +557,26 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the other player sees Daxter at the wheel (Daxter model, driving)",
                 any(f & 0x21 == 0x21 and v >= 0 for f, v in flags), f"{flags}")
 
+    elif scenario == "daxter-guns":
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
+        taken = grab(client, r"\[multiplayer\] pvp hit by player \d+, damage (\S+)")
+        kinds = sorted({k for (k,) in grab(host, r"\[multiplayer\] pvp blow to player \d+ by (\S+)")})
+        c.check(scenario, "Daxter is hurt by the guns as Jak is", len(taken) >= 3 and len(kinds) >= 3,
+                f"{len(taken)} hits, by {kinds}")
+        states = [st for (st,) in grab(client, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")]
+        c.check(scenario, "Daxter drives the stolen buggy", "target-pilot-stance" in states, f"{states}")
+        copies = [int(v) for (v,) in grab(host, r"shot copies (\d+)")]
+        c.check(scenario, "the host draws the shots of Daxter's buggy", bool(copies) and copies[-1] > 0, f"shot copies {copies[-1:] }")
+
+    elif scenario == "vehicle-guns":
+        blows = grab(host, r"\[multiplayer\] pvp blow to player \d+ by (\S+)")
+        taken = grab(client, r"\[multiplayer\] pvp hit by player \d+, damage (\S+)")
+        c.check(scenario, "a buggy's cannon hurts the other player (its shell's explosion)",
+                len(taken) >= 1 and len(blows) >= 1, f"blows {[b for (b,) in blows]}, hits taken {len(taken)}")
+        copies = [int(v) for (v,) in grab(client, r"shot copies (\d+)")]
+        c.check(scenario, "the guest draws the cannon's shells", bool(copies) and copies[-1] > 0, f"shot copies {copies[-1:]}")
+
     elif scenario == "powers":
         shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")
         c.check(scenario, "the host shows the guest's Dark Jak (blend shapes)",

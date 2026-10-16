@@ -1,0 +1,58 @@
+# Guns and Daxter, guest side: plays Daxter 7 m from the host while the host fires each gun mod
+# at it (hits taken logged); tries to attack and fire as Daxter; then steals the host's buggy
+# and fires its gun as Daxter.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+53.5 goto-player 0 7
+54 face-player 0
+54.5 cheat health
+58.5 goto-player 0 7
+59 face-player 0
+59.5 cheat health
+63.5 goto-player 0 7
+64 face-player 0
+64.5 cheat health
+68.5 goto-player 0 7
+69 face-player 0
+69.5 cheat health
+73.5 goto-player 0 7
+74 face-player 0
+74.5 cheat health
+78.5 goto-player 0 7
+79 face-player 0
+79.5 cheat health
+83.5 goto-player 0 7
+84 face-player 0
+84.5 cheat health
+88.5 goto-player 0 7
+89 face-player 0
+89.5 cheat health
+93.5 goto-player 0 7
+94 face-player 0
+94.5 cheat health
+98.5 goto-player 0 7
+99 face-player 0
+99.5 cheat health
+103.5 goto-player 0 7
+104 face-player 0
+104.5 cheat health
+108.5 goto-player 0 7
+109 face-player 0
+109.5 cheat health
+115 log
+115.5 press r1 400
+116.5 press square 200
+117.5 log-me
+121 goto-player 0 2
+122 press triangle 100
+126 log-me
+126.5 log
+127 press r1 300
+128 press r1 300
+129 screenshot firing
+131 log
+132 log-me

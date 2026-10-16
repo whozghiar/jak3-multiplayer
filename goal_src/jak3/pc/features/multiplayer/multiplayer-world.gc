@@ -788,6 +788,18 @@
   #f
   )
 
+(defun mp-collect-vehicle-shot ((proc process-drawable))
+  "iterate-process-tree callback, under *rigid-body-queue-manager*: a shot of the vehicle our player
+   drives (its owner-handle), sent as our player's shots are."
+  (when (and (type? proc projectile)
+             (nonzero? (-> proc root))
+             (= (handle->process (-> (the-as projectile proc) owner-handle)) (mp-local-vehicle))
+             )
+    (mp-collect-shot proc)
+    )
+  #f
+  )
+
 (define-extern mp-collect-weapon (function process object))
 
 (defun mp-pack-laser ((st mp-actor-state))
@@ -840,6 +852,10 @@
       )
     (iterate-process-tree *target* (the-as (function object object) mp-collect-shot) *null-kernel-context*)
     (iterate-process-tree *target* (the-as (function object object) mp-collect-weapon) *null-kernel-context*)
+    ;; the guns of the vehicle we drive put their shots under the rigid-body queue manager
+    (if (and (mp-local-vehicle) *rigid-body-queue-manager*)
+        (iterate-process-tree *rigid-body-queue-manager* (the-as (function object object) mp-collect-vehicle-shot) *null-kernel-context*)
+        )
     (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
       (let ((veh (handle->process (-> *target* pilot vehicle))))
         ;; not a vehicle another player took from us (its own stands there now)

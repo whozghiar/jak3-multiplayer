@@ -1,0 +1,14 @@
+# A vehicle's gun on another player, host side: faces the guest (Daxter, 26 m away, where its shells come down), gets in a
+# buggy facing it and fires its cannon three times.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 face-player 1
+55 vehicle 15
+58.9 log-path shot 150
+59 press r1 300
+61 press r1 300
+63 press r1 300
+66 log
