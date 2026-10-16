@@ -1,0 +1,14 @@
+# Daxter gets in a vehicle of his own world, guest side: watches the host (Daxter) drive and get off.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 9
+53 face-player 0
+60 log
+61 screenshot in
+65 face-player 0
+66 log
+71 log
+72 screenshot off

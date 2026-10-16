@@ -548,6 +548,15 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the victim's vehicle is gone, the thief's shown (body and wheels)",
                 victim is not None and victim.count("own") == 0 and victim.count("mp-replica") == 5, f"{victim}")
 
+    elif scenario in ("daxter-drive", "daxter-drive-own"):
+        driver, viewer, slot = (client, host, 1) if scenario == "daxter-drive" else (host, client, 0)
+        states = [st for (st,) in grab(driver, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")]
+        c.check(scenario, "Daxter gets in and drives, then is Daxter again on foot",
+                "target-pilot-stance" in states and states[-1] == "target-indax-stance", f"{states}")
+        flags = [(int(f, 16), int(v)) for f, v in grab(viewer, rf"\] remote {slot} flags #x(\w+) anim \S+ veh (\S+)")]
+        c.check(scenario, "the other player sees Daxter at the wheel (Daxter model, driving)",
+                any(f & 0x21 == 0x21 and v >= 0 for f, v in flags), f"{flags}")
+
     elif scenario == "powers":
         shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")
         c.check(scenario, "the host shows the guest's Dark Jak (blend shapes)",

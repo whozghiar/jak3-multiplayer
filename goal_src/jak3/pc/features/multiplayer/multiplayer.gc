@@ -580,6 +580,14 @@
 ;; Local player -> network
 ;; ------------------------------------------------------------------------------------------------
 
+(defun mp-playing-daxter? ((tgt target))
+  "#t while the player is drawn as Daxter: his playable mode (indax), or driving as Daxter (pilot
+   as-daxter?, which swaps the target's art for Daxter's the same way)."
+  (or (focus-test? tgt indax)
+      (and (focus-test? tgt pilot) (nonzero? (-> tgt pilot)) (-> tgt pilot as-daxter?))
+      )
+  )
+
 (defun mp-pack-powers ((tgt target) (st mp-player-state))
   "Dark Jak and Light Jak as our model shows them, in the free bits of the state's flags: bits 8-15
    darkjak-interp, 16-23 lightjak-interp (0-255), 24 no-textures and 25 rim-lights (the light look,
@@ -648,7 +656,7 @@
           (set! (-> st health) (-> tgt fact health))
           (set! (-> st health-max) (-> tgt fact health-max))
           (set! (-> st seg-mask) (the-as uint (-> tgt draw seg-mask)))
-          (if (focus-test? tgt indax)
+          (if (mp-playing-daxter? tgt)
               (logior! (-> st flags) (mp-flag indax))
               )
           (if (focus-test? tgt dead)
@@ -1615,6 +1623,9 @@
 (define-extern mp-on-vehicle-taken (function mp-event none :behavior mp-manager))
 (define-extern mp-nearest-replica-vehicle (function vector int))
 (define-extern mp-take-replica-vehicle (function int symbol :behavior mp-manager))
+(define-extern mp-replica-id-at (function int uint))
+(define-extern mp-replica-index (function uint int))
+(define-extern mp-nearest-own-vehicle (function vector process))
 
 ;; ------------------------------------------------------------------------------------------------
 ;; The host's world for a guest
@@ -1948,6 +1959,8 @@
    (steal-want  int32)      ;; driver to rob once the player can, -1
    (steal-veh   handle)     ;; our vehicle that was stolen, removed once we got out
    (steal-time  time-frame)
+   (take-id     uint32)     ;; another player's NPC vehicle to take once Daxter is out of his mode, 0
+   (board-veh   handle)     ;; one of our vehicles Daxter gets in once out of his mode
    (tri-slot    int32)      ;; vehicle under the triangle press, -1
    (tri-time    time-frame)
    (tp-slot     int32)      ;; player to reach once a continue point is loaded, -1
@@ -2412,9 +2425,16 @@
             (< *mp-ride-slot* 0)
             (< (-> self ride-want) 0)
             (< (-> self steal-want) 0)
+            (zero? (-> self take-id))
+            (not (handle->process (-> self board-veh)))
             (= state 'target-stance)
             (not (focus-test? *target* indax pilot dead grabbed))
             )
+       (send-event *target* 'change-mode 'indax #f 'stance)
+       )
+      ;; Daxter getting off a vehicle: back in his mode at once (the stock get-off plays Jak's
+      ;; animation, then Jak's jump)
+      ((and daxter? (= state 'target-pilot-get-off) (nonzero? (-> *target* pilot)) (-> *target* pilot as-daxter?))
        (send-event *target* 'change-mode 'indax #f 'stance)
        )
       ((and (not daxter?) (focus-test? *target* indax) (= state 'target-indax-stance))
@@ -2523,6 +2543,15 @@
   (none)
   )
 
+(defun mp-pilot-mode ()
+  "The change-mode a vehicle is boarded with: Daxter drives as Daxter (the stock 'pilot-daxter of
+   the port's torpedo and the races: Daxter's art on the target, pilot as-daxter?), Jak as Jak."
+  (if (= (-> *mp-config* character) 1)
+      'pilot-daxter
+      'pilot
+      )
+  )
+
 (defbehavior mp-get-vehicle-at mp-manager ((vtype int) (pos vector) (quat quaternion))
   "Stand at `pos` facing `quat` and get a new vehicle of type `vtype` there. #t when the player is
    now getting in. Only the player vehicles: city bikes and cars (0-6, spawner in CWI) and Spargus
@@ -2533,7 +2562,7 @@
     (quaternion-copy! (-> *target* control quat) quat)
     (quaternion-copy! (-> *target* control quat-for-control) quat)
     ;; #f vehicle: the target spawns one of this type where it stands (target-handler.gc)
-    (send-event *target* 'change-mode 'pilot #f vtype #t)
+    (send-event *target* 'change-mode (mp-pilot-mode) #f vtype #t)
     (if (= (mp-target-state-name) 'target-pilot-start)
         (return #t)
         )
@@ -2563,15 +2592,37 @@
   )
 
 (defbehavior mp-update-steal mp-manager ()
-  "Steal requests that wait for Daxter to turn back into Jak, and removal of our stolen vehicle."
-  (when (>= (-> self steal-want) 0)
+  "Getting in a vehicle as Daxter: his playable mode ignores 'change-mode 'pilot (target-indax-handler),
+   so a steal, a take or a boarding waits for him to leave it, then gets in as Daxter
+   ('pilot-daxter, mp-pilot-mode). And removal of our stolen vehicle."
+  (when (or (>= (-> self steal-want) 0) (nonzero? (-> self take-id)) (handle->process (-> self board-veh)))
     (cond
       ((focus-test? *target* indax)
        (send-event *target* 'end-mode 'indax)
        )
       ((= (mp-target-state-name) 'target-stance)
-       (mp-steal-now (-> self steal-want))
+       (cond
+         ((>= (-> self steal-want) 0)
+          (mp-steal-now (-> self steal-want))
+          )
+         ((nonzero? (-> self take-id))
+          (let ((index (mp-replica-index (-> self take-id))))
+            (if (>= index 0)
+                (mp-take-replica-vehicle index)
+                )
+            )
+          )
+         (else
+           (let ((veh (handle->process (-> self board-veh))))
+             (if veh
+                 (send-event *target* 'change-mode (mp-pilot-mode) veh 0 #f)
+                 )
+             )
+           )
+         )
        (set! (-> self steal-want) -1)
+       (set! (-> self take-id) (the-as uint 0))
+       (set! (-> self board-veh) (the-as handle #f))
        )
       )
     )
@@ -2626,14 +2677,30 @@
          ;; an NPC vehicle another player simulates: press triangle to take it
          (set! (-> self tri-slot) -1)
          (when (cpad-pressed? 0 triangle)
-           (if (focus-test? *target* indax)
-               (send-event *target* 'end-mode 'indax)
+           (cond
+             ((focus-test? *target* indax)
+              ;; taken once Daxter is out of his mode (mp-update-steal)
+              (set! (-> self take-id) (mp-replica-id-at *mp-prompt-replica*))
+              (send-event *target* 'end-mode 'indax)
+              )
+             (else
                (mp-take-replica-vehicle *mp-prompt-replica*)
                )
+             )
            )
          )
         ((< best 0)
          (set! (-> self tri-slot) -1)
+         ;; Daxter next to one of our vehicles: the stock prompt sends 'change-mode 'pilot, which his
+         ;; playable mode ignores; he gets out of it, then in as Daxter (mp-update-steal)
+         (when (and (focus-test? *target* indax) (cpad-pressed? 0 triangle))
+           (let ((veh (mp-nearest-own-vehicle (-> *target* control trans))))
+             (when veh
+               (set! (-> self board-veh) (process->handle veh))
+               (send-event *target* 'end-mode 'indax)
+               )
+             )
+           )
          )
         ((cpad-pressed? 0 triangle)
          (set! (-> self tri-slot) best)
@@ -2791,6 +2858,8 @@
   (set! (-> self self-puppet) (the-as handle #f))
   (set! (-> self seat) (the-as handle #f))
   (set! (-> self steal-veh) (the-as handle #f))
+  (set! (-> self take-id) (the-as uint 0))
+  (set! (-> self board-veh) (the-as handle #f))
   (set! (-> self ride-want) -1)
   (set! (-> self steal-want) -1)
   (set! (-> self tri-slot) -1)

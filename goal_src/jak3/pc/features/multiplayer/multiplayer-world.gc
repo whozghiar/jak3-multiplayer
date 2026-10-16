@@ -811,7 +811,7 @@
    the hoverboard, the vehicle driven and its wheels, and its shots in flight."
   (when *target*
     (let ((dax (ppointer->process (-> *target* sidekick))))
-      (if (and dax (not (focus-test? *target* indax)))
+      (if (and dax (not (mp-playing-daxter? *target*)))
           (mp-add-prop (the-as process-drawable dax))
           )
       )
@@ -1744,6 +1744,49 @@
         )
     )
   -1
+  )
+
+(defun mp-replica-id-at ((index int))
+  "Id of the copy at replica `index` (its owner slot and pid), 0 when none."
+  (let ((proc (the-as mp-replica (handle->process (-> *mp-world-state* replica index)))))
+    (if proc
+        (-> proc id)
+        (the-as uint 0)
+        )
+    )
+  )
+
+(define *mp-own-vehicle-best* (the-as process #f))
+(define *mp-own-vehicle-dist* 0.0)
+(define *mp-own-vehicle-from* (new 'global 'vector))
+
+(defun mp-own-vehicle-scan ((proc process-drawable))
+  "iterate-process-tree callback (mp-nearest-own-vehicle)."
+  (when (and (type? proc process-drawable)
+             (not (type? proc mp-replica))
+             (mp-inherits? (-> proc type) 'vehicle)
+             (nonzero? (-> proc root))
+             (nonzero? (-> proc draw))
+             (not (logtest? (-> proc draw status) (draw-control-status no-draw)))
+             )
+    (let ((d (vector-vector-distance (-> proc root trans) *mp-own-vehicle-from*)))
+      ;; within its size and 1.5 m, as a copy's prompt (mp-nearest-replica-vehicle)
+      (when (and (< d *mp-own-vehicle-dist*) (< d (+ (fmin (-> proc draw bounds w) (meters 4.5)) (meters 1.5))))
+        (set! *mp-own-vehicle-dist* d)
+        (set! *mp-own-vehicle-best* proc)
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-nearest-own-vehicle ((pos vector))
+  "The vehicle of our world nearest to `pos`, within its size and 1.5 m, #f."
+  (set! *mp-own-vehicle-best* #f)
+  (set! *mp-own-vehicle-dist* (meters 8))
+  (vector-copy! *mp-own-vehicle-from* pos)
+  (iterate-process-tree *active-pool* (the-as (function object object) mp-own-vehicle-scan) *null-kernel-context*)
+  *mp-own-vehicle-best*
   )
 
 (defbehavior mp-take-replica-vehicle mp-manager ((index int))

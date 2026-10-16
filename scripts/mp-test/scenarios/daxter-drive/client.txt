@@ -1,0 +1,20 @@
+# Daxter at the wheel, guest side: plays Daxter, steals the host's buggy, drives it as Daxter,
+# gets off (Daxter again).
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+55 goto-player 0 7
+56 face-player 0
+58 log-me
+62 goto-player 0 2
+63 press triangle 100
+67 log-me
+68 screenshot driving
+69 log
+74 press triangle 100
+77 log-me
+78 screenshot off
+79 log

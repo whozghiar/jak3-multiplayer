@@ -1,0 +1,17 @@
+# Daxter gets in a vehicle of his own world, host side: plays Daxter, spawns an empty buggy in
+# front of him, gets in (triangle), drives forward, gets off.
+1 enable
+1 name Host
+1 color 1
+1 character 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55 spawn-vehicle 15
+57 press triangle 100
+60 log-me
+61 screenshot in
+62 press r2 3000 128 128
+66 log-me
+68 press triangle 100
+71 log-me
+72 screenshot off

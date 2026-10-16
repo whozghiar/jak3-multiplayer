@@ -2,7 +2,7 @@
  ("h-torpedo.o"
   "ctyport-attack.o"
   "ctyport-attack-bbush.o"
-  "jak-pidax+0-ag.go"
+  ;; MOD multiplayer -- jak-pidax+0-ag.go moved to GAME
   "tpage-1523.go"
   "tpage-1899.go"
   "krimson-wall-break-ag.go"

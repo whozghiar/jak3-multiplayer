@@ -459,6 +459,7 @@
   "jak-light+0-ag.go"
   "jak-swim+0-ag.go"
   "jak-indax+0-ag.go" ;; MOD multiplayer -- playable Daxter animations, see target-indax.o below
+  "jak-pidax+0-ag.go" ;; MOD multiplayer -- Daxter's driving animations (pilot as-daxter?), from LCTYPATK
   "blocking-plane-ag.go"
   "com-rod-of-god-ag.go"
   "los-control-h.o"

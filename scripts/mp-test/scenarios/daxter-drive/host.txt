@@ -1,0 +1,15 @@
+# Daxter at the wheel, host side: drives a buggy, which the guest (playing Daxter) steals; watches
+# Daxter drive it and get off.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 15
+60 log
+68 face-player 1
+69 screenshot daxter-driving
+69.5 log
+78 face-player 1
+79 screenshot daxter-off
+79.5 log
