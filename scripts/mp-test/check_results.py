@@ -562,16 +562,16 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 f"{len(taken)} hits, by {kinds}")
         states = [st for (st,) in grab(client, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")]
         c.check(scenario, "Daxter drives the stolen buggy", "target-pilot-stance" in states, f"{states}")
-        copies = [int(v) for (v,) in grab(host, r"shot copies (\d+)")]
-        c.check(scenario, "the host draws the shots of Daxter's buggy", bool(copies) and copies[-1] > 0, f"shot copies {copies[-1:] }")
+        shot_copies = [int(v) for (v,) in grab(host, r"shot copies (\d+)")]
+        c.check(scenario, "the host draws the shots of Daxter's buggy", bool(shot_copies) and shot_copies[-1] > 0, f"shot copies {shot_copies[-1:] }")
 
     elif scenario == "vehicle-guns":
         blows = grab(host, r"\[multiplayer\] pvp blow to player \d+ by (\S+)")
         taken = grab(client, r"\[multiplayer\] pvp hit by player \d+, damage (\S+)")
         c.check(scenario, "a buggy's cannon hurts the other player (its shell's explosion)",
                 len(taken) >= 1 and len(blows) >= 1, f"blows {[b for (b,) in blows]}, hits taken {len(taken)}")
-        copies = [int(v) for (v,) in grab(client, r"shot copies (\d+)")]
-        c.check(scenario, "the guest draws the cannon's shells", bool(copies) and copies[-1] > 0, f"shot copies {copies[-1:]}")
+        shot_copies = [int(v) for (v,) in grab(client, r"shot copies (\d+)")]
+        c.check(scenario, "the guest draws the cannon's shells", bool(shot_copies) and shot_copies[-1] > 0, f"shot copies {shot_copies[-1:]}")
 
     elif scenario == "lobby":
         title = grab(host, r"\] lobby menu \S+ title (\d+) host-at (-?\d+) join-at (-?\d+)")
