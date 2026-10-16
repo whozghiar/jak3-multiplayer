@@ -727,13 +727,15 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `player-list` | SELECT list and ping | Holding SELECT shows the list without pausing; ping 17 ms on the guest, 16 to 17 ms measured by the host. |
 
 Round of 2026-10-17 (after the title screen, lobby, Daxter in vehicles, co-op duo and player
-list; 18 scenarios, `check_results.py`: 143 checks passed, 1 failed, no crash): `smoke`,
+list; 18 scenarios, `check_results.py`: 144 checks passed, 0 failed, no crash): `smoke`,
 `join-title`, `join-world`, `lobby`, `coop`, `ride`, `daxter-ride`, `steal-dup`, `daxter-drive`,
-`daxter-drive-own`, `daxter-guns`, `vehicle-guns`, `player-list`, `pvp`, `powers`, `vehicle` and
-`progress` pass every check (`vehicle` once a name clash in `check_results.py` was fixed).
-`guns-fx` failed one check in each of two runs, a different one each time: no arc or needle
-lazer blow in the first, no wave concussor blow from the guest in the second; over the two runs
-every weapon hurt the other player (6.).
+`daxter-drive-own`, `daxter-guns`, `vehicle-guns`, `player-list`, `pvp`, `powers`, `vehicle`,
+`progress` and `guns-fx` pass every check (`vehicle` once a name clash in `check_results.py` was
+fixed). `guns-fx` first failed one check in each of two runs, a different one each time: each
+blow pushes the target away, and the scenario only put it back at 7 m once per side, so the next
+guns were fired from farther, where the arc wielder and needle lazer turn to the Wastelanders
+around. The target now steps back to 7 m, facing the shooter, before each gun: 3 runs out of 3
+passed (12 of 12), every gun of both players landing on the other in two of them.
 
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
