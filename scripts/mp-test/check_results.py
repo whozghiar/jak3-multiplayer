@@ -532,6 +532,22 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
             taken = grab(lines, r"\[multiplayer\] pvp hit by player \d+, damage (\S+)")
             c.check(scenario, f"{side} takes those blows", len(taken) >= 3, f"{len(taken)} hits")
 
+    elif scenario == "steal-dup":
+        def last_block(lines):
+            blocks, cur = [], None
+            for line in lines:
+                if "vehicles near us:" in line:
+                    cur = []
+                    blocks.append(cur)
+                elif cur is not None and "] vehicle #<" in line:
+                    cur.append("mp-replica" if "#<mp-replica" in line else "own")
+            return blocks[-1] if blocks else None
+        thief, victim = last_block(client), last_block(host)
+        c.check(scenario, "the thief drives one vehicle, no copy of the stolen one left",
+                thief is not None and thief.count("own") == 1 and thief.count("mp-replica") == 0, f"{thief}")
+        c.check(scenario, "the victim's vehicle is gone, the thief's shown (body and wheels)",
+                victim is not None and victim.count("own") == 0 and victim.count("mp-replica") == 5, f"{victim}")
+
     elif scenario == "powers":
         shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")
         c.check(scenario, "the host shows the guest's Dark Jak (blend shapes)",

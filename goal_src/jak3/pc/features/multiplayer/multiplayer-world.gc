@@ -842,7 +842,8 @@
     (iterate-process-tree *target* (the-as (function object object) mp-collect-weapon) *null-kernel-context*)
     (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
       (let ((veh (handle->process (-> *target* pilot vehicle))))
-        (when (and veh (type? veh process-drawable))
+        ;; not a vehicle another player took from us (its own stands there now)
+        (when (and veh (type? veh process-drawable) (!= veh (handle->process *mp-stolen-vehicle*)))
           (mp-add-actor (the-as process-drawable veh) (mp-actor-flag vehicle owned))
           (let ((child (-> veh child)))
             (while child
@@ -1889,10 +1890,19 @@
   (none)
   )
 
+(defun mp-stolen-copy? ((id uint) (flags mp-actor-flag))
+  "#t for a copy of the vehicle we just took from its player (body or wheel): dropped at once."
+  (and (>= *mp-stolen-from* 0)
+       (< (mp-now) *mp-stolen-until*)
+       (= (the-as int (shr id 24)) *mp-stolen-from*)
+       (= (logand flags (mp-actor-flag vehicle owned)) (mp-actor-flag vehicle owned))
+       )
+  )
+
 (defun mp-replica-wanted? ((st mp-actor-state))
   "#f for an NPC of another authority standing nearer to us than to that player: our own world
-   covers that place, so its copy would be a double."
-  (or (not *mp-authority*)
+   covers that place, so its copy would be a double; and for a copy of a vehicle we just took."
+  (and (not (mp-stolen-copy? (-> st id) (-> st flags))) (or (not *mp-authority*)
       (logtest? (-> st flags) (mp-actor-flag owned))
       (let ((me (mp-player-pos *mp-local-slot*))
             (owner (mp-player-pos (the-as int (shr (-> st id) 24))))
@@ -1902,7 +1912,7 @@
             (< (vector-vector-distance (-> st trans) owner) (vector-vector-distance (-> st trans) me))
             )
         )
-      )
+      ))
   )
 
 (defbehavior mp-world-receive mp-manager ()
@@ -1977,6 +1987,10 @@
                )
               (seen?
                (+! i 1)
+               )
+              ;; a vehicle we took: gone with no lingering, ours stands there
+              ((mp-stolen-copy? (-> ws replica-id i) (-> proc net flags))
+               (mp-replica-remove i)
                )
               ;; its owner no longer sends it (it left, or the owner went away) while it is in
               ;; our view: it stays where it was, intangible, then fades out (mp-replica-fade)

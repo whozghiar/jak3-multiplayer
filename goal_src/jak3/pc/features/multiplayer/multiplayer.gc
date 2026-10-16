@@ -195,6 +195,12 @@
 (define *mp-ride-slot* -1)
 ;; Slot of the remote vehicle the player stands next to (interaction prompt), -1 for none.
 (define *mp-prompt-slot* -1)
+;; A vehicle taken from another player: that player's slot, and until when the copies of its
+;; driven vehicle (body and wheels) are dropped here at once (mp-stolen-copy?), -1 for none.
+(define *mp-stolen-from* -1)
+(define *mp-stolen-until* 0)
+;; Our vehicle another player took: no longer sent, hidden, removed once we are out.
+(define *mp-stolen-vehicle* (the-as handle #f))
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
 
@@ -2068,10 +2074,45 @@
   (none)
   )
 
+(define-extern mp-hide-tree (function process-drawable none))
+
+(defun mp-hide-tree ((proc process-drawable))
+  "Hide `proc` and the drawn processes under it (a vehicle and its wheels), collision off."
+  (when (nonzero? (-> proc draw))
+    (logior! (-> proc draw status) (draw-control-status no-draw))
+    )
+  (when (and (nonzero? (-> proc root)) (type? (-> proc root) collide-shape) (-> (the-as collide-shape (-> proc root)) root-prim))
+    (set! (-> (the-as collide-shape (-> proc root)) root-prim prim-core collide-as) (collide-spec))
+    (set! (-> (the-as collide-shape (-> proc root)) root-prim prim-core collide-with) (collide-spec))
+    )
+  (let ((child (-> proc child)))
+    (while child
+      (let ((node (ppointer->process child)))
+        (when (and node (type? node process-drawable))
+          (mp-hide-tree (the-as process-drawable node))
+          )
+        (set! child (if node
+                        (-> node brother)
+                        (the-as (pointer process-tree) #f)
+                        )
+              )
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-on-stolen mp-manager ()
-  "Another player took our vehicle: get out; the vehicle is removed once we are out."
+  "Another player took our vehicle: get out; the vehicle is no longer sent, hidden at once (the
+   thief's appears in its place) and removed once we are out."
   (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
     (set! (-> self steal-veh) (-> *target* pilot vehicle))
+    (set! *mp-stolen-vehicle* (-> *target* pilot vehicle))
+    (let ((veh (handle->process (-> *target* pilot vehicle))))
+      (when (and veh (type? veh process-drawable))
+        (mp-hide-tree (the-as process-drawable veh))
+        )
+      )
     (set-time! (-> self steal-time))
     (send-event *target* 'end-mode 'pilot)
     (mp-show-message "Your vehicle was stolen!")
@@ -2509,7 +2550,13 @@
              (logtest? (-> st flags) (mp-flag driving))
              (mp-get-vehicle-at (-> st veh-type) (-> st veh-trans) (-> st veh-quat))
              )
-        (mp-send-event (mp-event-kind steal) slot 0 0.0)
+        (begin
+          ;; the copies of its vehicle go at once: they stood where our new one appears, solid
+          ;; until its driver got off, then lingered (two vehicles, ours pushed away)
+          (set! *mp-stolen-from* slot)
+          (set! *mp-stolen-until* (+ (mp-now) (seconds 2)))
+          (mp-send-event (mp-event-kind steal) slot 0 0.0)
+          )
         )
     )
   (none)
@@ -2531,8 +2578,10 @@
   ;; our vehicle was taken: once we are out, it disappears (the thief drives its own copy)
   (let ((veh (handle->process (-> self steal-veh))))
     (when (and veh (not (focus-test? *target* pilot)) (time-elapsed? (-> self steal-time) (seconds 0.5)))
-      (send-event veh 'go-die)
+      ;; removed without its death (no explosion where the thief's vehicle now stands)
+      (deactivate veh)
       (set! (-> self steal-veh) (the-as handle #f))
+      (set! *mp-stolen-vehicle* (the-as handle #f))
       )
     )
   (none)

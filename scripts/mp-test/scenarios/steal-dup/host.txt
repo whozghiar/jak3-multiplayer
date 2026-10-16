@@ -1,0 +1,17 @@
+# Vehicle steal, host side: drives a buggy, the guest steals it; both list the vehicles around
+# them (log-vehicles) before and after, to catch a vehicle left twice.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 15
+60 log-vehicles
+64 log-vehicles
+64.5 screenshot s1
+65.5 log-vehicles
+66 screenshot s2
+68 log-vehicles
+70 log-vehicles
+70.5 screenshot s3
+74 log-vehicles

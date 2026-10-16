@@ -39,6 +39,7 @@
 ;;   art-range <meters>                                      how far from us that art loads (default 400)
 ;;   log-weapons                                             other players' non-shot weapons drawn here
 ;;   log-aimable                                             what the area weapons find within 20 m of us
+;;   log-vehicles                                            every vehicle within 30 m of us, ours and copies
 ;;   power <dark|light> | log-power                          Dark / Light Jak on; ours and what puppets show
 ;;   run-near-others <0|1>                                   our NPCs near another player run (default 1)
 ;;   log-motion                                              NPCs drawn within 60 m (ours, copies), how many moved since
@@ -214,6 +215,24 @@
       )
     )
   (none)
+  )
+
+(defun mp-test-vehicle-scan ((proc process-drawable))
+  "iterate-process-tree callback (log-vehicles): a vehicle drawn within 30 m of us, ours (a vehicle
+   process) or a copy of another player's (a replica of a vehicle, a driven one's prop included)."
+  (when (and (type? proc process-drawable)
+             *target*
+             (nonzero? (-> proc root))
+             (< (vector-vector-distance (-> proc root trans) (-> *target* control trans)) (meters 30))
+             (or (mp-inherits? (-> proc type) (quote vehicle))
+                 (and (type? proc mp-replica) (logtest? (-> (the-as mp-replica proc) net flags) (mp-actor-flag vehicle)))
+                 )
+             )
+    (format 0 "[mp-test] vehicle ~A at ~,,1m ~,,1m drawn ~A~%" proc (-> proc root trans x) (-> proc root trans z)
+            (and (nonzero? (-> proc draw)) (not (logtest? (-> proc draw status) (draw-control-status no-draw))))
+            )
+    )
+  #f
   )
 
 (defun mp-test-log-stretch ()
@@ -1791,6 +1810,11 @@
          )
         ((string= cmd "log-stretch")
          (mp-test-log-stretch)
+         )
+        ((string= cmd "log-vehicles")
+         ;; log-vehicles: every vehicle within 30 m of us, ours and copies, drawn or not
+         (format 0 "[mp-test] vehicles near us:~%")
+         (iterate-process-tree *active-pool* (the-as (function object object) mp-test-vehicle-scan) *null-kernel-context*)
          )
         ((string= cmd "log-motion")
          ;; log-motion [meters]: within 60 m of us unless given
