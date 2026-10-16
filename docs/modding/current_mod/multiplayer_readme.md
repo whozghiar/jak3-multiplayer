@@ -19,6 +19,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 | GAME | `.../multiplayer-menu.gc` | START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
 | Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/`, `compare_poses.py` | Runs several game instances on one PC with a script each, gathers logs and screenshots; compares an owner's bones with its copies'. |
+| Tool | `scripts/mp-test/local_pair.py` | Starts two instances on one PC to play by hand, one with the controller, the other with the keyboard. |
 
 ### 1.1 Network
 
@@ -508,7 +509,21 @@ out/build/Release/bin/goalc-test --gtest_filter=Multiplayer.*
 task compile-check                                        # first time in a worktree: (make-group "iso" :force #t)
 ```
 
-### 5.2 Automated sessions
+### 5.2 Two instances played by hand
+
+```bash
+python scripts/mp-test/local_pair.py [--retail] [--reset]
+```
+
+It starts two instances side by side, each with its own config folder in
+`out/mp-local/<controller|keyboard>/`. The folders are made on the first run from the user's saves
+and settings, without the multiplayer name and color, then kept; `--reset` makes them again. The
+keyboard instance sees no controller (SDL joystick backends off for it alone), so its keyboard is
+on. The controller instance keeps the controller while unfocused
+(`ignore-controller-win-unfocused? #f`). Keep the keyboard window focused: keys only reach the
+focused window. Default boot as `task boot-game`, `--retail` as `task boot-game-retail`.
+
+### 5.3 Automated sessions
 
 ```bash
 python scripts/mp-test/run_mp_test.py <scenario> [--latency <ms>[:<jitter ms>]]
@@ -702,6 +717,9 @@ public IP.
   stock pause rule is extended to other players as a safeguard (4.6).
 
 ## 7. Change log
+
+- **2026-10-16:** `scripts/mp-test/local_pair.py` starts two instances to play by hand on one
+  PC, one with the controller, the other with the keyboard (5.2).
 
 - **2026-10-15 (evening):** another player's area weapons, Dark and Light Jak, distant players.
   - *Area weapons.* The wave concussor, mass inverter and arc wielder of another player are drawn
