@@ -1,0 +1,46 @@
+# Lobby, host side (the title menu opens on Load Game): back to the title screen, Host Game >
+# Load Game opens the lobby (the server starts), circle opens the multiplayer options and
+# triangle comes back; X is refused while the guest is not ready; once it is (as Daxter), square
+# switches to co-op and X opens the save menu, X loads slot 1, and the guest follows.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+27 log-lobby
+27 screenshot title
+28 press down 100
+29 press x 100
+30 wait-menu mp-host-game
+31 log-lobby
+31 screenshot host-game
+31.5 press down 100
+32 press x 100
+33 wait-menu mp-lobby-load
+34 log-lobby
+34.5 screenshot lobby-alone
+36 press circle 100
+37 wait-menu multiplayer
+38 log-lobby
+38 screenshot mp-options
+38.5 press triangle 100
+39 wait-menu mp-lobby-load
+40 log-lobby
+48 log-lobby
+49 press x 100
+50 log-lobby
+58 log-lobby
+58.5 screenshot lobby-ready
+59 press square 100
+60 log-lobby
+66 press x 100
+67 wait-menu select-load
+68 log-lobby
+68 screenshot save-menu
+69 press x 100
+71 log-lobby
+150 log-coop
+150 screenshot host-joined
+151 log

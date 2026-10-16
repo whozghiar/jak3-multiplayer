@@ -305,5 +305,18 @@
   "1537": "Name",
   "1538": "Ping",
   "1539": "Press <PAD_TRIANGLE> to jump on Jak's shoulder",
-  "153a": "Press <PAD_X> to jump off"
+  "153a": "Press <PAD_X> to jump off",
+  "153b": "Host Game",
+  "153c": "Join Game",
+  "153d": "Lobby",
+  "153e": "Connect",
+  "153f": "Ready",
+  "1540": "Not ready",
+  "1541": "Host",
+  "1542": "Waiting for the host to start the game",
+  "1543": "Waiting for every player to be ready",
+  "1544": "Co-op: one plays Jak, the other Daxter (<PAD_L1> / <PAD_R1> to switch)",
+  "1545": "<PAD_X> Start   <PAD_SQUARE> Game mode   <PAD_L1> <PAD_R1> Character",
+  "1546": "<PAD_X> Ready   <PAD_L1> <PAD_R1> Character",
+  "1547": "<PAD_CIRCLE> Multiplayer options   <PAD_TRIANGLE> Leave"
 }

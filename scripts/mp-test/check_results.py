@@ -573,6 +573,39 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         copies = [int(v) for (v,) in grab(client, r"shot copies (\d+)")]
         c.check(scenario, "the guest draws the cannon's shells", bool(copies) and copies[-1] > 0, f"shot copies {copies[-1:]}")
 
+    elif scenario == "lobby":
+        title = grab(host, r"\] lobby menu \S+ title (\d+) host-at (-?\d+) join-at (-?\d+)")
+        c.check(scenario, "the title screen offers Host Game and Join Game",
+                bool(title) and title[0][0] == "7" and "-1" not in title[0][1:], f"{title[:1]}")
+        hm = [m for (m,) in grab(host, r"\] lobby menu (\S+) title")]
+        gm = [m for (m,) in grab(client, r"\] lobby menu (\S+) title")]
+        c.check(scenario, "Host Game > Load Game and Join Game > Connect open the lobby",
+                "mp-host-game" in hm and "mp-lobby-load" in hm and "mp-join-game" in gm and "mp-lobby-join" in gm,
+                f"host {hm}, guest {gm}")
+        back = [m for i, m in enumerate(hm) if i > 0 and hm[i - 1] == "multiplayer"]
+        c.check(scenario, "circle opens the multiplayer options, triangle comes back to the lobby",
+                back[:1] == ["mp-lobby-load"], f"{hm}")
+        ready = [r for (r,) in grab(host, r"\] lobby mode \d+ players \d+ coop \S+ all-ready (\S+)")]
+        blocks = list(zip(hm, ready))
+        first_start = next((i for i, (m, _) in enumerate(blocks) if m == "select-load"), None)
+        c.check(scenario, "the host's X is refused until every guest is ready, then opens the save menu",
+                first_start is not None and blocks[first_start][1] == "#t"
+                and any(m == "mp-lobby-load" and r == "#f" for m, r in blocks[:first_start])
+                and blocks[first_start - 1][0] == "mp-lobby-load",
+                f"{blocks}")
+        guest = grab(host, r"\] lobby row \d+ slot \d+ name \"?Guest\"? character (\d+) status (\d+)")
+        c.check(scenario, "the host sees the guest switch to Daxter, then ready",
+                ("1", "5440") in guest and ("1", "5439") in guest, f"{sorted(set(guest))}")
+        coop = [x for (x,) in grab(client, r"\] lobby mode \d+ players \d+ coop (\S+)")]
+        c.check(scenario, "square switches the game mode to co-op, shown to the guest", "#t" in coop, f"{coop}")
+        stage = grab(client, r"join stage (\d+) foreign")
+        dist = [float(d) for (d,) in grab(client, r"join distance to the host " + NUM)]
+        co = grab(client, r"\] coop (\S+) authority \S+ character (\d+) perch -?\d+ perched \d+ state (\S+)")
+        c.check(scenario, "the guest follows into the host's world, next to it, as Daxter in co-op",
+                bool(stage) and stage[-1][0] == "4" and bool(dist) and dist[-1] < 10.0
+                and bool(co) and co[-1][0] == "#t" and co[-1][1] == "1" and co[-1][2].startswith("target-indax"),
+                f"stage {stage[-1:]}, distance {dist[-1:]}, {co[-1:]}")
+
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
         c.check(scenario, "holding SELECT shows the player list without pausing",

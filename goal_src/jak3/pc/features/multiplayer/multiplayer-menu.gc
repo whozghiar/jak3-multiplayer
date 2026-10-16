@@ -5,6 +5,9 @@
 ;; dgos: GAME
 ;;
 ;; Jak 3 multiplayer mod -- menus:
+;;   - Title screen: Host Game (a new game or a save) and Join Game (an address), both leading to the
+;;     lobby where the players choose their character, the host the game mode, and the host starts
+;;     once every guest is ready (after himstan's Jak and Daxter II Multiplayer, see below).
 ;;   - START > Options > Multiplayer: name, character, color, server address, host / join /
 ;;     disconnect, and the Server administration page while hosting (kick, ban, teleports, cheat
 ;;     permission, time-of-day sharing, stop). The entry only exists while the mod is enabled.
@@ -557,21 +560,443 @@
     )
   )
 
-;; MOD multiplayer -- route the 'multiplayer page (START > Options > Multiplayer) and let every
-;; other page through the stock method (pc/progress/progress-pc.gc). define-perm keeps the stock
-;; method when this file is reloaded in a REPL session.
+;; ------------------------------------------------------------------------------------------------
+;; Title screen and lobby
+;;
+;; The way into a session follows himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, goal_src/jak2/multiplayer/ui/
+;; mp-lobby-progress.gc, ISC license): Host Game and Join Game on the title screen; the host picks
+;; a new game or a save, then everyone waits in a lobby that lists the players on the left and
+;; details the selected one on the right, with his keys: X ready (guest) or start (host, once every
+;; guest is ready), L1 / R1 character, circle multiplayer options, triangle leave. Written anew for
+;; Jak 3's menus, with these differences: square switches the game mode (the host chooses free roam
+;; or co-op here), the host starts at once (no countdown), and guests join by address.
+;; ------------------------------------------------------------------------------------------------
+
+;; Title screen entries, shown while the mod is enabled (mp-update-title).
+(define *mp-title-host*
+  (new 'static 'menu-sub-menu-option :name (text-id progress-mp-host-game) :next-state 'mp-host-game)
+  )
+
+(define *mp-title-join*
+  (new 'static 'menu-sub-menu-option :name (text-id progress-mp-join-game) :next-state 'mp-join-game)
+  )
+
+;; The stock entries (New Game, Load Game, Options, Secrets, Quit) and their heights, captured once
+;; (a REPL reload must not capture the modded ones).
+(define-perm *mp-stock-title* (array menu-option) (-> *title-pc* options))
+
+(define-perm *mp-stock-title-offsets* (array float)
+  (let ((offsets (new 'global 'boxed-array float (-> *mp-stock-title* length))))
+    (dotimes (i (-> *mp-stock-title* length))
+      (set! (-> offsets i) (-> *mp-stock-title* i offset-y))
+      )
+    offsets
+    )
+  )
+
+(define *mp-title-options* (new 'global 'boxed-array menu-option 7))
+
+(defun mp-update-title ()
+  "Title screen list: Host Game and Join Game after Load Game while the mod is enabled, the stock list
+   otherwise. Until Secrets is unlocked, the stock skips index 3 when moving and draws the entries
+   0.08 lower and Quit 0.07 higher (pc/progress/progress-generic-pc.gc, progress-draw-pc.gc), so the
+   hidden Secrets entry stays at index 3. Called every frame and when the title menu opens."
+  (let ((stock *mp-stock-title*)
+        (arr *mp-title-options*)
+        )
+    (cond
+      ((not (mp-enabled?))
+       (dotimes (i (-> stock length))
+         (set! (-> stock i offset-y) (-> *mp-stock-title-offsets* i))
+         )
+       (set! (-> *title-pc* options) stock)
+       )
+      (else
+        (let ((locked? (not (memcard-unlocked-secrets? #f #f)))
+              (shown 0)
+              )
+          (set! (-> arr 0) (-> stock 0))
+          (set! (-> arr 1) (-> stock 1))
+          (set! (-> arr 2) *mp-title-host*)
+          (set! (-> arr 3) (if locked? (-> stock 3) *mp-title-join*))
+          (set! (-> arr 4) (if locked? *mp-title-join* (-> stock 2)))
+          (set! (-> arr 5) (if locked? (-> stock 2) (-> stock 3)))
+          (set! (-> arr 6) (-> stock 4))
+          ;; the entries shown 0.1 apart as drawn: from 0.15 (seven) or 0.2 (six, Secrets hidden)
+          (dotimes (i 7)
+            (cond
+              ((not locked?)
+               (set! (-> arr i offset-y) (+ 0.15 (* 0.1 (the float i))))
+               )
+              ((!= (-> arr i) (-> stock 3))
+               (set! (-> arr i offset-y) (+ 0.2 (* 0.1 (the float shown)) (if (= i 6) 0.07 -0.08)))
+               (+! shown 1)
+               )
+              )
+            )
+          )
+        (set! (-> *title-pc* options) arr)
+        )
+      )
+    )
+  (none)
+  )
+
+;; Host Game: a new game or a save, then the lobby (the server starts with it).
+(define *mp-host-game-options*
+  (new 'static 'menu-option-list
+    :y-center #xc6
+    :y-space 15
+    :scale 0.82
+    :options (new 'static 'boxed-array :type menu-option
+      (new 'static 'menu-sub-menu-option :name (text-id progress-title-new-game) :offset-y 0.3 :next-state 'mp-lobby-new)
+      (new 'static 'menu-sub-menu-option :name (text-id progress-load-save) :offset-y 0.45 :next-state 'mp-lobby-load)
+      )
+    )
+  )
+
+;; Join Game: the host's address, then the lobby.
+(define *mp-join-game-options*
+  (progress-new-generic-scrolling-page (text-id progress-mp-join-game)
+    (new 'static 'menu-mp-text-option
+      :name (text-id progress-mp-address)
+      :get-value (lambda () *mp-address*)
+      :charset "0123456789.:abcdefghijklmnopqrstuvwxyz-"
+      :max-length 31
+      :on-confirm (lambda () (mp-config-save!) (none))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-connect)
+      :on-confirm (lambda ((the-progress progress))
+                    (mp-join!)
+                    (push-state the-progress)
+                    (set-next-state the-progress 'mp-lobby-join 0)
+                    (none)
+                    )
+      )
+    )
+  )
+
+;; The lobby page: a single option that draws the whole page and reads its keys.
+(deftype menu-mp-lobby-option (menu-option)
+  ((selected int32) ;; row of the player detailed on the right
+   )
+  )
+
+(define *mp-lobby-options*
+  (new 'static 'menu-option-list
+    :y-center #xc6
+    :y-space 15
+    :scale 0.82
+    :options (new 'static 'boxed-array :type menu-option
+      (new 'static 'menu-mp-lobby-option :name (text-id progress-mp-lobby))
+      )
+    )
+  )
+
+;; Where the host's start goes: the save menu of a new game ('select-save-title) or of a save to
+;; load ('select-load), chosen on the Host Game page.
+(define *mp-lobby-start* 'select-save-title)
+
+(define *mp-lobby-line* (new 'global 'string 128 (the-as string #f)))
+
+(defun mp-lobby-slot ((row int))
+  "Slot of the player on lobby row `row`: everyone in slot order (the host first), ourselves
+   included; -1 (ourselves) before the server gave us a slot."
+  (dotimes (i MP_MAX_PLAYERS)
+    (when (or (= i *mp-local-slot*) (mp-remote-state i))
+      (if (zero? row)
+          (return i)
+          )
+      (+! row -1)
+      )
+    )
+  -1
+  )
+
+(defun mp-slot-state ((slot int))
+  "A player's state, ours included (slot -1 is ours before we have a slot)."
+  (if (or (< slot 0) (= slot *mp-local-slot*))
+      *mp-local*
+      (mp-remote-state slot)
+      )
+  )
+
+(defun mp-lobby-coop? ()
+  "#t when the session's game mode is co-op. The host chooses it; a guest reads it in the host's
+   state (its world event only comes once the host plays)."
+  (if (= *mp-mode* (mp-mode client))
+      (let ((host (mp-remote-state 0)))
+        (and host (logtest? (-> host flags) (mp-flag coop)))
+        )
+      (= (-> *mp-config* mode) 1)
+      )
+  )
+
+(defun mp-lobby-all-ready? ()
+  "#t when every connected guest said it is ready (always with no guest)."
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i)))
+      (if (and st (not (logtest? (-> st flags) (mp-flag ready))))
+          (return #f)
+          )
+      )
+    )
+  #t
+  )
+
+(defun mp-lobby-status-id ((st mp-player-state) (slot int))
+  "What the lobby says of a player: host, ready or not ready."
+  (cond
+    ((or (zero? slot) (and (< slot 0) (= *mp-mode* (mp-mode host))))
+     (text-id progress-mp-role-host)
+     )
+    ((logtest? (-> st flags) (mp-flag ready))
+     (text-id progress-mp-ready)
+     )
+    (else
+      (text-id progress-mp-not-ready)
+      )
+    )
+  )
+
+(defun mp-lobby-print ((ctx font-context) (str string) (x float) (y float) (width float) (scale float) (color font-color))
+  "Print `str` at x, y in a box `width` wide, with the font flags already set."
+  (set! (-> ctx origin x) x)
+  (set! (-> ctx origin y) y)
+  (set-width! ctx (the int width))
+  (set-scale! ctx scale)
+  (set-color! ctx color)
+  (print-game-text str ctx #f 44 (bucket-id hud-draw-hud-alpha))
+  (none)
+  )
+
+(defun mp-lobby-draw-square ((x int) (y int) (color int))
+  "A player's color square, as in the player list."
+  (with-dma-buffer-add-bucket ((buf (-> *display* frames (-> *display* on-screen) global-buf)) (bucket-id hud-draw-hud-alpha))
+    (dma-buffer-add-gs-set-flusha buf
+                                  (alpha-1 (new 'static 'gs-alpha :b #x1 :d #x1))
+                                  (tex1-1 (new 'static 'gs-tex1 :mmag #x1 :mmin #x1))
+                                  )
+    (draw-sprite2d-xy buf x y 9 9 (new 'static 'rgba :a #x80) #x3fffff)
+    (draw-sprite2d-xy buf (+ x 1) (+ y 1) 7 7 (mp-color-rgba color) #x3fffff)
+    )
+  (none)
+  )
+
+(defmethod draw-option ((this menu-mp-lobby-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "The lobby: session status and game mode, the players on the left, the selected one on the right,
+   a hint and the keys at the bottom."
+  (let* ((alpha (fmax 0.0 (* 2.0 (- 0.5 (-> progress menu-transition)))))
+         (wide? (= (get-aspect-ratio) 'aspect16x9))
+         ;; the page's frame (draw-page-border), squeezed to the screen's aspect ratio as the stock
+         ;; pages' scissor is (begin-scissor-scrolling-page)
+         (vis? (-> *pc-settings* use-vis?))
+         (x0 (if wide? 79.0 70.0))
+         (x1 (if wide? 435.0 445.0))
+         (left (+ 8.0 (if vis? x0 (the float (adjust-game-x x0)))))
+         (width (- (if vis? x1 (the float (adjust-game-x x1))) left 8.0))
+         (top (if wide? 86.0 112.0))
+         (bottom (if wide? 362.0 329.0))
+         (rows (+ 1 (mp-player-count)))
+         (row-top (+ top 42.0))
+         (row-h (fmin 20.0 (/ (- bottom 72.0 row-top) (the float (max rows 4)))))
+         (sel (max 0 (min (-> this selected) (+ rows -1))))
+         (host? (!= *mp-mode* (mp-mode client)))
+         (host-st (mp-remote-state 0))
+         (detail-x (+ left (* 0.6 width)))
+         (detail-w (* 0.38 width))
+         (hint (the-as text-id 0))
+         )
+    (set! (-> this selected) sel)
+    (set! (-> font-ctx alpha) alpha)
+    (draw-page-header font-ctx (text-id progress-mp-lobby) alpha)
+    ;; session status and game mode, centered
+    (set-flags! font-ctx (font-flags kerning middle large))
+    (mp-lobby-print font-ctx (mp-status-text) left top width 0.45 (font-color font-color-32))
+    (format (clear *mp-lobby-line*) "~S: ~S"
+            (lookup-text! *common-text* (text-id progress-mp-mode) #f)
+            (lookup-text! *common-text* (if (mp-lobby-coop?) (text-id progress-mp-mode-coop) (text-id progress-mp-mode-free)) #f)
+            )
+    (mp-lobby-print font-ctx *mp-lobby-line* left (+ top 17.0) width 0.45 (font-color font-color-32))
+    ;; the players: color, name and status, the selected one highlighted
+    (set-flags! font-ctx (font-flags kerning large))
+    (dotimes (row rows)
+      (let* ((slot (mp-lobby-slot row))
+             (st (mp-slot-state slot))
+             (y (+ row-top (* row-h (the float row))))
+             (color (if (= row sel) (font-color font-color-33) (font-color font-color-32)))
+             )
+        (when st
+          (mp-lobby-draw-square (the int (+ left 14.0)) (the int (+ y 3.0)) (-> st color))
+          (string<-charp *mp-lobby-line* (-> st name))
+          (mp-lobby-print font-ctx *mp-lobby-line* (+ left 28.0) y (* 0.4 width) 0.45 color)
+          (mp-lobby-print font-ctx (lookup-text! *common-text* (mp-lobby-status-id st slot) #f)
+                          (+ left (* 0.42 width)) (+ y 2.0) (* 0.17 width) 0.35 color
+                          )
+          )
+        )
+      )
+    ;; the selected player: name, character, ping, status
+    (let* ((slot (mp-lobby-slot sel))
+           (st (mp-slot-state slot))
+           )
+      (when st
+        (string<-charp *mp-lobby-line* (-> st name))
+        (mp-lobby-print font-ctx *mp-lobby-line* detail-x row-top detail-w 0.55 (font-color font-color-33))
+        (format (clear *mp-lobby-line*) "~S: ~S"
+                (lookup-text! *common-text* (text-id progress-mp-character) #f)
+                (lookup-text! *common-text* (if (= (logand (-> st character) 15) 1) (text-id progress-mp-daxter) (text-id progress-mp-jak)) #f)
+                )
+        (mp-lobby-print font-ctx *mp-lobby-line* detail-x (+ row-top 24.0) detail-w 0.42 (font-color font-color-32))
+        (let ((ping (pc-mp-player-ping slot)))
+          (if (< ping 0)
+              (format (clear *mp-lobby-line*) "~S: --" (lookup-text! *common-text* (text-id progress-mp-col-ping) #f))
+              (format (clear *mp-lobby-line*) "~S: ~D ms" (lookup-text! *common-text* (text-id progress-mp-col-ping) #f) ping)
+              )
+          )
+        (mp-lobby-print font-ctx *mp-lobby-line* detail-x (+ row-top 42.0) detail-w 0.42 (font-color font-color-32))
+        (mp-lobby-print font-ctx (lookup-text! *common-text* (mp-lobby-status-id st slot) #f)
+                        detail-x (+ row-top 60.0) detail-w 0.42 (font-color font-color-32)
+                        )
+        )
+      )
+    ;; a hint: the co-op duo for a guest with the host's character, then what everyone waits for
+    (cond
+      ((and (not host?) host-st (mp-lobby-coop?)
+            (= (logand (-> host-st character) 15) (logand (-> *mp-local* character) 15))
+            )
+       (set! hint (text-id progress-mp-coop-offer))
+       )
+      ((and (not host?) *mp-lobby-ready*)
+       (set! hint (text-id progress-mp-lobby-wait))
+       )
+      ((and host? (not (mp-lobby-all-ready?)))
+       (set! hint (text-id progress-mp-lobby-not-ready))
+       )
+      )
+    (set-flags! font-ctx (font-flags kerning middle large))
+    (if (nonzero? hint)
+        (mp-lobby-print font-ctx (lookup-text! *common-text* hint #f) left (- bottom 66.0) width 0.4 (font-color font-color-33))
+        )
+    (mp-lobby-print font-ctx
+                    (lookup-text! *common-text* (if host? (text-id progress-mp-lobby-keys-host) (text-id progress-mp-lobby-keys-guest)) #f)
+                    left (- bottom 46.0) width 0.4 (font-color font-color-32)
+                    )
+    (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-lobby-keys-2) #f)
+                    left (- bottom 28.0) width 0.4 (font-color font-color-32)
+                    )
+    )
+  (none)
+  )
+
+(defmethod respond-progress ((this menu-mp-lobby-option) (progress progress) (selected? symbol))
+  "The lobby keys: up / down choose the player detailed, X ready (guest) or start (host, once every
+   guest is ready), L1 / R1 character, square game mode (host), circle multiplayer options, triangle
+   leave (the stock respond-to-cpad then goes back a page)."
+  (let ((host? (!= *mp-mode* (mp-mode client))))
+    (cond
+      ((cpad-pressed? 0 up l-analog-up)
+       (cpad-clear! 0 up l-analog-up)
+       (set! (-> this selected) (max 0 (+ (-> this selected) -1)))
+       (sound-play "roll-over")
+       )
+      ((cpad-pressed? 0 down l-analog-down)
+       (cpad-clear! 0 down l-analog-down)
+       (set! (-> this selected) (min (mp-player-count) (+ (-> this selected) 1)))
+       (sound-play "roll-over")
+       )
+      ((cpad-pressed? 0 confirm)
+       (cpad-clear! 0 confirm)
+       (cond
+         ((= *mp-mode* (mp-mode client))
+          (set! *mp-lobby-ready* (not *mp-lobby-ready*))
+          (sound-play "generic-beep")
+          )
+         ((and (= *mp-mode* (mp-mode host)) (mp-lobby-all-ready?))
+          (sound-play "window-expand")
+          (push-state progress)
+          (set-next-state progress *mp-lobby-start* 0)
+          )
+         (else
+           (sound-play "roll-over")
+           )
+         )
+       )
+      ((cpad-pressed? 0 l1 r1)
+       (cpad-clear! 0 l1 r1)
+       (cond
+         ((and (not host?) *mp-lobby-ready*)
+          (sound-play "roll-over")
+          )
+         (else
+           (set! (-> *mp-config* character) (if (= (-> *mp-config* character) 1) 0 1))
+           (mp-config-save!)
+           (sound-play "generic-beep")
+           )
+         )
+       )
+      ((and host? (cpad-pressed? 0 square))
+       (cpad-clear! 0 square)
+       (set! (-> *mp-config* mode) (if (= (-> *mp-config* mode) 1) 0 1))
+       (mp-config-save!)
+       (mp-apply-mode!)
+       (sound-play "generic-beep")
+       )
+      ((cpad-pressed? 0 circle)
+       (cpad-clear! 0 circle)
+       (sound-play "window-expand")
+       (push-state progress)
+       (set-next-state progress 'multiplayer 0)
+       )
+      ((cpad-pressed? 0 triangle)
+       (mp-leave!)
+       )
+      )
+    )
+  0
+  )
+
+;; MOD multiplayer -- route the multiplayer pages (START > Options > Multiplayer, the title screen's
+;; Host Game and Join Game, the lobby) and let every other page through the stock method
+;; (pc/progress/progress-pc.gc). define-perm keeps the stock method when this file is reloaded in a
+;; REPL session.
 (define-perm *mp-stock-set-menu-options* (function progress symbol int)
   (the-as (function progress symbol int) (method-of-type progress set-menu-options))
   )
 
 (defmethod set-menu-options ((this progress) (arg0 symbol))
-  "Stock behavior, plus the multiplayer page."
-  (cond
-    ((= arg0 'multiplayer)
+  "Stock behavior, plus the multiplayer pages."
+  (case arg0
+    (('multiplayer)
      (set! (-> this current-options) *mp-menu-options*)
      0
      )
+    (('mp-host-game)
+     (set! (-> this current-options) *mp-host-game-options*)
+     0
+     )
+    (('mp-join-game)
+     ;; on the address, nothing left selected from the last visit
+     (set! (-> (the-as menu-generic-scrolling-page (-> *mp-join-game-options* options 0)) selected-option-index) -1)
+     (set! (-> *progress-pc-generic-store* current-menu-hover-index) 0)
+     (set! (-> this current-options) *mp-join-game-options*)
+     0
+     )
+    (('mp-lobby-new 'mp-lobby-load 'mp-lobby-join)
+     ;; a host's server starts with its lobby (mp-host! does nothing once hosting)
+     (when (!= arg0 'mp-lobby-join)
+       (set! *mp-lobby-start* (if (= arg0 'mp-lobby-new) 'select-save-title 'select-load))
+       (mp-host!)
+       )
+     (set! (-> this current-options) *mp-lobby-options*)
+     0
+     )
     (else
+      (if (= arg0 'title)
+          (mp-update-title)
+          )
       (*mp-stock-set-menu-options* this arg0)
       )
     )
@@ -640,6 +1065,7 @@
   (set! (-> *mp-config* enabled) (if on? 1 0))
   (mp-config-save!)
   (mp-update-options-entry)
+  (mp-update-title)
   (none)
   )
 

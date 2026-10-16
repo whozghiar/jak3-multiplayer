@@ -48,6 +48,8 @@
   (indax 5)        ;; plays as Daxter: anim-index is an index in Daxter's art group
   (paused 6)       ;; in a menu
   (authority 7)    ;; simulates the NPCs around it (see multiplayer-world.gc)
+  (ready 8)        ;; a guest said it is ready in the lobby (multiplayer-menu.gc)
+  (coop 9)         ;; the host's game mode is co-op (read by guests in the lobby, before any world event)
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -193,6 +195,8 @@
 ;; #t while this player simulates the NPCs around it (always for the host), see mp-update-authority
 (define *mp-authority* #f)
 (define *mp-invulnerable-applied* #f)
+;; #t once this guest said it is ready in the lobby; cleared when a session starts or ends.
+(define *mp-lobby-ready* #f)
 ;; Slot of the driver this player rides with, -1 when not riding.
 (define *mp-ride-slot* -1)
 ;; Slot of the remote vehicle the player stands next to (interaction prompt), -1 for none.
@@ -569,6 +573,7 @@
   ;; only from offline: a menu button also fires on the confirm that deselects it
   (when (= *mp-mode* (mp-mode offline))
     (mp-config-save!)
+    (set! *mp-lobby-ready* #f)
     (pc-mp-join *mp-address*)
     (pc-mp-message *mp-status*)
     (mp-show-message *mp-status*)
@@ -578,6 +583,7 @@
 
 (defun mp-leave! ()
   "Leave the session (a host stops its server)."
+  (set! *mp-lobby-ready* #f)
   (when (!= *mp-mode* (mp-mode offline))
     (pc-mp-leave)
     (set! *mp-mode* (mp-mode offline))
@@ -652,6 +658,13 @@
         )
     (if *mp-authority*
         (logior! (-> st flags) (mp-flag authority))
+        )
+    ;; lobby (multiplayer-menu.gc)
+    (if *mp-lobby-ready*
+        (logior! (-> st flags) (mp-flag ready))
+        )
+    (if (and (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag coop)))
+        (logior! (-> st flags) (mp-flag coop))
         )
     (set! (-> st seg-mask) (the-as uint 0))
     (cond
@@ -1747,7 +1760,7 @@
   (none)
   )
 
-(defbehavior mp-load-world-save mp-manager ()
+(defun mp-load-world-save ()
   "Guest: the host's world arrived: load it as the stock Load Game does (game-save.gc, auto-save
    restore). #t when it is loading."
   (let* ((save (mp-world-save-buffer))
@@ -2641,9 +2654,10 @@
   (none)
   )
 
-(defbehavior mp-update-join mp-manager ()
-  "Guest: ask the host for its world once connected (again after 10 s without it), load it, then go
-   next to the host."
+(defun mp-update-join-request ()
+  "Guest: ask the host for its world once connected (again after 10 s without it), and load it when
+   it arrives. Runs from the hook: a guest waiting in a menu (the lobby, the title screen's) is
+   paused, and the manager with it."
   (let ((js *mp-join*))
     (cond
       ((!= *mp-mode* (mp-mode client))
@@ -2652,7 +2666,7 @@
       ((and (= (-> js stage) 0) (mp-remote-state 0))
        (mp-send-event (mp-event-kind world-request) 0 0 0.0)
        (set! (-> js stage) 1)
-       (set-time! (-> js since))
+       (set! (-> js since) (mp-now))
        )
       ((= (-> js stage) 1)
        (cond
@@ -2661,25 +2675,34 @@
               (set! (-> js stage) 2)
               (set! (-> js stage) 0)
               )
-          (set-time! (-> js since))
+          (set! (-> js since) (mp-now))
           )
-         ((time-elapsed? (-> js since) (seconds 10))
+         ((>= (- (mp-now) (-> js since)) (seconds 10))
           (set! (-> js stage) 0)
           )
          )
        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-join mp-manager ()
+  "Guest: once the host's world loaded (mp-update-join-request), go next to the host."
+  (let ((js *mp-join*))
+    (cond
       ;; the loading screen is over: next to the host
-      ((and (= (-> js stage) 2) (time-elapsed? (-> js since) (seconds 1)) (mp-in-game?))
+      ((and (= (-> js stage) 2) (>= (- (mp-now) (-> js since)) (seconds 1)) (mp-in-game?))
        (set! *mp-request-teleport* 0)
        (set! (-> js stage) 3)
-       (set-time! (-> js since))
+       (set! (-> js since) (mp-now))
        )
       ;; next to the host once the teleport is over (through the host's continue point when its
       ;; level is not active here yet, mp-update-pending-teleport), or after 30 s anyway
       ((and (= (-> js stage) 3)
-            (time-elapsed? (-> js since) (seconds 1))
+            (>= (- (mp-now) (-> js since)) (seconds 1))
             (or (and (< *mp-request-teleport* 0) (< (-> self tp-slot) 0) (mp-in-game?))
-                (time-elapsed? (-> js since) (seconds 30))
+                (>= (- (mp-now) (-> js since)) (seconds 30))
                 )
             )
        (set! (-> js stage) 4)
@@ -3124,6 +3147,7 @@
 (define-extern mp-test-update (function none))
 
 (define-extern mp-keep-seen-npcs (function none)) ;; multiplayer-world.gc
+(define-extern mp-update-title (function none)) ;; multiplayer-menu.gc
 
 (defun mp-frame-hook ()
   "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
@@ -3146,6 +3170,7 @@
          )
        )
      (mp-read-remote-states)
+     (mp-update-join-request)
      ;; when the process pool is full, retry once a second instead of every frame
      (when (and (not (handle->process (-> *mp-globals* manager)))
                 (>= (- (mp-now) (-> *mp-globals* manager-retry)) (seconds 1))
@@ -3159,6 +3184,9 @@
        )
      (mp-draw-overlay)
      (mp-keep-seen-npcs)
+     ;; the title screen's Host Game and Join Game (its layout follows the Secrets entry, which
+     ;; appears once the memory card says it is unlocked)
+     (mp-update-title)
      )
     ((or (!= *mp-mode* (mp-mode offline)) (handle->process (-> *mp-globals* manager)))
      (mp-shutdown)

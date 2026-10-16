@@ -12,6 +12,8 @@
 ;; Commands (one per line, after the time in seconds):
 ;;   enable | name <word> | color <n> | character <n>       mod settings, in memory and saved
 ;;   host <ip:port> | join <ip:port> | leave                 session
+;;   address <ip:port> | log-lobby                           server address field only; menu page, title entries, lobby
+;;   wait-menu <page>                                        the script waits: the menu shows that page (title...)
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -62,11 +64,14 @@
 (define-extern pc-mp-test-pad (function int int int int int none))
 (define-extern pc-mp-test-pause (function symbol none))
 
-;; wait-joined / wait-player: the script clock stops until the wait is over (mp-test-update).
+;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
+;; (mp-test-update).
 (deftype mp-test-waiting (structure)
-  ((kind  symbol)     ;; 'joined, 'player or #f
+  ((kind  symbol)     ;; 'joined, 'player, 'menu or #f
    (slot  int32)
+   (menu  symbol)     ;; the menu page waited for
    (since time-frame)
+   (tapped time-frame) ;; wait-menu title: last X tapped to open the title screen's menu
    )
   )
 
@@ -1188,6 +1193,44 @@
          (copy-string<-string *mp-address* (-> *mp-test* word))
          (mp-join!)
          )
+        ((string= cmd "address")
+         ;; address: the server address field only (Join Game connects to it)
+         (mp-test-word)
+         (copy-string<-string *mp-address* (-> *mp-test* word))
+         )
+        ((string= cmd "log-lobby")
+         ;; log-lobby: the menu page shown, the title screen's entries, and the lobby as drawn
+         (let ((menu (if *progress-process* (-> *progress-process* 0 current) 'none))
+               (host-at -1)
+               (join-at -1)
+               )
+           (dotimes (i (-> *title-pc* options length))
+             (if (= (-> *title-pc* options i) *mp-title-host*)
+                 (set! host-at i)
+                 )
+             (if (= (-> *title-pc* options i) *mp-title-join*)
+                 (set! join-at i)
+                 )
+             )
+           (format 0 "[mp-test] lobby menu ~A title ~D host-at ~D join-at ~D~%" menu (-> *title-pc* options length) host-at join-at)
+           )
+         (format 0 "[mp-test] lobby mode ~D players ~D coop ~A all-ready ~A ready ~A~%"
+                 *mp-mode* (+ 1 (mp-player-count)) (mp-lobby-coop?) (mp-lobby-all-ready?) *mp-lobby-ready*
+                 )
+         (format 0 "[mp-test] lobby character ~D start ~A~%" (-> *mp-config* character) *mp-lobby-start*)
+         (dotimes (row (+ 1 (mp-player-count)))
+           (let* ((slot (mp-lobby-slot row))
+                  (st (mp-slot-state slot))
+                  )
+             (when st
+               (string<-charp *mp-temp-string* (-> st name))
+               (format 0 "[mp-test] lobby row ~D slot ~D name ~A character ~D status ~D~%" row slot *mp-temp-string*
+                       (logand (-> st character) 15) (mp-lobby-status-id st slot)
+                       )
+               )
+             )
+           )
+         )
         ((string= cmd "leave")
          (mp-leave!)
          )
@@ -1532,6 +1575,14 @@
         ((string= cmd "wait-joined")
          ;; the script waits until this guest is in the host's world, next to it
          (set! (-> *mp-test-wait* kind) 'joined)
+         (pc-mp-test-pause #t)
+         )
+        ((string= cmd "wait-menu")
+         ;; the script waits until the menu shows page <name> (title, mp-host-game, mp-lobby-join...)
+         (mp-test-word)
+         (set! (-> *mp-test-wait* menu) (string->symbol (-> *mp-test* word)))
+         (set! (-> *mp-test-wait* since) 0)
+         (set! (-> *mp-test-wait* kind) 'menu)
          (pc-mp-test-pause #t)
          )
         ((string= cmd "wait-player")
@@ -2068,11 +2119,32 @@
 
 (defun mp-test-wait-over? ()
   "#t when the script's wait is over: wait-joined, the guest is in the host's world; wait-player,
-   that player is in game (shown) for 2 s."
+   that player is in game (shown) for 2 s; wait-menu, that menu page is shown for 1.5 s."
   (let ((w *mp-test-wait*))
     (case (-> w kind)
       (('joined)
        (= (-> *mp-join* stage) 4)
+       )
+      (('menu)
+       (cond
+         ((not (and *progress-process* (= (-> *progress-process* 0 current) (-> w menu))))
+          (set! (-> w since) 0)
+          ;; the title screen opens its menu on a press ("press start"): tap X every 2 s until then
+          (when (and (= (-> w menu) 'title) (not *progress-process*) (>= (- (mp-now) (-> w tapped)) (seconds 2)))
+            (set! (-> w tapped) (mp-now))
+            (pc-mp-test-pad (mp-test-button "x") 128 128 128 128)
+            (set! (-> *mp-test* pad-until) (+ (mp-now) (seconds 0.1)))
+            )
+          #f
+          )
+         ((zero? (-> w since))
+          (set! (-> w since) (mp-now))
+          #f
+          )
+         (else
+           (>= (- (mp-now) (-> w since)) (seconds 1.5))
+           )
+         )
        )
       (('player)
        (let ((st (mp-remote-state (-> w slot))))

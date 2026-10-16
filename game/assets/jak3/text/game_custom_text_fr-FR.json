@@ -305,5 +305,18 @@
   "1537": "Nom",
   "1538": "Ping",
   "1539": "Appuyez sur <PAD_TRIANGLE> pour sauter sur l'épaule de Jak",
-  "153a": "Appuyez sur <PAD_X> pour descendre"
+  "153a": "Appuyez sur <PAD_X> pour descendre",
+  "153b": "Héberger une partie",
+  "153c": "Rejoindre une partie",
+  "153d": "Salon",
+  "153e": "Se connecter",
+  "153f": "Prêt",
+  "1540": "Pas prêt",
+  "1541": "Hôte",
+  "1542": "En attente du lancement par l'hôte",
+  "1543": "En attente que tous les joueurs soient prêts",
+  "1544": "Coop : l'un joue Jak, l'autre Daxter (<PAD_L1> / <PAD_R1> pour changer)",
+  "1545": "<PAD_X> Lancer   <PAD_SQUARE> Mode de jeu   <PAD_L1> <PAD_R1> Personnage",
+  "1546": "<PAD_X> Prêt   <PAD_L1> <PAD_R1> Personnage",
+  "1547": "<PAD_CIRCLE> Options multijoueur   <PAD_TRIANGLE> Quitter"
 }
