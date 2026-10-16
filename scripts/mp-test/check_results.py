@@ -441,24 +441,16 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
             c.check(scenario, "joined from the title screen", bool(cont) and cont[0][1] == "#t", f"{cont[0] if cont else None}")
 
     elif scenario == "coop":
-        co = grab(client, r"coop (\S+) authority (\S+) pending")
-        held = grab(host, r"coop held (\d+) released (\d+)")
-        lead = grab(client, r"coop held \d+ released \d+ leashed (\d+) waits-for (-?\d+)")
+        co = grab(client, r"coop (\S+) authority \S+ character (\d+) perch (-?\d+) perched (\d+) state (\S+)")
+        c.check(scenario, "co-op: the guest, joining as Jak next to a Jak host, is offered Daxter",
+                bool(co) and co[0][0] == "#t" and co[0][1] == "1", f"{co[:1]}")
+        c.check(scenario, "Daxter jumps on the crouching Jak's shoulder and rides it",
+                any(x[2] == "0" and x[4] == "target-indax-grab" for x in co), f"{[(x[2], x[4]) for x in co]}")
         dist = [float(d) for (d,) in grab(client, r"coop distance to the host " + NUM)]
-        c.check(scenario, "co-op on the guest, never an authority", bool(co) and all(x == ("#t", "#f") for x in co), f"{co}")
-        c.check(scenario, "a guest that strays comes back next to the host", bool(lead) and int(lead[-1][0]) >= 1 and bool(dist) and min(dist) < 10.0,
-                f"leashed {lead[-1][0] if lead else None}, distances {dist}")
-        c.check(scenario, "a story step waits for the guest, then closes", bool(held) and held[-1] == ("1", "1"), f"held/released {held[-1] if held else None}")
-        c.check(scenario, "the guest is told where to come", any(w[1] == "0" for w in lead), f"{lead}")
-        h = counter(host, r"tasks closed (\d+) of \d+")
-        g = counter(client, r"tasks closed (\d+) of \d+")
-        c.check(scenario, "the step closed on both", bool(h) and bool(g) and h[-1][0] == g[-1][0] and h[-1][0] > h[0][0],
-                f"host {[int(x[0]) for x in h]}, guest {[int(x[0]) for x in g]}")
-        hw = counter(host, r"weather cloud " + NUM + " fog " + NUM)
-        gw = grab(client, r"weather cloud " + NUM + " fog " + NUM + r" special \S+ override (\S+) " + NUM + " " + NUM)
-        c.check(scenario, "the guest follows the host's weather",
-                bool(hw) and bool(gw) and gw[-1][2] == "#t" and abs(float(gw[-1][3]) - hw[-1][0]) < 0.1 and abs(float(gw[-1][4]) - hw[-1][1]) < 0.1,
-                f"host {hw[-1] if hw else None}, guest override {gw[-1][2:] if gw else None}")
+        c.check(scenario, "he stays on the shoulder while Jak walks", len(dist) >= 3 and all(d < 2.0 for d in dist[1:3]),
+                f"distances {dist}")
+        c.check(scenario, "X puts him down, Daxter again", bool(co) and co[-1][2] == "-1" and co[-1][4] == "target-indax-stance",
+                f"{co[-1:]}")
 
     elif scenario == "guard-hit":
         text = "\n".join(host)

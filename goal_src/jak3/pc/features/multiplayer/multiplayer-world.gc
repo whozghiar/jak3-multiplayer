@@ -246,10 +246,6 @@
                  ((< *mp-local-slot* 0)
                   #f
                   )
-                 ;; co-op: the host's NPCs everywhere (a guest stays near the host)
-                 ((mp-coop?)
-                  #f
-                  )
                  (else
                    (let ((me (mp-player-pos *mp-local-slot*))
                          (nearest (meters 1000000))

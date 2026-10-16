@@ -1596,18 +1596,16 @@
          (auto-save-command 'auto-save 0 0 *default-pool* #f)
          )
         ((string= cmd "log-coop")
-         (format 0 "[mp-test] coop ~A authority ~A pending ~D~%" (mp-coop?) *mp-authority* (-> *mp-coop* pending-count))
-         (format
-           0
-           "[mp-test] coop held ~D released ~D leashed ~D waits-for ~D~%"
-           (-> *mp-coop* held)
-           (-> *mp-coop* released)
-           (-> *mp-coop* leashed)
-           (-> *mp-coop* wait-from)
-           )
+         ;; log-coop: the mode, the authority, the character played, Daxter on a shoulder
+         (format 0 "[mp-test] coop ~A authority ~A character ~D perch ~D perched ~D state ~A~%" (mp-coop?) *mp-authority*
+                 (-> *mp-config* character) *mp-perch-slot* *mp-perch-count* (mp-target-state-name)
+                 )
          (let ((host (mp-remote-state 0)))
            (if (and host *target*)
-               (format 0 "[mp-test] coop distance to the host ~m~%" (vector-vector-distance (-> *target* control trans) (-> host trans)))
+               (format 0 "[mp-test] coop distance to the host ~m host anim ~D flags #x~X candidate ~D~%"
+                       (vector-vector-distance (-> *target* control trans) (-> host trans)) (-> host anim-index) (-> host flags)
+                       *mp-perch-candidate*
+                       )
                )
            )
          )

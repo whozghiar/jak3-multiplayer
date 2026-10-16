@@ -1,20 +1,19 @@
-# Co-op, guest side: joins (the host's world), strays 200 m (the leash brings it back next to the
-# host), then stands 60 m away while the host reaches a story step (told to come), then comes next
-# to the host (the step closes on both). It never simulates NPCs of its own.
+# Co-op, guest side: joins as Jak and is offered Daxter (the host plays Jak); stands next to the
+# crouching host and jumps on its shoulder (triangle), rides it while the host walks, then jumps off
+# (X).
 1 enable
 1 name Guest
 1 color 2
+1 character 0
 45 join 127.0.0.1:7777
 45.1 wait-joined
+58 log-coop
+60 goto-player 0 1 0
+66 press triangle 100
+67 log-coop
+67.5 screenshot perched
 70 log-coop
-72 goto-player 0 200 0
-73 log-coop
-79 log-coop
-82 goto-player 0 60 0
-89 log-coop
-89.5 screenshot told
-91 goto-player 0 2 0
-95 log-coop
-95 log-tasks
-96 log-weather
-97 log
+70.5 screenshot carried
+73 press x 100
+75 log-coop
+76 log

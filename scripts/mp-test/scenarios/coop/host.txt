@@ -1,17 +1,15 @@
-# Co-op, host side: hosts in co-op mode. Once the guest stands 60 m away, a story step closes here:
-# it waits until the guest comes next to the host, then closes on both. Weather is the host's.
+# Co-op, host side: hosts in co-op playing Jak; crouches (L1) next to the guest, who was offered
+# Daxter and jumps on its shoulder; walks a few meters with Daxter there.
 1 enable
 1 name Host
 1 color 1
+1 character 0
 1 mode 1
 38 host 0.0.0.0:7777
 44.9 wait-player 1
+62 press l1 4000
+66 screenshot perched
+68 stick 128 0 1500
 70 log-coop
-84 log-tasks
-85 close-task
-86 log-coop
-86 log-tasks
-95 log-coop
-95 log-tasks
-96 log-weather
-97 log
+70.5 screenshot carried
+80 log

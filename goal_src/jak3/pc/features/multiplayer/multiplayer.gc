@@ -76,8 +76,7 @@
                   ;; max-lod, longest edge, bounds; 1 art group name, mgeo, shadow and joints,
                   ;; lod distances 0-3; 2 lod distances 4-5, global effects
   (world-request 17) ;; to the host: a guest that joined asks for the host's world (blob reply)
-  (coop-wait 18)  ;; co-op: the sender waits for the others at story step iarg 0 (-1: no more),
-                  ;; fvec = where
+  (coop-wait 18)  ;; unused (co-op held story steps until 2026-10-16)
   (weapon 19)     ;; a weapon effect that is not a shot: iarg 0 = gun (27 wave concussor, 36 mass
                   ;; inverter, 33 arc wielder), fvec = where, iarg 1-2 = its parameters (float
                   ;; bits), text = the arc's points (33)
@@ -223,24 +222,13 @@
 (define *mp-join* (new 'global 'mp-join-state))
 (set! (-> *mp-join* foreign?) #f)
 
-(deftype mp-coop-state (structure)
-  ((far-since  time-frame)  ;; guest: when it went beyond the leash
-   (pending    int32 8)     ;; task nodes held until every player is there
-   (pending-count int32)
-   (spot       vector :inline) ;; where the held node closed
-   (wait-from  int32)       ;; another player waits for us at wait-spot (-1 none)
-   (wait-spot  vector :inline)
-   (wait-time  time-frame)
-   (held       int32)       ;; counters for the test log
-   (released   int32)
-   (leashed    int32)
-   (closing?   symbol)      ;; closing a held node: let it through
-   )
-  )
-
-(define *mp-coop* (new 'global 'mp-coop-state))
-(set! (-> *mp-coop* wait-from) -1)
-(set! (-> *mp-coop* closing?) #f)
+;; Daxter on Jak's shoulder (co-op, below): the Jak player Daxter rides, -1; the crouching Jak next
+;; to us Daxter can jump on, -1; times it happened (test log).
+(define *mp-perch-slot* -1)
+(define *mp-perch-candidate* -1)
+(define *mp-perch-count* 0)
+;; Co-op: the character the other players' was offered against already (once per session).
+(define *mp-coop-offered?* #f)
 
 ;; Values wider than 32 bits. A global symbol only holds 32 bits (goalc writes symbol values with a
 ;; 32-bit store): a handle kept in one loses its pid (upper half) and never resolves again.
@@ -1654,22 +1642,17 @@
   (the-as (function game-task-node-info symbol int) (method-of-type game-task-node-info open!))
   )
 
-(define-extern mp-coop-hold? (function game-task-node-info symbol)) ;; "Co-op mode", below
-
 (defmethod open! ((this game-task-node-info) (arg0 symbol))
   "Stock behavior (closes the node and the parents it needs); the other players close it too
-   (multiplayer mod, no-op offline). In co-op it waits until every player is there."
-  (if (and (not (logtest? (-> this flags) (game-task-node-flag closed))) (mp-coop-hold? this))
-      0
-      (let* ((was-closed? (logtest? (-> this flags) (game-task-node-flag closed)))
-             (result (*mp-stock-task-node-open!* this arg0))
-             )
-        (if (and (not was-closed?) (logtest? (-> this flags) (game-task-node-flag closed)))
-            (mp-on-task-closed this)
-            )
-        result
+   (multiplayer mod, no-op offline)."
+  (let* ((was-closed? (logtest? (-> this flags) (game-task-node-flag closed)))
+         (result (*mp-stock-task-node-open!* this arg0))
+         )
+    (if (and (not was-closed?) (logtest? (-> this flags) (game-task-node-flag closed)))
+        (mp-on-task-closed this)
         )
-      )
+    result
+    )
   )
 
 ;; ------------------------------------------------------------------------------------------------
@@ -1839,166 +1822,44 @@
 ;; Co-op mode
 ;; ------------------------------------------------------------------------------------------------
 
-;; The host picks the game mode (Options > Multiplayer > Game mode). In free roam every player goes
-;; where it wants in the shared world. In co-op the players share one place: a guest never
-;; simulates NPCs of its own (the host's are shown everywhere it goes), a guest that strays more than
-;; MP_COOP_LEASH from the host comes back next to it, everyone follows the host's weather, and a
-;; story step (a task node) only closes once every player stands where it closed: the player there
-;; waits for the others, who are told where to go.
-
-(defconstant MP_COOP_LEASH (meters 150))
-(defconstant MP_COOP_TOGETHER (meters 25))
-
+;; The host picks the game mode. Both run the same rules (NPC authority by region, shared story,
+;; the host's time of day and weather when it shares them). In free roam every player plays the
+;; character it picks. Co-op is the Jak and Daxter duo of himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, ISC): a guest is offered the other
+;; character than the host's, and a Daxter next to a crouching Jak jumps on his shoulder with
+;; triangle and off with X (that mod's bindings). The perch works in free roam too.
 
 (defun mp-coop? ()
   "#t in a co-op session."
   (and (mp-online?) (logtest? *mp-world* (mp-world-flag coop)))
   )
 
-(defun mp-everyone-near? ((pos vector) (radius float))
-  "#t when every other player stands within `radius` of `pos` (or there is no other player)."
-  (dotimes (i MP_MAX_PLAYERS)
-    (let ((st (mp-remote-state i)))
-      (if (and st (< radius (vector-vector-distance (-> st trans) pos)))
-          (return #f)
-          )
-      )
-    )
-  #t
+(defun mp-state-daxter? ((st mp-player-state))
+  "#t when the player of `st` plays Daxter (its character byte, low half)."
+  (= (logand (-> st character) 15) 1)
   )
 
-(defun mp-coop-hold? ((node game-task-node-info))
-  "Co-op: hold the closure of `node` (#t) when it closes on our player's doing while another player
-   is away from here; it closes once everyone came (mp-update-coop). Closures from another player
-   (shared progress), from loading a world, from a cutscene, or while alone pass."
-  (when (and (mp-coop?)
-             (not *mp-progress-replaying*)
-             (not (-> *mp-coop* closing?))
-             (> (mp-player-count) 0)
-             *target*
-             (mp-in-game?)
-             (not (and *scene-player* (-> *scene-player* 0)))
-             (not (mp-everyone-near? (-> *target* control trans) MP_COOP_TOGETHER))
-             )
-    (let ((cs *mp-coop*)
-          (index (get-idx-in-task-list node))
-          (known? #f)
-          )
-      (dotimes (i (-> cs pending-count))
-        (if (= (-> cs pending i) index)
-            (set! known? #t)
-            )
-        )
-      (when (and (not known?) (< (-> cs pending-count) 8))
-        (set! (-> cs pending (-> cs pending-count)) index)
-        (+! (-> cs pending-count) 1)
-        (vector-copy! (-> cs spot) (-> *target* control trans))
-        (+! (-> cs held) 1)
-        (format 0 "[multiplayer] co-op: task node ~D waits for the other players~%" index)
-        ;; the others are told where to come
-        (let ((ev (new 'stack 'mp-event)))
-          (set! (-> ev kind) (mp-event-kind coop-wait))
-          (set! (-> ev to) -1)
-          (set! (-> ev iarg 0) index)
-          (vector-copy! (-> ev fvec) (-> *target* control trans))
-          (pc-mp-send-event ev)
-          )
-        )
-      #t
-      )
-    )
-  )
-
-(defun mp-apply-coop-wait ((ev mp-event))
-  "Another player waits for us at a story step (iarg 0 = node, -1 none any more)."
-  (let ((cs *mp-coop*))
-    (cond
-      ((>= (-> ev iarg 0) 0)
-       (set! (-> cs wait-from) (-> ev from))
-       (vector-copy! (-> cs wait-spot) (-> ev fvec))
-       (set-time! (-> cs wait-time))
+(defun mp-jak-crouching? ((st mp-player-state))
+  "#t when the player of `st` plays Jak on foot, crouched: its animation is jakb-stance-to-duck,
+   jakb-duck-stance or jakb-duck-walk (32 to 34, engine/data/art-elts.gc)."
+  (and (not (logtest? (-> st flags) (mp-flag indax driving riding hidden dead)))
+       (>= (-> st anim-index) 32)
+       (<= (-> st anim-index) 34)
        )
-      ((= (-> cs wait-from) (-> ev from))
-       (set! (-> cs wait-from) -1)
-       )
-      )
-    )
-  (none)
   )
 
-(defbehavior mp-update-coop mp-manager ()
-  "Co-op, every frame: the held story steps close once every player is there; a guest beyond the
-   leash comes back next to the host; the host's weather."
-  (let ((cs *mp-coop*))
-    (cond
-      ((not (mp-coop?))
-       (set! (-> cs pending-count) 0)
-       (set! (-> cs wait-from) -1)
-       )
-      (else
-        ;; held steps: everyone is there, they close (and with shared progress, everywhere)
-        (when (and (> (-> cs pending-count) 0) (mp-everyone-near? (-> cs spot) MP_COOP_TOGETHER))
-          (set! (-> cs closing?) #t)
-          (dotimes (i (-> cs pending-count))
-            (let ((node (-> *game-info* sub-task-list (-> cs pending i))))
-              (if (not (logtest? (-> node flags) (game-task-node-flag closed)))
-                  (open! node 'event)
-                  )
-              )
-            )
-          (set! (-> cs closing?) #f)
-          (+! (-> cs released) (-> cs pending-count))
-          (format 0 "[multiplayer] co-op: everyone is here, ~D task node(s) close~%" (-> cs pending-count))
-          (set! (-> cs pending-count) 0)
-          (mp-send-event (mp-event-kind coop-wait) -1 -1 0.0)
-          )
-        ;; the leash
-        (when (and (= *mp-mode* (mp-mode client)) (= (-> *mp-join* stage) 4) (mp-in-game?))
-          (let ((host (mp-remote-state 0)))
-            (cond
-              ((or (not host) (< (vector-vector-distance (-> *target* control trans) (-> host trans)) MP_COOP_LEASH))
-               (set! (-> cs far-since) 0)
-               )
-              ((zero? (-> cs far-since))
-               (set-time! (-> cs far-since))
-               )
-              ((time-elapsed? (-> cs far-since) (seconds 3))
-               (set! (-> cs far-since) 0)
-               (+! (-> cs leashed) 1)
-               (set! *mp-request-teleport* 0)
-               (mp-show-message "Co-op: back next to the host")
-               )
-              )
-            )
-          )
-        )
-      )
-    )
-  (none)
-  )
-
-(defun mp-draw-coop-wait ()
-  "Co-op: the step another player waits for us at, or ours waiting for the others."
+(defun mp-draw-perch-prompt ()
+  "Daxter's prompts: jump on the crouching Jak next to him, or off the shoulder he rides."
   (cond
-    ((> (-> *mp-coop* pending-count) 0)
-     (mp-draw-prompt (text-id progress-mp-coop-wait))
+    ((>= *mp-perch-slot* 0)
+     (mp-draw-prompt (text-id progress-mp-prompt-perch-off))
      )
-    ((and (>= (-> *mp-coop* wait-from) 0) *target*)
-     (string<-charp *mp-temp-string* (-> *mp-players* state (-> *mp-coop* wait-from) name))
-     (format
-       (clear *mp-status*)
-       "~S waits for you here (~,,0m m away)"
-       *mp-temp-string*
-       (vector-vector-distance (-> *target* control trans) (-> *mp-coop* wait-spot))
-       )
-     (with-dma-buffer-add-bucket ((buf (-> (current-frame) global-buf)) (bucket-id debug-no-zbuf1))
-       (mp-draw-text buf *mp-status* 256 300 0.5)
-       )
+    ((>= *mp-perch-candidate* 0)
+     (mp-draw-prompt (text-id progress-mp-prompt-perch))
      )
     )
   (none)
   )
-
 
 (define-extern mp-replay-effect (function mp-event none))
 (define-extern mp-apply-elevator (function mp-event none))
@@ -2360,10 +2221,10 @@
   (when (and (= *mp-mode* (mp-mode client)) (zero? (-> ev from)))
     (set! *mp-world* (the-as mp-world-flag (-> ev iarg 0)))
     (mp-apply-clocks ev)
-    ;; the host's weather, in co-op or when following its time of day: ours stops changing at random
+    ;; the host's weather when following its time of day: ours stops changing at random
     ;; (mood-control override) and takes the host's clouds, fog and special weather
     (cond
-      ((logtest? *mp-world* (mp-world-flag coop sync-time))
+      ((logtest? *mp-world* (mp-world-flag sync-time))
        (set! (-> *mood-control* overide-weather-flag) #t)
        (set! (-> *mood-control* overide cloud) (-> ev fvec y))
        (set! (-> *mood-control* overide fog) (-> ev fvec z))
@@ -2412,9 +2273,6 @@
          (if (and (= *mp-mode* (mp-mode host)) (mp-in-game?))
              (mp-send-world-save (-> ev from))
              )
-         )
-        (((mp-event-kind coop-wait))
-         (mp-apply-coop-wait ev)
          )
         (((mp-event-kind elevator))
          (mp-apply-elevator ev)
@@ -2703,6 +2561,7 @@
   "Next to a remote player's vehicle, on foot: press triangle to steal it, L1 + triangle to ride along."
   (set! *mp-prompt-slot* -1)
   (when (and (< *mp-ride-slot* 0)
+             (< *mp-perch-slot* 0)
              (< (-> self ride-want) 0)
              (< (-> self steal-want) 0)
              (not (focus-test? *target* pilot grabbed dead))
@@ -2853,6 +2712,106 @@
   (none)
   )
 
+;; Co-op roles and Daxter on Jak's shoulder (see "Co-op mode")
+
+(defbehavior mp-update-coop-roles mp-manager ()
+  "Co-op, once per session: a guest playing the same character as the host is offered the other one
+   (the duo); it can change it back (Options > Multiplayer)."
+  (cond
+    ((not (mp-coop?))
+     (set! *mp-coop-offered?* #f)
+     )
+    ((and (not *mp-coop-offered?*) (= *mp-mode* (mp-mode client)) (mp-in-game?))
+     (let ((host (mp-remote-state 0)))
+       (when host
+         (set! *mp-coop-offered?* #t)
+         (when (= (mp-state-daxter? host) (= (-> *mp-config* character) 1))
+           (set! (-> *mp-config* character) (if (mp-state-daxter? host) 0 1))
+           (mp-config-save!)
+           (mp-show-message (if (= (-> *mp-config* character) 1)
+                                "Co-op: you play Daxter, the host plays Jak"
+                                "Co-op: you play Jak, the host plays Daxter"
+                                )
+                            )
+           )
+         )
+       )
+     )
+    )
+  (none)
+  )
+
+(defbehavior mp-stop-perch mp-manager ()
+  "Daxter jumps off Jak's shoulder: out of the held state, drawn again, falling next to Jak."
+  (if (= (mp-target-state-name) 'target-indax-grab)
+      (send-event *target* 'end-mode 'grab)
+      )
+  (send-event *target* 'draw #t)
+  (set! *mp-perch-slot* -1)
+  (none)
+  )
+
+(defbehavior mp-update-perch mp-manager ()
+  "Daxter on Jak's shoulder: held in his mode (target-indax-grab) and hidden, he follows the shoulder
+   of Jak's puppet, where Jak's own Daxter is drawn on every machine (ours hidden, theirs showing
+   him: no double). X, Jak gone, dead or hidden, or the held state ended put him down."
+  (cond
+    ((>= *mp-perch-slot* 0)
+     (let ((st (mp-remote-state *mp-perch-slot*))
+           (puppet (the-as mp-puppet (handle->process (-> self puppets *mp-perch-slot*))))
+           )
+       (cond
+         ((or (not st)
+              (not puppet)
+              (logtest? (-> st flags) (mp-flag dead hidden))
+              (cpad-pressed? 0 x)
+              (!= (mp-target-state-name) 'target-indax-grab)
+              )
+          (mp-stop-perch)
+          )
+         (else
+           (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> puppet root trans))))
+             (+! (-> pos y) (meters 1.2))
+             (move-to-point! (-> *target* control) pos)
+             )
+           (quaternion-copy! (-> *target* control quat) (-> puppet root quat))
+           )
+         )
+       )
+     (set! *mp-perch-candidate* -1)
+     )
+    (else
+      ;; a crouching Jak within 2.5 m of Daxter standing in his mode
+      (set! *mp-perch-candidate* -1)
+      (when (and (focus-test? *target* indax) (= (mp-target-state-name) 'target-indax-stance) (< *mp-ride-slot* 0))
+        (let ((best-dist (meters 2.5)))
+          (dotimes (i MP_MAX_PLAYERS)
+            (let ((st (mp-remote-state i)))
+              (when (and st (mp-jak-crouching? st))
+                (let ((d (vector-vector-distance (-> *target* control trans) (-> st trans))))
+                  (when (< d best-dist)
+                    (set! best-dist d)
+                    (set! *mp-perch-candidate* i)
+                    )
+                  )
+                )
+              )
+            )
+          )
+        (when (and (>= *mp-perch-candidate* 0) (cpad-pressed? 0 triangle))
+          (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons triangle))
+          (set! *mp-perch-slot* *mp-perch-candidate*)
+          (set! *mp-perch-candidate* -1)
+          (+! *mp-perch-count* 1)
+          (send-event *target* 'change-mode 'grab #t)
+          (send-event *target* 'draw #f)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-manager-update mp-manager ()
   "Everything the mod does in game, once per (unpaused) frame."
   (when (mp-online?)
@@ -2862,7 +2821,6 @@
       (mp-send-world)
       )
     (mp-update-join)
-    (mp-update-coop)
     )
   (mp-manager-update-puppets)
   (cond
@@ -2871,6 +2829,8 @@
       (mp-update-invulnerability)
       (mp-update-ride)
       (mp-update-steal)
+      (mp-update-perch)
+      (mp-update-coop-roles)
       (mp-update-vehicle-interaction)
       (mp-update-pending-teleport)
       )
@@ -3130,7 +3090,7 @@
        (mp-draw-prompt (text-id progress-mp-joining))
        )
       (else
-        (mp-draw-coop-wait)
+        (mp-draw-perch-prompt)
         )
       )
     )

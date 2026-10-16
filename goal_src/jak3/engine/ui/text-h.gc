@@ -1655,6 +1655,8 @@
   (progress-mp-players #x1536)
   (progress-mp-col-name #x1537)
   (progress-mp-col-ping #x1538)
+  (progress-mp-prompt-perch #x1539)
+  (progress-mp-prompt-perch-off #x153a)
   )
 ;; ---text-id
 
