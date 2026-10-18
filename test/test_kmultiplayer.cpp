@@ -161,3 +161,58 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   EXPECT_EQ(client.message(), "You are banned from this server");
   host.leave("");
 }
+
+// UDP: with a fifth of the datagrams lost, the join, a world save (blob) and every event still
+// arrive, each event once and in order.
+TEST(Multiplayer, ReliableChannelUnderLoss) {
+  using namespace std::chrono;
+  auto start = steady_clock::now();
+  auto now = [&] { return duration<double, std::milli>(steady_clock::now() - start).count(); };
+  mp::set_test_network(0, 0, 20);
+
+  mp::Session host, client;
+  ASSERT_TRUE(host.host("0.0.0.0:47778", 4));
+  ASSERT_TRUE(client.join("127.0.0.1:47778", now()));
+  mp::PlayerState hs{}, cs{};
+  auto pump = [&](int frames) {
+    for (int i = 0; i < frames; i++) {
+      host.update(hs, now());
+      client.update(cs, now());
+      std::this_thread::sleep_for(milliseconds(5));
+    }
+  };
+  pump(200);
+  ASSERT_EQ(client.mode(), mp::Mode::Client);
+
+  std::vector<u8> blob(200000);
+  for (size_t i = 0; i < blob.size(); i++) {
+    blob[i] = (u8)(i * 7 + i / 251);
+  }
+  host.send_blob(1, blob.data(), blob.size());
+  for (int i = 0; i < 200; i++) {
+    mp::Event ev{};
+    ev.kind = 1000 + i;
+    ev.to = -1;
+    host.send_event(ev);
+  }
+  for (int i = 0; i < 400 && client.blob_ready() == 0; i++) {
+    pump(1);
+  }
+  pump(100);
+  ASSERT_EQ(client.blob_ready(), blob.size());
+  std::vector<u8> got(blob.size());
+  ASSERT_EQ(client.take_blob(got.data(), got.size()), blob.size());
+  EXPECT_TRUE(got == blob);
+  mp::Event ev;
+  for (int i = 0; i < 200; i++) {
+    ASSERT_TRUE(client.pop_event(&ev)) << i;
+    EXPECT_EQ(ev.kind, 1000 + i);
+  }
+  EXPECT_FALSE(client.pop_event(&ev));
+
+  mp::set_test_network(0, 0, 0);
+  host.leave("");
+  pump(5);
+  EXPECT_EQ(client.mode(), mp::Mode::Offline);
+  EXPECT_EQ(client.message(), "The host stopped the server");
+}

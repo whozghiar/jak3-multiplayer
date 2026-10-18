@@ -87,6 +87,8 @@ def main() -> int:
     parser.add_argument("--extra-seconds", type=float, default=5.0)
     parser.add_argument("--latency", default="",
                         help="one-way delay of what each instance receives, '<ms>[:<jitter ms>]' (MP_TEST_LATENCY)")
+    parser.add_argument("--loss", default="",
+                        help="percentage of the datagrams each instance receives that are dropped (MP_TEST_LOSS)")
     args = parser.parse_args()
 
     scenario = SCENARIOS / args.scenario
@@ -110,6 +112,8 @@ def main() -> int:
         env = dict(os.environ, MP_TEST_SCRIPT=str(script))
         if args.latency:
             env["MP_TEST_LATENCY"] = args.latency
+        if args.loss:
+            env["MP_TEST_LOSS"] = args.loss
         # no real controller: the scripts drive pad 0 themselves (libpad), and a controller gone to
         # sleep once hung every instance in SDL's controller detection
         env.update(NO_CONTROLLER)

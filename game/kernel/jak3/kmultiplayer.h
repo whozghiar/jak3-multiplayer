@@ -4,9 +4,10 @@
  * Jak 3 multiplayer mod: the network session and the kernel functions that expose it to GOAL
  * (goal_src/jak3/pc/features/multiplayer/).
  *
- * One player hosts (slot 0) and the others connect to them over TCP (star topology). Every
- * player sends its own state ~30 times a second; the host relays each state and each event to
- * the other players. Remote states are buffered and rendered 100 ms in the past, interpolated
+ * One player hosts (slot 0) and the others connect to them over UDP (star topology): states,
+ * objects and poses go unreliably (a newer one follows within a frame), everything else on a
+ * reliable ordered channel. Every player sends its own state every frame; the host relays each
+ * state and each event to the other players. Remote states are buffered and rendered 100 ms in the past, interpolated
  * between the two snapshots around that time, so remote players move smoothly despite jitter.
  *
  * The GOAL side owns all gameplay meaning: C++ only moves bytes, keeps the player list and
@@ -26,7 +27,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 6;
+constexpr u32 kProtocolVersion = 7;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -291,12 +292,25 @@ class Session {
   double offset_of(int source) const;
   void drop(Peer& p, const std::string& reason);
   void refuse(Peer& p, const char* why);
+  void receive_all(double now_ms);
+  void dispatch_datagram(u32 ip, u16 port, const u8* data, size_t len);
+  Peer* peer_for(u32 ip, u16 port, u32 conn, const u8* data, size_t len);
+  void on_datagram(Peer& p, const u8* data, size_t len);
 
   Mode m_mode = Mode::Offline;
   int m_local_slot = -1;
   int m_max_players = kMaxPlayers;
   std::string m_message;
-  u64 m_listen = ~0ull;        // listening socket (host)
+  u64 m_sock = ~0ull;          // the session's UDP socket
+  // Datagrams received under a test latency, with the time they may be read (address in network
+  // byte order).
+  struct HeldDatagram {
+    double at;
+    u32 ip;
+    u16 port;
+    std::vector<u8> bytes;
+  };
+  std::deque<HeldDatagram> m_held;
   std::vector<Peer*> m_peers;  // host: clients, client: the server
   std::array<Remote, kMaxPlayers> m_remotes;
   std::unordered_map<u32, ActorTrack> m_actors;
@@ -329,6 +343,10 @@ struct TestPad {
   bool active = false;
 };
 extern TestPad g_test_pad;
+
+// Test only: what every session receives is held `latency_ms` (plus up to `jitter_ms`) and
+// `loss_percent` of the datagrams are dropped (MP_TEST_LATENCY and MP_TEST_LOSS set them at boot).
+void set_test_network(double latency_ms, double jitter_ms, double loss_percent);
 
 // Splits "ip:port". Returns false on a malformed address.
 bool parse_address(const std::string& address, std::string* ip, int* port);

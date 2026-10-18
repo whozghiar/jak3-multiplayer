@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <map>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -61,9 +62,9 @@ static void set_nonblocking(sock_t s) {
   u_long on = 1;
   ioctlsocket(s, FIONBIO, &on);
 }
-constexpr int kSendFlags = 0;
-static void shutdown_send(sock_t s) {
-  shutdown(s, SD_SEND);
+// A datagram sent to a closed port comes back as this error on the next receive.
+static bool conn_reset(int e) {
+  return e == WSAECONNRESET;
 }
 static void net_init() {
   static bool done = false;
@@ -87,28 +88,42 @@ static void close_sock(sock_t s) {
 static void set_nonblocking(sock_t s) {
   fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
 }
-#ifdef MSG_NOSIGNAL
-constexpr int kSendFlags = MSG_NOSIGNAL;
-#else
-constexpr int kSendFlags = 0;  // macOS: SO_NOSIGPIPE is set on each socket instead
-#endif
-static void shutdown_send(sock_t s) {
-  shutdown(s, SHUT_WR);
+static bool conn_reset(int e) {
+  return e == ECONNRESET || e == ECONNREFUSED;
 }
 static void net_init() {}
 #endif
 
-static void set_nodelay(sock_t s) {
-  int on = 1;
-  setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on));
-#ifdef SO_NOSIGPIPE
-  setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (const char*)&on, sizeof(on));
-#endif
+// Large socket buffers: a world save (a burst of fragments) and the poses of a crowd fit in them.
+static void set_buffers(sock_t s) {
+  int size = 4 * 1024 * 1024;
+  setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char*)&size, sizeof(size));
+  setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char*)&size, sizeof(size));
 }
 
 // ---------------------------------------------------------------------------------------------
-// Wire format: every frame is [u16 length][u8 type][payload], length = 1 + payload size.
+// Wire format (UDP). Every datagram starts with [u8 'J'][u8 kind][u32 connection id], the id a
+// client draws when it joins: a datagram of an older connection from the same address is told
+// apart. Kinds:
+//   kUnreliable [u16 message id][u8 fragment][u8 fragments][bytes]: sent once; of the messages
+//               of one peer only a newer one than the last delivered is delivered.
+//   kReliable   [u32 seq][u8 fragment][u8 fragments][bytes]: sent again until acknowledged,
+//               delivered once and in order. Each fragment has its own seq.
+//   kAck        [u32 next seq expected][u32 bits: seq next + 1 + i received]
+//   kBye        [reason text]: the sender closes the connection.
+// A message is [u8 type][payload] (Msg below), at most kMaxFrame bytes, cut into fragments of at
+// most kFragment bytes. States, objects and poses are unreliable (a newer one follows within a
+// frame); everything that happens once (join, events, the world save) is reliable.
 // ---------------------------------------------------------------------------------------------
+
+constexpr u8 kMagic = 'J';
+enum Datagram : u8 { kUnreliable = 1, kReliable = 2, kAck = 3, kBye = 4 };
+constexpr size_t kHeader = 6;
+constexpr size_t kFragment = 1180;       // message bytes per datagram, under a 1280-byte MTU
+constexpr size_t kMaxDatagram = kHeader + 6 + kFragment;
+constexpr u32 kMaxFragments = 16;        // kMaxFrame / kFragment, rounded up
+constexpr size_t kReliableWindow = 256;  // reliable fragments in flight per peer
+constexpr size_t kMaxWaiting = 8192;     // reliable fragments queued: a peer this far behind is dropped
 
 enum Msg : u8 {
   MSG_HELLO = 1,    // client -> host: u32 protocol version
@@ -132,105 +147,209 @@ constexpr double kPingIntervalMs = 1000.0;
 constexpr size_t kBlobChunk = 15000;           // bytes of a blob per frame
 constexpr size_t kMaxBlob = 4 * 1024 * 1024;   // larger blobs are refused
 
-constexpr size_t kMaxFrame = 16384;            // larger frames are a protocol violation
-constexpr size_t kMaxOutBuffer = 1024 * 1024;  // a peer this far behind is dropped
+constexpr size_t kMaxFrame = 16384;            // larger messages are a protocol violation
 constexpr double kTimeoutMs = 15000.0;         // silence before a peer is considered gone
 constexpr double kConnectTimeoutMs = 8000.0;
 constexpr size_t kMaxEvents = 256;
+constexpr size_t kMaxPeers = 16;               // host: connections kept, joining ones included
 
-// Test only: MP_TEST_LATENCY="<ms>[:<jitter ms>]" holds what arrives that long (plus up to the
-// jitter) before it is read, in order, as a real network delivers it. Off when unset.
-static void test_latency(double* ms, double* jitter) {
-  static double s_ms = -1, s_jitter = 0;
-  if (s_ms < 0) {
-    s_ms = 0;
-    if (const char* v = std::getenv("MP_TEST_LATENCY")) {
-      s_ms = std::atof(v);
-      if (const char* c = std::strchr(v, ':')) {
-        s_jitter = std::atof(c + 1);
-      }
-      lg::info("[multiplayer] test latency {} ms, jitter {} ms", s_ms, s_jitter);
-    }
-  }
-  *ms = s_ms;
-  *jitter = s_jitter;
+static bool is_reliable(u8 type) {
+  return type != MSG_STATE && type != MSG_ACTORS && type != MSG_POSES && type != MSG_PING &&
+         type != MSG_PONG;
 }
 
+static u32 get_u32(const u8* p) {
+  u32 v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+static u16 get_u16(const u8* p) {
+  u16 v;
+  memcpy(&v, p, 2);
+  return v;
+}
+
+// Test only: MP_TEST_LATENCY="<ms>[:<jitter ms>]" holds what arrives that long (plus up to the
+// jitter) before it is read, in order. MP_TEST_LOSS="<percent>" drops that share of the datagrams
+// received. Both stand in for a network between two machines; off when unset. set_test_network
+// overrides them (unit tests).
+struct TestNetwork {
+  bool init = false;
+  double latency = 0, jitter = 0, loss = 0;
+};
+static TestNetwork& test_network() {
+  static TestNetwork t;
+  if (!t.init) {
+    t.init = true;
+    if (const char* v = std::getenv("MP_TEST_LATENCY")) {
+      t.latency = std::atof(v);
+      if (const char* c = std::strchr(v, ':')) {
+        t.jitter = std::atof(c + 1);
+      }
+      lg::info("[multiplayer] test latency {} ms, jitter {} ms", t.latency, t.jitter);
+    }
+    if (const char* v = std::getenv("MP_TEST_LOSS")) {
+      t.loss = std::atof(v);
+      lg::info("[multiplayer] test loss {} %", t.loss);
+    }
+  }
+  return t;
+}
+
+void set_test_network(double latency_ms, double jitter_ms, double loss_percent) {
+  auto& t = test_network();
+  t.latency = latency_ms;
+  t.jitter = jitter_ms;
+  t.loss = loss_percent;
+}
+
+// One remote end of the session: the host's view of a guest, or a guest's view of the host.
 struct Session::Peer {
-  sock_t fd = kNoSock;
+  sockaddr_in addr{};
   std::string ip;
-  std::vector<u8> in, out;
+  u32 conn = 0;           // connection id drawn by the client (datagram header)
   int slot = -1;          // host side: -1 until the HELLO is accepted
-  bool connected = true;  // client side: false until the non-blocking connect completes
   double last_recv = 0;
   bool dead = false;
   std::string dead_reason;
-  // Refused or kicked: kept open a moment, its input drained, so the reason is not lost to a reset.
+  // Refused or kicked: kept a moment, its reason sent again until acknowledged.
   bool closing = false;
   double close_at = 0;
   double rtt_ms = -1;     // round trip measured by pings, smoothed; -1 until the first answer
   double next_ping = 0;
 
+  // Sending: unreliable datagrams of this frame; reliable fragments queued, then in flight until
+  // acknowledged (sent again after a timeout).
+  std::vector<std::vector<u8>> unreliable_out;
+  u16 next_msg = 0;
+  u32 next_seq = 0;
+  std::deque<std::pair<u32, std::vector<u8>>> waiting;
+  struct InFlight {
+    std::vector<u8> dgram;
+    double sent_at;
+  };
+  std::map<u32, InFlight> in_flight;
+
+  // Receiving: reliable fragments past the next expected one, the reliable message being put
+  // together, the unreliable messages being put together, the newest unreliable one delivered.
+  u32 expect = 0;
+  std::map<u32, std::vector<u8>> early;
+  std::vector<u8> assembly;
+  bool ack_due = false;
+  struct Partial {
+    u8 count = 0;
+    u32 got = 0;
+    std::vector<std::vector<u8>> parts;
+  };
+  std::map<u16, Partial> partial;
+  u16 newest_msg = 0;
+  bool any_msg = false;
+
+  void header(std::vector<u8>& d, u8 kind) const {
+    d.push_back(kMagic);
+    d.push_back(kind);
+    d.insert(d.end(), (const u8*)&conn, (const u8*)&conn + 4);
+  }
+
+  // Queue a message [type][a][b], cut into fragments, on the channel of its type.
   void queue(u8 type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0) {
-    size_t len = 1 + na + nb;
-    out.push_back(len & 0xff);
-    out.push_back((len >> 8) & 0xff);
-    out.push_back(type);
-    out.insert(out.end(), (const u8*)a, (const u8*)a + na);
+    std::vector<u8> msg;
+    msg.reserve(1 + na + nb);
+    msg.push_back(type);
+    msg.insert(msg.end(), (const u8*)a, (const u8*)a + na);
     if (b) {
-      out.insert(out.end(), (const u8*)b, (const u8*)b + nb);
+      msg.insert(msg.end(), (const u8*)b, (const u8*)b + nb);
+    }
+    size_t count = (msg.size() + kFragment - 1) / kFragment;
+    if (count > kMaxFragments) {
+      return;  // larger than kMaxFrame: the senders never build one
+    }
+    bool reliable = is_reliable(type);
+    u16 id = next_msg++;
+    for (size_t i = 0; i < count; i++) {
+      std::vector<u8> d;
+      d.reserve(kMaxDatagram);
+      header(d, reliable ? kReliable : kUnreliable);
+      if (reliable) {
+        u32 seq = next_seq + (u32)i;
+        d.insert(d.end(), (const u8*)&seq, (const u8*)&seq + 4);
+      } else {
+        d.insert(d.end(), (const u8*)&id, (const u8*)&id + 2);
+      }
+      d.push_back((u8)i);
+      d.push_back((u8)count);
+      size_t at = i * kFragment;
+      d.insert(d.end(), msg.begin() + at, msg.begin() + std::min(msg.size(), at + kFragment));
+      if (reliable) {
+        waiting.emplace_back(next_seq + (u32)i, std::move(d));
+      } else {
+        unreliable_out.push_back(std::move(d));
+      }
+    }
+    if (reliable) {
+      next_seq += (u32)count;
     }
   }
 
-  // Sends what the socket accepts now; the rest stays queued for the next frame.
-  void flush() {
-    while (!dead && !out.empty()) {
-      int n = send(fd, (const char*)out.data(), (int)out.size(), kSendFlags);
-      if (n > 0) {
-        out.erase(out.begin(), out.begin() + n);
-      } else if (n < 0 && would_block(sock_error())) {
-        break;
-      } else {
-        dead = true;
-        dead_reason = "Connection lost";
+  void send_datagram(sock_t s, const std::vector<u8>& d) const {
+    // a full send buffer loses the datagram: the reliable channel sends it again
+    sendto(s, (const char*)d.data(), (int)d.size(), 0, (const sockaddr*)&addr, sizeof(addr));
+  }
+
+  // Send this frame's datagrams, the reliable fragments due (new ones within the window, and those
+  // not acknowledged within the retransmit timeout), and the acknowledgement of what came in.
+  void flush(sock_t s, double now) {
+    while (!waiting.empty() && in_flight.size() < kReliableWindow) {
+      in_flight[waiting.front().first] = {std::move(waiting.front().second), -1e12};
+      waiting.pop_front();
+    }
+    double rto = rtt_ms < 0 ? 200.0 : std::clamp(rtt_ms * 1.5 + 30.0, 60.0, 1000.0);
+    for (auto& [seq, f] : in_flight) {
+      if (now - f.sent_at >= rto) {
+        send_datagram(s, f.dgram);
+        f.sent_at = now;
       }
     }
-    if (out.size() > kMaxOutBuffer) {
+    for (auto& d : unreliable_out) {
+      send_datagram(s, d);
+    }
+    unreliable_out.clear();
+    if (ack_due) {
+      ack_due = false;
+      u32 bits = 0;
+      for (u32 i = 0; i < 32; i++) {
+        if (early.count(expect + 1 + i)) {
+          bits |= 1u << i;
+        }
+      }
+      std::vector<u8> d;
+      header(d, kAck);
+      d.insert(d.end(), (const u8*)&expect, (const u8*)&expect + 4);
+      d.insert(d.end(), (const u8*)&bits, (const u8*)&bits + 4);
+      send_datagram(s, d);
+    }
+    if (waiting.size() > kMaxWaiting && !dead) {
       dead = true;
       dead_reason = "Connection too slow";
     }
   }
 
-  // Bytes received under a test latency, with the time they may be read (test_latency).
-  std::deque<std::pair<double, std::vector<u8>>> held;
+  // The peer acknowledged every seq before `next`, and those of `bits`.
+  void on_ack(u32 next, u32 bits) {
+    for (auto it = in_flight.begin(); it != in_flight.end();) {
+      u32 d = it->first - next;
+      bool acked = (s32)d < 0 || (d >= 1 && d <= 32 && (bits & (1u << (d - 1))));
+      it = acked ? in_flight.erase(it) : std::next(it);
+    }
+  }
 
-  // Reads everything available. Returns false when the connection is closed.
-  bool receive(double now_ms) {
-    u8 buf[16384];
-    double latency, jitter;
-    test_latency(&latency, &jitter);
-    while (true) {
-      int n = recv(fd, (char*)buf, sizeof(buf), 0);
-      if (n > 0) {
-        if (latency > 0) {
-          double at = now_ms + latency + jitter * (std::rand() / (double)RAND_MAX);
-          if (!held.empty()) {
-            at = std::max(at, held.back().first);  // in order, as TCP delivers
-          }
-          held.emplace_back(at, std::vector<u8>(buf, buf + n));
-        } else {
-          in.insert(in.end(), buf, buf + n);
-        }
-        last_recv = now_ms;
-      } else if (n < 0 && would_block(sock_error())) {
-        while (!held.empty() && held.front().first <= now_ms) {
-          in.insert(in.end(), held.front().second.begin(), held.front().second.end());
-          held.pop_front();
-        }
-        return true;
-      } else {
-        return false;
-      }
+  void bye(sock_t s, const std::string& reason) const {
+    std::vector<u8> d;
+    header(d, kBye);
+    d.insert(d.end(), reason.begin(), reason.begin() + std::min<size_t>(reason.size(), 64));
+    for (int i = 0; i < 3; i++) {  // nothing answers a bye: sent thrice against a loss
+      send_datagram(s, d);
     }
   }
 };
@@ -528,7 +647,7 @@ bool Session::host(const std::string& address, int max_players) {
     m_message = "Invalid address, expected ip:port";
     return false;
   }
-  sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  sock_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (s == kNoSock) {
     m_message = "Cannot create a socket";
     return false;
@@ -536,25 +655,23 @@ bool Session::host(const std::string& address, int max_players) {
 #ifdef _WIN32
   int on = 1;
   setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&on, sizeof(on));
-#else
-  int on = 1;
-  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on));
 #endif
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons((u16)port);
-  if (bind(s, (sockaddr*)&addr, sizeof(addr)) != 0 || listen(s, 8) != 0) {
+  if (bind(s, (sockaddr*)&addr, sizeof(addr)) != 0) {
     close_sock(s);
     m_message = "Port " + std::to_string(port) + " is already in use";
     return false;
   }
   set_nonblocking(s);
-  m_listen = (u64)s;
+  set_buffers(s);
+  m_sock = (u64)s;
   m_mode = Mode::Host;
   m_local_slot = 0;
   m_max_players = std::clamp(max_players, 2, kMaxPlayers);
-  m_message = "Hosting on port " + std::to_string(port);
+  m_message = "Hosting on UDP port " + std::to_string(port);
   lg::info("[multiplayer] {}", m_message);
   return true;
 }
@@ -570,33 +687,35 @@ bool Session::join(const std::string& address, double now) {
   }
   addrinfo hints{};
   hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_socktype = SOCK_DGRAM;
   addrinfo* res = nullptr;
   if (getaddrinfo(ip.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res) {
     m_message = "Unknown address " + ip;
     return false;
   }
-  sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  sock_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (s == kNoSock) {
     freeaddrinfo(res);
     m_message = "Cannot create a socket";
     return false;
   }
+  // bound now: receiving on an unbound socket fails (Windows)
+  sockaddr_in local{};
+  local.sin_family = AF_INET;
+  local.sin_addr.s_addr = htonl(INADDR_ANY);
+  bind(s, (sockaddr*)&local, sizeof(local));
   set_nonblocking(s);
-  set_nodelay(s);
-  int r = connect(s, res->ai_addr, (int)res->ai_addrlen);
-  freeaddrinfo(res);
-  if (r != 0 && !would_block(sock_error())) {
-    close_sock(s);
-    m_message = "Cannot reach " + address;
-    return false;
-  }
+  set_buffers(s);
   auto* p = new Peer();
-  p->fd = s;
+  memcpy(&p->addr, res->ai_addr, sizeof(p->addr));
+  freeaddrinfo(res);
   p->ip = ip;
   p->last_recv = now;
-  p->connected = false;
+  // a new id for every connection: the host tells it from an older one of this address
+  p->conn = (u32)std::chrono::steady_clock::now().time_since_epoch().count() ^ ((u32)std::rand() << 16);
+  p->queue(MSG_HELLO, &kProtocolVersion, 4);
   m_peers.push_back(p);
+  m_sock = (u64)s;
   m_mode = Mode::Connecting;
   m_connect_start = now;
   m_message = "Connecting to " + address;
@@ -606,19 +725,17 @@ bool Session::join(const std::string& address, double now) {
 
 void Session::leave(const std::string& reason) {
   for (auto* p : m_peers) {
-    if (m_mode == Mode::Host && p->slot >= 0) {
-      const char* bye = "The host stopped the server";
-      p->queue(MSG_REJECT, bye, strlen(bye));
-      p->flush();
+    if (m_sock != ~0ull) {
+      p->bye((sock_t)m_sock, m_mode == Mode::Host ? "The host stopped the server" : "");
     }
-    close_sock(p->fd);
     delete p;
   }
   m_peers.clear();
-  if (m_listen != ~0ull) {
-    close_sock((sock_t)m_listen);
-    m_listen = ~0ull;
+  if (m_sock != ~0ull) {
+    close_sock((sock_t)m_sock);
+    m_sock = ~0ull;
   }
+  m_held.clear();
   for (auto& r : m_remotes) {
     r.clear();
   }
@@ -640,11 +757,7 @@ void Session::leave(const std::string& reason) {
 
 void Session::refuse(Peer& p, const char* why) {
   p.queue(MSG_REJECT, why, strlen(why));
-  p.flush();
-  if (p.out.empty()) {
-    shutdown_send(p.fd);  // the client reads the reason, then the end of the stream
-  }
-  p.closing = true;
+  p.closing = true;  // kept a second, the reason sent again until the client acknowledges it
   p.close_at = m_now + 1000.0;
   drop(p, why);
 }
@@ -937,105 +1050,204 @@ size_t Session::take_blob(u8* out, size_t max) {
   return n;
 }
 
+// One datagram from `p`: an acknowledgement, a goodbye, or a fragment of a message, delivered to
+// handle_frame once complete (reliable ones in order).
+void Session::on_datagram(Peer& p, const u8* d, size_t n) {
+  u8 kind = d[1];
+  d += kHeader;
+  n -= kHeader;
+  if (kind == kAck) {
+    if (n >= 8) {
+      p.on_ack(get_u32(d), get_u32(d + 4));
+    }
+    return;
+  }
+  if (kind == kBye) {
+    drop(p, n ? std::string((const char*)d, std::min<size_t>(n, 64)) : "Connection closed");
+    return;
+  }
+  if (p.dead) {
+    return;  // refused or leaving: only acknowledgements still count
+  }
+  if (kind == kReliable && n >= 6) {
+    u32 seq = get_u32(d);
+    p.ack_due = true;
+    u32 ahead = seq - p.expect;
+    if ((s32)ahead < 0 || ahead >= 4 * kMaxWaiting) {
+      return;  // already delivered (its acknowledgement was lost), or nonsense
+    }
+    p.early.emplace(seq, std::vector<u8>(d + 4, d + n));
+    for (auto it = p.early.find(p.expect); it != p.early.end() && !p.dead;
+         it = p.early.find(p.expect)) {
+      std::vector<u8> frag = std::move(it->second);
+      p.early.erase(it);
+      p.expect++;
+      if (frag[0] == 0) {
+        p.assembly.clear();
+      }
+      p.assembly.insert(p.assembly.end(), frag.begin() + 2, frag.end());
+      if (frag[0] + 1 == frag[1]) {
+        if (!p.assembly.empty() && p.assembly.size() <= kMaxFrame) {
+          std::vector<u8> msg = std::move(p.assembly);
+          handle_frame(p, msg[0], msg.data() + 1, msg.size() - 1);
+        }
+        p.assembly.clear();
+      }
+    }
+    return;
+  }
+  if (kind == kUnreliable && n >= 4) {
+    u16 id = get_u16(d);
+    u8 index = d[2], count = d[3];
+    if (count == 0 || index >= count || count > kMaxFragments ||
+        (p.any_msg && (s16)(id - p.newest_msg) <= 0)) {
+      return;  // an older message than the last one delivered: a newer state is already here
+    }
+    std::vector<u8> msg;
+    if (count == 1) {
+      msg.assign(d + 4, d + n);
+    } else {
+      auto& part = p.partial[id];
+      if (part.parts.empty()) {
+        part.count = count;
+        part.parts.resize(count);
+      }
+      if (part.count != count) {
+        return;
+      }
+      part.parts[index].assign(d + 4, d + n);
+      part.got |= 1u << index;
+      if (part.got != (1u << count) - 1) {
+        while (p.partial.size() > 8) {
+          p.partial.erase(p.partial.begin());
+        }
+        return;
+      }
+      for (auto& piece : part.parts) {
+        msg.insert(msg.end(), piece.begin(), piece.end());
+      }
+    }
+    p.newest_msg = id;
+    p.any_msg = true;
+    for (auto it = p.partial.begin(); it != p.partial.end();) {
+      it = (s16)(it->first - id) <= 0 ? p.partial.erase(it) : std::next(it);
+    }
+    if (!msg.empty() && msg.size() <= kMaxFrame) {
+      handle_frame(p, msg[0], msg.data() + 1, msg.size() - 1);
+    }
+  }
+}
+
+// The peer a datagram from `from` with connection id `conn` belongs to. The host makes one for a
+// client's first datagram (its HELLO, reliable seq 0), and a new one when a client of the same
+// address joins again (another id).
+Session::Peer* Session::peer_for(u32 ip, u16 port, u32 conn, const u8* d, size_t n) {
+  if (m_mode != Mode::Host) {
+    // a guest's only peer is the host, whose datagrams carry our connection id (a host with
+    // several addresses may answer from another one)
+    return !m_peers.empty() && m_peers[0]->conn == conn ? m_peers[0] : nullptr;
+  }
+  for (auto* p : m_peers) {
+    if (p->addr.sin_addr.s_addr == ip && p->addr.sin_port == port) {
+      if (p->conn == conn) {
+        return p;
+      }
+      drop(*p, "Connection closed");  // the same client joined again
+    }
+  }
+  bool hello = n >= kHeader + 6 && d[1] == kReliable && get_u32(d + kHeader) == 0;
+  size_t live = std::count_if(m_peers.begin(), m_peers.end(), [](Peer* p) { return !p->dead; });
+  if (!hello || live >= kMaxPeers) {
+    return nullptr;
+  }
+  auto* p = new Peer();
+  p->addr.sin_family = AF_INET;
+  p->addr.sin_addr.s_addr = ip;
+  p->addr.sin_port = port;
+  char text[INET_ADDRSTRLEN] = {};
+  inet_ntop(AF_INET, &p->addr.sin_addr, text, sizeof(text));
+  p->ip = text;
+  p->conn = conn;
+  p->last_recv = m_now;
+  m_peers.push_back(p);
+  if (m_banned.count(p->ip)) {
+    refuse(*p, "You are banned from this server");
+  }
+  return p;
+}
+
+// Read every datagram waiting on the socket (held a while under a test latency) and dispatch it.
+void Session::receive_all(double now) {
+  const auto& net = test_network();
+  double latency = net.latency, jitter = net.jitter, loss = net.loss;
+  u8 buf[2048];
+  while (m_sock != ~0ull) {
+    sockaddr_in from{};
+#ifdef _WIN32
+    int from_len = sizeof(from);
+#else
+    socklen_t from_len = sizeof(from);
+#endif
+    int n = recvfrom((sock_t)m_sock, (char*)buf, sizeof(buf), 0, (sockaddr*)&from, &from_len);
+    if (n < 0) {
+      int e = sock_error();
+      if (would_block(e)) {
+        break;
+      }
+      if (!conn_reset(e)) {
+        break;
+      }
+      // an earlier datagram went to a closed port
+      if (m_mode == Mode::Connecting) {
+        m_peers[0]->dead = true;
+        m_peers[0]->dead_reason = "Connection refused: is the server running?";
+      }
+      continue;
+    }
+    if (n < (int)kHeader || buf[0] != kMagic ||
+        (loss > 0 && std::rand() < loss / 100.0 * RAND_MAX)) {
+      continue;
+    }
+    if (latency > 0) {
+      double at = now + latency + jitter * (std::rand() / (double)RAND_MAX);
+      if (!m_held.empty()) {
+        at = std::max(at, m_held.back().at);  // in order
+      }
+      m_held.push_back({at, from.sin_addr.s_addr, from.sin_port, std::vector<u8>(buf, buf + n)});
+    } else {
+      dispatch_datagram(from.sin_addr.s_addr, from.sin_port, buf, n);
+    }
+  }
+  while (!m_held.empty() && m_held.front().at <= now) {
+    auto h = std::move(m_held.front());
+    m_held.pop_front();
+    dispatch_datagram(h.ip, h.port, h.bytes.data(), h.bytes.size());
+  }
+}
+
+void Session::dispatch_datagram(u32 ip, u16 port, const u8* d, size_t n) {
+  if (Peer* p = peer_for(ip, port, get_u32(d + 2), d, n)) {
+    p->last_recv = m_now;
+    on_datagram(*p, d, n);
+  }
+}
+
 void Session::update(PlayerState local, double now) {
   m_now = now;
   if (m_mode == Mode::Offline) {
     return;
   }
 
-  // Host: accept new players.
-  if (m_mode == Mode::Host) {
-    while (true) {
-      sockaddr_in addr{};
-#ifdef _WIN32
-      int addr_len = sizeof(addr);
-#else
-      socklen_t addr_len = sizeof(addr);
-#endif
-      sock_t s = accept((sock_t)m_listen, (sockaddr*)&addr, &addr_len);
-      if (s == kNoSock) {
-        break;
-      }
-      set_nonblocking(s);
-      set_nodelay(s);
-      char ip[INET_ADDRSTRLEN] = {};
-      inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
-      auto* p = new Peer();
-      p->fd = s;
-      p->ip = ip;
-      p->last_recv = now;
-      if (m_banned.count(p->ip)) {
-        refuse(*p, "You are banned from this server");
-      }
-      m_peers.push_back(p);
-    }
+  receive_all(now);
+
+  // Client: the host must welcome us in time.
+  if (m_mode == Mode::Connecting && m_local_slot < 0 && now - m_connect_start > kConnectTimeoutMs &&
+      !m_peers.empty() && !m_peers[0]->dead) {
+    m_peers[0]->dead = true;
+    m_peers[0]->dead_reason = "Connection timed out: is the server running?";
   }
 
-  // Client: wait for the connection to complete.
-  if (m_mode == Mode::Connecting && m_local_slot < 0 && !m_peers.empty()) {
-    Peer& p = *m_peers[0];
-    if (!p.connected) {
-      fd_set wr, ex;
-      FD_ZERO(&wr);
-      FD_ZERO(&ex);
-      FD_SET(p.fd, &wr);
-      FD_SET(p.fd, &ex);
-      timeval tv{0, 0};
-      if (select((int)p.fd + 1, nullptr, &wr, &ex, &tv) > 0) {
-        int err = 0;
-#ifdef _WIN32
-        int err_len = sizeof(err);
-#else
-        socklen_t err_len = sizeof(err);
-#endif
-        getsockopt(p.fd, SOL_SOCKET, SO_ERROR, (char*)&err, &err_len);
-        if (err != 0 || FD_ISSET(p.fd, &ex)) {
-          leave("Connection refused: is the server running?");
-          return;
-        }
-        p.connected = true;
-        p.queue(MSG_HELLO, &kProtocolVersion, 4);
-        p.last_recv = now;
-      }
-    }
-    if (now - m_connect_start > kConnectTimeoutMs) {
-      leave("Connection timed out");
-      return;
-    }
-  }
-
-  // Read and dispatch.
   for (auto* p : m_peers) {
-    if (p->dead && p->closing) {
-      p->in.clear();
-      if (!p->receive(now)) {
-        p->close_at = 0;  // the client closed: no need to wait
-      }
-      p->in.clear();
-      continue;
-    }
-    if (p->dead || !p->connected) {
-      continue;
-    }
-    // Frames received before a close still count (a kick reason arrives just before the close).
-    bool open = p->receive(now);
-    size_t at = 0;
-    while (!p->dead && p->in.size() - at >= 3) {
-      size_t len = p->in[at] | (p->in[at + 1] << 8);
-      if (len < 1 || len > kMaxFrame) {
-        drop(*p, "Protocol error");
-        break;
-      }
-      if (p->in.size() - at < 2 + len) {
-        break;
-      }
-      handle_frame(*p, p->in[at + 2], p->in.data() + at + 3, len - 1);
-      at += 2 + len;
-    }
-    p->in.erase(p->in.begin(), p->in.begin() + std::min(at, p->in.size()));
-    if (!open) {
-      drop(*p, "Connection closed");
-    }
     if (now - p->last_recv > kTimeoutMs) {
       drop(*p, "Connection timed out");
     }
@@ -1043,7 +1255,7 @@ void Session::update(PlayerState local, double now) {
 
   // Ping every peer once a second (the host its guests, a guest the host).
   for (auto* p : m_peers) {
-    if (!p->dead && p->connected && ((m_mode == Mode::Host && p->slot >= 0) || m_mode == Mode::Client) &&
+    if (!p->dead && ((m_mode == Mode::Host && p->slot >= 0) || m_mode == Mode::Client) &&
         now >= p->next_ping) {
       p->next_ping = now + kPingIntervalMs;
       u32 t = (u32)now;
@@ -1066,9 +1278,7 @@ void Session::update(PlayerState local, double now) {
   }
 
   for (auto* p : m_peers) {
-    if (p->connected) {
-      p->flush();
-    }
+    p->flush((sock_t)m_sock, now);
   }
 
   // Remove dead connections.
@@ -1094,11 +1304,10 @@ void Session::update(PlayerState local, double now) {
         }
       }
     }
-    if (p->closing && now < p->close_at) {
+    if (p->closing && now < p->close_at && !p->in_flight.empty()) {
       i++;
       continue;
     }
-    close_sock(p->fd);
     delete p;
     m_peers.erase(m_peers.begin() + i);
   }
