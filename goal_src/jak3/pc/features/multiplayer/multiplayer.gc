@@ -3895,6 +3895,16 @@
   str
   )
 
+(define *mp-user-encoded* (new 'global 'string 256 (the-as string #f)))
+
+(defun mp-user-text ((str string))
+  "A string a player typed (a name, an address), in the font's encoding (*mp-user-encoded*): raw,
+   the font draws g, j, p, q and y with the wrong glyph, larger or out of line. Game texts are
+   already encoded: never pass them here."
+  (pc-encode-utf8-string str *mp-user-encoded*)
+  *mp-user-encoded*
+  )
+
 (defun mp-draw-text ((buf dma-buffer) (str string) (x int) (y int) (scale float))
   "Draw `str` centered at x, y (512x416 screen). Returns its width."
   (pc-encode-utf8-string str *pc-encoded-temp-string*)

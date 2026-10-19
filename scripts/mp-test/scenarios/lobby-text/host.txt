@@ -1,0 +1,27 @@
+# Lobby texts, host side: Host Game, the guest (Daxter, a name with g, j, p, q and y) joins; the
+# host selects it (its details: name, character, ping each on one line), then opens the multiplayer
+# options from the lobby (the whole page: name, character, color, appearance, address, administration).
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+60 log-lobby
+61 press down 100
+62 screenshot lobby-daxter
+63 press circle 100
+64 wait-menu multiplayer
+65 screenshot options-title
+66 press down 100
+66.5 press down 100
+67 press down 100
+67.5 press down 100
+68 press down 100
+68.5 press down 100
+69 screenshot options-title-end
+70 log

@@ -1,0 +1,17 @@
+# The START menu over the running world (online) freezes what the player controls: the host in a
+# buggy holding the throttle (X), then on foot pushing the stick, the menu open: it does not move.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 vehicle 15
+52 log-me
+53 open-menu main
+54 press x 3000
+57.5 log-me
+57.6 log-pause
+58 press start 100
+60 press x 2000
+62.5 log-me
+70 log

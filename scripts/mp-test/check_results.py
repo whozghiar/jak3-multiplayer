@@ -813,6 +813,26 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "and goes back to normal once the losses stop",
                 any("network to player 1: normal" in l for l in host) and nets[-1][0] == "normal", f"{nets[-1:]}")
 
+    elif scenario == "skin-title":
+        ed = grab(host, r"\] skin editing (\S+) group (\d+) slider (\d+) draft-shirt (\w+) preview (\S+)")
+        pv = grab(host, r"\] skin preview \"(\w+)\" status #x(\w+)")
+        c.check(scenario, "the Appearance page opened from the title screen draws its preview (a HUD model under the menu), Jak then Daxter",
+                bool(ed) and ed[0][4] == "#t" and [k for k, _ in pv] == ["jakb", "daxter"] and all(int(st, 16) & 0x4008 == 0x4008 for _, st in pv), f"{pv}")
+
+    elif scenario == "ui-ingame":
+        he = grab(host, r"\] econ orbs (\d+) trophies (\d+)")
+        ge = grab(client, r"\] econ orbs (\d+) trophies (\d+)")
+        c.check(scenario, "the host gives itself 100 precursor orbs and 100 Metal Head trophies; a guest cannot",
+                he[-1:] == [("100", "100")] and ge[-1:] == [("0", "0")], f"host {he}, guest {ge}")
+
+    elif scenario == "menu-still":
+        hm = [(float(x), float(z), float(v)) for x, _, z, v in grab(host, r"\] me (\S+) (\S+) (\S+) speed (\S+)")]
+        gm = [(float(x), float(z), float(v)) for x, _, z, v in grab(client, r"\] me (\S+) (\S+) (\S+) speed (\S+)")]
+        c.check(scenario, "under the START menu Daxter pushing the stick does not move; after it he does",
+                len(gm) >= 3 and math.dist(gm[0][:2], gm[1][:2]) < 0.5 and math.dist(gm[1][:2], gm[2][:2]) > 2.0, f"{gm}")
+        c.check(scenario, "under the START menu the throttle does not drive the buggy (it only rolls); after it, it does",
+                len(hm) >= 3 and hm[1][2] <= hm[0][2] + 0.5 and hm[2][2] > 5.0, f"{hm}")
+
     elif scenario == "coop-respawn":
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")

@@ -1,0 +1,20 @@
+# In game: START > Options > Multiplayer holds only the name, character, color and appearance; the
+# host gives itself 100 precursor orbs and 100 Metal Head trophies (the Mods menu's host entries).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 open-menu multiplayer
+52 screenshot options-ingame
+53 press down 100
+53.5 press down 100
+54 press down 100
+54.5 press down 100
+56.5 screenshot options-ingame-end
+57 log-lobby
+58 press triangle 100
+60 econ-grant-self 0
+60.5 econ-grant-self 1
+62 log-econ
+64 log

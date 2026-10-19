@@ -1,0 +1,12 @@
+# The Appearance page opened from the title screen (retail boot): its preview shows there too, in
+# the outfit (a green shirt), then Daxter's (circle).
+1 enable
+1 wait-menu title
+1.5 skin 1 30ff30 100
+2 skin-page
+5 screenshot title-skin
+5.5 log-skin
+6 press circle 100
+8 screenshot title-daxter
+8.5 log-skin
+9 log

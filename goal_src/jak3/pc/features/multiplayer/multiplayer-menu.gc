@@ -175,8 +175,7 @@
     (print-game-text (lookup-text! *common-text* (-> this name) #f) font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
     (+! (-> font-ctx origin y) 18.0)
     (set-scale! font-ctx FONT_SIZE_OPTION_EXTRA)
-    (format (clear *progress-generic-temp-string*) "~S" ((-> this get-value)))
-    (print-game-text *progress-generic-temp-string* font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
+    (print-game-text (mp-user-text ((-> this get-value))) font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
     )
   (none)
   )
@@ -306,35 +305,6 @@
       :max-length 31
       :on-confirm (lambda () (mp-config-save!) (none))
       )
-    (new 'static 'menu-generic-carousel-option
-      :name (text-id progress-mp-mode)
-      :items (new 'static 'boxed-array :type text-id (text-id progress-mp-mode-free) (text-id progress-mp-mode-coop))
-      :get-item-index-fn (lambda () (-> *mp-config* mode))
-      :on-confirm (lambda ((index int) (the-progress progress))
-                    (set! (-> *mp-config* mode) index)
-                    (mp-config-save!)
-                    ;; a host switches its running server too
-                    (if (= *mp-mode* (mp-mode host))
-                        (mp-apply-mode!)
-                        )
-                    (none)
-                    )
-      )
-    (new 'static 'menu-generic-button-option
-      :name (text-id progress-mp-host)
-      :should-disable? (lambda () (!= *mp-mode* (mp-mode offline)))
-      :on-confirm (lambda ((the-progress progress)) (mp-host!) (none))
-      )
-    (new 'static 'menu-generic-button-option
-      :name (text-id progress-mp-join)
-      :should-disable? (lambda () (!= *mp-mode* (mp-mode offline)))
-      :on-confirm (lambda ((the-progress progress)) (mp-join!) (none))
-      )
-    (new 'static 'menu-generic-button-option
-      :name (text-id progress-mp-leave)
-      :should-disable? (lambda () (= *mp-mode* (mp-mode offline)))
-      :on-confirm (lambda ((the-progress progress)) (mp-leave!) (none))
-      )
     (progress-new-generic-link-to-scrolling-page (text-id progress-mp-admin)
       :should-disable? (lambda () (!= *mp-mode* (mp-mode host)))
       (new 'static 'menu-mp-label-option
@@ -345,7 +315,11 @@
       (new 'static 'menu-generic-carousel-option
         :name (text-id progress-mp-player)
         :get-max-size-fn (lambda () (mp-player-count))
-        :get-item-label-fn (lambda ((index int)) (mp-player-label index *mp-menu-label*) *mp-menu-label*)
+        :get-item-label-fn (lambda ((index int))
+                             (mp-player-label index *mp-temp-string*)
+                             (pc-encode-utf8-string *mp-temp-string* *mp-menu-label*)
+                             *mp-menu-label*
+                             )
         :get-item-index-fn (lambda () (mp-admin-index))
         :on-confirm (lambda ((index int) (the-progress progress)) (set! *mp-admin-slot* (mp-nth-player-slot index)) (none))
         )
@@ -441,6 +415,19 @@
 ;; or co-op here), the start countdown lasts 10 s (his: 3 s; X again cancels it, as his does), and
 ;; guests join by address.
 ;; ------------------------------------------------------------------------------------------------
+
+;; The page's options: all of them at the title screen and in the lobby (address, the host's
+;; administration), only the first five in game (status, name, character, color, appearance).
+(define *mp-menu-all* (-> (the-as menu-generic-scrolling-page (-> *mp-menu-options* options 0)) menu-options))
+
+(define *mp-menu-ingame*
+  (let ((opts (new 'global 'boxed-array menu-option 5)))
+    (dotimes (i 5)
+      (set! (-> opts i) (-> *mp-menu-all* i))
+      )
+    opts
+    )
+  )
 
 ;; Title screen entries, shown while the mod is enabled (mp-update-title).
 (define *mp-title-host*
@@ -750,7 +737,7 @@
           (string<-charp *mp-lobby-line* (-> st name))
           (set-scale! font-ctx 0.45)
           (mp-fit-text! *mp-lobby-line* font-ctx (+ (* 0.42 width) -32.0))
-          (mp-lobby-print font-ctx *mp-lobby-line* (+ left 28.0) y (+ (* 0.42 width) -30.0) 0.45 color)
+          (mp-lobby-print font-ctx (mp-user-text *mp-lobby-line*) (+ left 28.0) y (+ (* 0.42 width) -30.0) 0.45 color)
           (mp-lobby-print font-ctx (lookup-text! *common-text* (mp-lobby-status-id st slot) #f)
                           (+ left (* 0.42 width)) (+ y 2.0) (* 0.17 width) 0.35 color
                           )
@@ -765,20 +752,22 @@
         (string<-charp *mp-lobby-line* (-> st name))
         (set-scale! font-ctx 0.55)
         (mp-fit-text! *mp-lobby-line* font-ctx (+ detail-w -4.0))
-        (mp-lobby-print font-ctx *mp-lobby-line* detail-x row-top detail-w 0.55 (font-color font-color-33))
+        (mp-lobby-print font-ctx (mp-user-text *mp-lobby-line*) detail-x row-top detail-w 0.55 (font-color font-color-33))
+        ;; each detail on one line, smaller when wider than the panel: "Character: Daxter" wrapped
+        ;; onto the ping's line
         (format (clear *mp-lobby-line*) "~S: ~S"
                 (lookup-text! *common-text* (text-id progress-mp-character) #f)
                 (lookup-text! *common-text* (if (= (logand (-> st character) 15) 1) (text-id progress-mp-daxter) (text-id progress-mp-jak)) #f)
                 )
-        (mp-lobby-print font-ctx *mp-lobby-line* detail-x (+ row-top 24.0) detail-w 0.42 (font-color font-color-32))
+        (mp-lobby-print-fit font-ctx *mp-lobby-line* detail-x (+ row-top 24.0) detail-w 0.42 (font-color font-color-32))
         (let ((ping (pc-mp-player-ping slot)))
           (if (< ping 0)
               (format (clear *mp-lobby-line*) "~S: --" (lookup-text! *common-text* (text-id progress-mp-col-ping) #f))
               (format (clear *mp-lobby-line*) "~S: ~D ms" (lookup-text! *common-text* (text-id progress-mp-col-ping) #f) ping)
               )
           )
-        (mp-lobby-print font-ctx *mp-lobby-line* detail-x (+ row-top 42.0) detail-w 0.42 (font-color font-color-32))
-        (mp-lobby-print font-ctx (lookup-text! *common-text* (mp-lobby-status-id st slot) #f)
+        (mp-lobby-print-fit font-ctx *mp-lobby-line* detail-x (+ row-top 42.0) detail-w 0.42 (font-color font-color-32))
+        (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (mp-lobby-status-id st slot) #f)
                         detail-x (+ row-top 60.0) detail-w 0.42 (font-color font-color-32)
                         )
         )
@@ -1081,7 +1070,7 @@
       ;; the text and its cursor
       (set-flags! font-ctx (font-flags kerning middle large))
       (format (clear *mp-lobby-line*) "~S_" (-> kb edit))
-      (mp-lobby-print font-ctx *mp-lobby-line* left (+ top 12.0) width 0.6 (font-color font-color-33))
+      (mp-lobby-print font-ctx (mp-user-text *mp-lobby-line*) left (+ top 12.0) width 0.6 (font-color font-color-33))
       ;; the keys
       (dotimes (row 5)
         (let ((n (if (= row 4) 4 10)))
@@ -1415,6 +1404,12 @@
         )
       )
     (when proc
+      ;; under a menu that keeps a still copy of the screen, only models with the hud status are
+      ;; drawn (foreground-draw, engine/draw/drawable.gc): the preview is one there
+      (if (get-menu-mode *blit-displays-work*)
+          (logior! (-> proc draw status) (draw-control-status hud))
+          (logclear! (-> proc draw status) (draw-control-status hud))
+          )
       (let ((pos (new 'stack-no-clear 'vector))
             (scr (new 'stack 'vector))
             (dir (new 'stack-no-clear 'vector))
@@ -1993,6 +1988,18 @@
   "Stock behavior, plus the multiplayer pages."
   (case arg0
     (('multiplayer)
+     ;; in game (the START menu) only the player's name, character, color and appearance: a game
+     ;; mode, a server or the server's administration are chosen from the title screen and lobby
+     (let ((page (the-as menu-generic-scrolling-page (-> *mp-menu-options* options 0))))
+       (set! (-> page menu-options)
+             (if (= (level-status? *level* 'title #f) 'active) *mp-menu-all* *mp-menu-ingame*)
+             )
+       ;; a choice past the shorter list starts over (this runs again while the page shows: the
+       ;; choice itself is kept)
+       (if (>= (-> page selected-option-index) (-> page menu-options length))
+           (set! (-> page selected-option-index) -1)
+           )
+       )
      (set! (-> this current-options) *mp-menu-options*)
      0
      )
@@ -2182,6 +2189,17 @@
   (none)
   )
 
+(defun mp-econ-grant-self ((kind int))
+  "The host credits itself 100 precursor orbs (kind 0) or Metal Head trophies (1): the server's own
+   account only, never a guest's (Mods menu)."
+  (when (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))
+    (pc-mp-econ-credit *mp-local-slot* kind 100 (mp-econ-player-name *mp-local-slot*))
+    (mp-econ-send *mp-local-slot* 0)
+    (mp-show-message (if (zero? kind) "+100 precursor orbs" "+100 Metal Head trophies"))
+    )
+  (none)
+  )
+
 (defun mp-teleport-player ((index int))
   "Go to the index-th connected player (applied by the manager on its next frame)."
   (when (and (mp-cheats-allowed?) (>= (mp-nth-player-slot index) 0))
@@ -2225,6 +2243,14 @@
            :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
            :is-toggled? (lambda () *mp-invulnerable*)
            :on-confirm (lambda () (set! *mp-invulnerable* (and (not *mp-invulnerable*) (mp-cheats-allowed?))) (none))
+           )
+      (new 'static 'popup-menu-button :label "Host: +100 precursor orbs"
+           :entry-disabled? (lambda () (not (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))))
+           :on-confirm (lambda () (mp-econ-grant-self 0) (none))
+           )
+      (new 'static 'popup-menu-button :label "Host: +100 Metal Head trophies"
+           :entry-disabled? (lambda () (not (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))))
+           :on-confirm (lambda () (mp-econ-grant-self 1) (none))
            )
       (new 'static 'popup-menu-dynamic-submenu :label "Teleport to a zone"
            :entry-disabled? (lambda () (not (mp-cheats-allowed?)))

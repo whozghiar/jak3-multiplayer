@@ -1,0 +1,16 @@
+# The START menu over the running world, guest side: Daxter pushes the stick, the menu open.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 log-me
+51 open-menu main
+52 stick 128 0 3000
+55.5 log-me
+55.6 log-pause
+56 press start 100
+58 stick 128 0 2000
+60.5 log-me
+70 log
