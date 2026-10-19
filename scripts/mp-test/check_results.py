@@ -849,6 +849,22 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
     elif scenario == "dark-smack":
         c.check(scenario, "Dark Jak's blows next to the guest: their trail replayed there, no crash", any("pvp hit by player 0" in l for l in client), "")
 
+    elif scenario == "session-flow":
+        gp = grab(client, r"\] pause master (\S+) applied")
+        hp = grab(host, r"\] pause master (\S+) applied")
+        c.check(scenario, "a cutscene: the guest's START does not pause it; the host's pauses it for everyone, then resumes",
+                bool(gp) and gp[0] == ("game",) and [m for (m,) in hp][:3] == ["game", "pause", "game"], f"guest {gp}, host {hp}")
+        hr = grab(host, r"\] restart count (\d+)")
+        gr = grab(client, r"\] restart count (\d+)")
+        hm = grab(host, r"\] me (\S+) \S+ (\S+) speed")
+        gm = grab(client, r"\] me (\S+) \S+ (\S+) speed")
+        c.check(scenario, "START > Restart restarts every player: the host's, then a guest's (asked of the host); the guest back next to the host",
+                any("the host restarted: we restart" in l for l in client) and any("player 1 asks for a restart" in l for l in host)
+                and hr[-1:] == [("2",)] and gr[-1:] == [("2",)] and bool(hm) and bool(gm)
+                and math.dist((float(hm[-1][0]), float(hm[-1][1])), (float(gm[-1][0]), float(gm[-1][1]))) < 5.0, f"host {hr}, guest {gr}")
+        c.check(scenario, "a guest back at its title screen leaves the server (the host sees it go)",
+                any("we leave the server" in l for l in client) and any("player 1 left" in l for l in host), "")
+
     elif scenario == "coop-respawn":
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")

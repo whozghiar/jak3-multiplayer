@@ -1,0 +1,23 @@
+# Session flow, guest side: watches the host's cutscene and presses START (no pause here); sees the
+# host's pause; restarts when the host does, back next to the host; then quits to its title screen:
+# it leaves the server.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 wait-scene
+51 press start 100
+51.4 log-pause
+51.6 log-me
+63.5 log-pause
+70 log-pause
+80 log-restart
+84 log-restart
+88 restart
+95 log-restart
+96 log-me
+100 title
+115 log-session
+117 log-restart
+120 log

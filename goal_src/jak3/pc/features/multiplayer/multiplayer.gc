@@ -95,6 +95,8 @@
   (econ 22)       ;; host to a player: its orbs, trophies, items owned (iarg 0-2), and the result
                   ;; of its purchase (iarg 3: 0 none, 1 bought, 2 refused)
   (econ-buy 23)   ;; to the host: the sender buys shop item iarg 0
+  (restart 24)    ;; host to everyone: the host restarted the mission (or its checkpoint), each
+                  ;; player does too; guest to the host: asks for it ("Restart for everyone")
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -764,11 +766,16 @@
    (coop-mission     int32)      ;; game-task of that mission, -1 none
    (saves            int32)      ;; campaign saves written (test log)
    (sidekick-hidden? symbol)     ;; online, playing Jak: our own Daxter off our shoulder
+   (guest-played?    symbol)     ;; guest: it played in the host's world since it joined
+   (restarting?      symbol)     ;; a restart the host sent is running here (not sent back)
+   (restarts         int32)      ;; restarts done here (test log)
    )
   )
 
 (define *mp-session* (new 'global 'mp-session-state))
 (set! (-> *mp-session* kind) #f)
+(set! (-> *mp-session* guest-played?) #f) ;; symbol fields of a new structure start at 0, which is true
+(set! (-> *mp-session* restarting?) #f)
 (set! (-> *mp-session* unlock-pending) #f)
 (set! (-> *mp-session* sidekick-hidden?) #f)
 (set! (-> *mp-session* coop-mission) -1)
@@ -2640,6 +2647,7 @@
 (define-extern mp-econ-claim-orb (function int uint none))
 (define-extern mp-econ-apply (function mp-event none))
 (define-extern mp-econ-buy (function int int none))
+(define-extern mp-apply-restart (function mp-event none)) ;; "Restart for everyone", below
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -3116,6 +3124,9 @@
          (if (= *mp-mode* (mp-mode host))
              (mp-econ-buy (-> ev from) (-> ev iarg 0))
              )
+         )
+        (((mp-event-kind restart))
+         (mp-apply-restart ev)
          )
         )
       )
@@ -3628,6 +3639,74 @@
       (mp-leave!)
       )
     )
+  ;; a guest that played in the host's world and is back at the title screen quit the game (START >
+  ;; Quit): it leaves the server, and the others see it go
+  (cond
+    ((!= *mp-mode* (mp-mode client))
+     (set! (-> *mp-session* guest-played?) #f)
+     )
+    ((mp-in-game?)
+     (set! (-> *mp-session* guest-played?) #t)
+     )
+    ((and (-> *mp-session* guest-played?) (= (level-status? *level* 'title #f) 'active))
+     (set! (-> *mp-session* guest-played?) #f)
+     (format 0 "[multiplayer] back at the title screen: we leave the server~%")
+     (mp-leave!)
+     )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Restart for everyone
+;;
+;; START > Restart (restart-mission, engine/game/task/task-control.gc: the running mission's task
+;; managers restart, or the game resets at its checkpoint) restarts every player: the host's sends
+;; restart to everyone, who restart theirs and come back next to the host; a guest's asks the host,
+;; whose restart then goes to everyone, the guest included.
+;; ------------------------------------------------------------------------------------------------
+
+;; MOD multiplayer -- engine/game/task/task-control.gc
+(define-perm *mp-stock-restart-mission* (function int) restart-mission)
+
+(defun restart-mission ()
+  "Stock offline. Online: the host restarts and sends it to everyone; a guest asks the host (its
+   own restart comes back from the host); the restart the host sent runs here as the stock."
+  (cond
+    ((or (not (mp-online?)) (-> *mp-session* restarting?))
+     (*mp-stock-restart-mission*)
+     )
+    ((= *mp-mode* (mp-mode host))
+     (format 0 "[multiplayer] the host restarts: every player restarts~%")
+     (mp-send-event (mp-event-kind restart) -1 0 0.0)
+     (+! (-> *mp-session* restarts) 1)
+     (*mp-stock-restart-mission*)
+     )
+    (else
+      (format 0 "[multiplayer] restart asked of the host~%")
+      (mp-send-event (mp-event-kind restart) 0 0 0.0)
+      0
+      )
+    )
+  )
+
+(defun mp-apply-restart ((ev mp-event))
+  "A restart event: the host restarts for everyone when a guest asks; a guest restarts as the host
+   did, then goes back next to the host."
+  (cond
+    ((= *mp-mode* (mp-mode host))
+     (format 0 "[multiplayer] player ~D asks for a restart~%" (-> ev from))
+     (restart-mission)
+     )
+    ((zero? (-> ev from))
+     (format 0 "[multiplayer] the host restarted: we restart~%")
+     (set! (-> *mp-session* restarting?) #t)
+     (+! (-> *mp-session* restarts) 1)
+     (restart-mission)
+     (set! (-> *mp-session* restarting?) #f)
+     (set! *mp-request-teleport* 0)
+     )
+    )
   (none)
   )
 
@@ -4119,12 +4198,29 @@
 ;; pauses everyone ("Pause for everyone", below); START opens the menu over the running world. While
 ;; the host has the game paused, nothing pauses or unpauses it here. define-perm keeps the stock
 ;; function when this file is reloaded in a REPL session.
+(define-extern mp-host-toggle-pause (function none)) ;; "Pause for everyone", below
 (define-perm *mp-stock-determine-pause-mode* (function none) determine-pause-mode)
 
 (defun determine-pause-mode ()
   "Stock, except SELECT alone while online, and the stock pause the host put us in (multiplayer
    mod)."
   (when (mp-online?)
+    ;; a cutscene: another player watches it too. A guest's START or SELECT does not pause it (its
+    ;; cutscene fell behind the others'); the host's START pauses it for everyone, as its SELECT
+    ;; does, and resumes it
+    (when (and *scene-player* (ppointer->process *scene-player*))
+      (cond
+        ((= *mp-mode* (mp-mode host))
+         (when (cpad-pressed? 0 start)
+           (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons start))
+           (mp-host-toggle-pause)
+           )
+         )
+        (else
+          (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons start select))
+          )
+        )
+      )
     (if (and (cpad-pressed? 0 select) (not (cpad-hold? 0 l3)) (not (cpad-pressed? 0 start)))
         (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons select))
         )

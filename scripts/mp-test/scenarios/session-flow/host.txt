@@ -1,0 +1,22 @@
+# Session flow, host side: a cutscene the guest watches too (the guest's START does not pause it;
+# the host's START pauses it for everyone, then resumes it); then START > Restart: every player
+# restarts; then the guest quits to its title screen and leaves the server.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55 scene wascity-pre-game-intro
+60 log-pause
+62 press start 100
+63 log-pause
+65 press start 100
+70 log-pause
+80 log-restart
+82 restart
+84 log-restart
+95 log-restart
+96 log-me
+100 log-session
+120 log-session
+125 log
