@@ -813,6 +813,16 @@ static u8 mp_skin_group_of(const std::string& name) {
       {"sk-armfur", 10},             {"sk-bodyfur", 10},          {"sk-ear", 10},
       {"sk-finger", 10},             {"sk-eye-lid", 10},          {"sk-orange2yellowfur", 10},
       {"bam-hairhilite", 10},        {"sk-yellowfurnew", 11},     {"bam-leather-belt", 12},
+      // the cutscenes' high resolution Jak and Daxter (jakc-highres, sidekick-highres)
+      {"jakchires-jacket", 1},       {"jakchires-chestplate", 2}, {"jakchires-precarmor-01", 2},
+      {"jakchires-pants", 3},        {"jakchires-lightbrownspat", 3}, {"jakchires-shoebottom", 4},
+      {"jakchires-shoemetal", 4},    {"jakchires-shoeteop", 4},   {"jakchires-blackstrap", 6},
+      {"jakchires-brownstrap", 6},   {"jakchires-brwnleather", 6}, {"jakchires-leatherpouch", 6},
+      {"jakchires-clips", 6},        {"jakchires-glovetop", 7},   {"jakchires-hair", 8},
+      {"jakchires-hair-norm", 8},    {"jakchires-hair-dark", 8},  {"daxter-orange", 10},
+      {"daxterarm", 10},             {"daxterear", 10},           {"daxterfinger", 10},
+      {"daxterheadwidenew", 10},     {"daxterbodyshort-eix", 10}, {"daxterfoot", 10},
+      {"daxter-furhilite", 11},      {"daxtertuft", 11},          {"daxter-pants", 12},
   };
   auto it = groups.find(name);
   return it == groups.end() ? 0xff : it->second;

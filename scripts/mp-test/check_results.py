@@ -751,6 +751,19 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "scene-skins":
+        hs = grab(host, r"\] scene actor (\S+) shirt #x(\w+) fur #x(\w+)")
+        gs = grab(client, r"\] scene actor (\S+) shirt #x(\w+) fur #x(\w+)")
+        hj = [r for r in hs if r[0].startswith(("jak", "darkjak"))]
+        hd = [r for r in hs if r[0].startswith("sidekick")]
+        gj = [r for r in gs if r[0].startswith(("jak", "darkjak"))]
+        gd = [r for r in gs if r[0].startswith("sidekick")]
+        c.check(scenario, "a cutscene's Jak wears the host's shirt on both machines",
+                bool(hj) and bool(gj) and all(r[1] == "99ff3010" for r in hj + gj), f"host {hj[:2]}, guest {gj[:2]}")
+        c.check(scenario, "its Daxter wears the guest's fur while the guest plays Daxter, the stock one once it plays Jak",
+                bool(hd) and bool(gd) and hd[0][2] == "cc2040ff" and gd[0][2] == "cc2040ff" and hd[-1][2] == "0" and gd[-1][2] == "0",
+                f"host {hd}, guest {gd}")
+
     elif scenario == "host-quit":
         ends = grab(client, r"\] end count (\d+) pending (\S+) note .* title (\S+) menu (\S+)")
         c.check(scenario, "the host back at its title screen ends the session: the guest in game goes back to its title screen",

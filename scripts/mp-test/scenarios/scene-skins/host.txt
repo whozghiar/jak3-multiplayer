@@ -1,0 +1,19 @@
+# Outfits in cutscenes, host side (Jak, red shirt). 1: the guest plays Daxter (blue fur): the host
+# starts a Spargus cutscene: its Jak wears the host's shirt and its Daxter the guest's fur, on both
+# machines. 2: the guest plays Jak: the cutscene's Daxter is the stock one.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+2 skin 1 ff3010 60
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 scene wascity-pre-game-intro
+53 log-scene-skins
+53.5 screenshot scene-daxter-player
+56 press triangle 100
+66 scene wascity-pre-game-intro
+69 log-scene-skins
+69.5 screenshot scene-stock-daxter
+72 press triangle 100
+75 log

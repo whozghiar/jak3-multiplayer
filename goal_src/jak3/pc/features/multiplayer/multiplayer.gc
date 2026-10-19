@@ -4934,6 +4934,95 @@
 
 (define-extern mp-skin-add-copies (function none)) ;; multiplayer-world.gc
 
+;; Cutscenes: the one Jak and the one Daxter of a cutscene wear the players' outfits, on every
+;; machine alike, as in himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, goal_src/jak2/multiplayer/player/
+;; mp-cutscene-appearance.gc, ISC): Jak is the host's (the first player playing Jak when the host plays
+;; Daxter), Daxter the player playing Daxter's, the stock Daxter when every player plays Jak.
+
+(defun mp-scene-jak-skin ()
+  "The outfit a cutscene's Jak wears online: the host's when it plays Jak, else the first player
+   playing Jak (us first), #f when nobody does (the stock textures)."
+  (let ((host (if (= *mp-mode* (mp-mode host)) (the-as mp-player-state #f) (mp-remote-state 0)))
+        (we-jak? (!= (-> *mp-config* character) 1))
+        )
+    (cond
+      ((and (= *mp-mode* (mp-mode host)) we-jak?)
+       (return (mp-local-skin))
+       )
+      ((and host (not (mp-state-daxter? host)))
+       (return (mp-slot-skin 0))
+       )
+      (we-jak?
+       (return (mp-local-skin))
+       )
+      )
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (if (and st (not (mp-state-daxter? st)))
+            (return (mp-slot-skin i))
+            )
+        )
+      )
+    )
+  (the-as (pointer uint32) #f)
+  )
+
+(defun mp-scene-daxter-skin ()
+  "The outfit a cutscene's Daxter wears online: the player playing Daxter's (us first), #f when
+   every player plays Jak (the stock Daxter)."
+  (if (= (-> *mp-config* character) 1)
+      (return (mp-local-skin))
+      )
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i)))
+      (if (and st (mp-state-daxter? st))
+          (return (mp-slot-skin i))
+          )
+      )
+    )
+  (the-as (pointer uint32) #f)
+  )
+
+(defun mp-scene-skins ()
+  "Online, the actors of the cutscene playing here (scene-actor names: jakc-highres, jak-highres,
+   darkjak-highres, jakc-scarf for Jak; sidekick-highres for Daxter) wear the outfits above."
+  (let ((sp (if *scene-player* (the-as scene-player (ppointer->process *scene-player*)))))
+    (when (and sp (mp-online?) (-> sp scene))
+      (let ((jak (mp-scene-jak-skin))
+            (dax (mp-scene-daxter-skin))
+            )
+        ;; an actor not spawned yet has a null handle (0, not #f: handle->process would read address 0)
+        (dotimes (i (if (and (-> sp scene actor) (nonzero? (-> sp scene actor))) (-> sp scene actor length) 0))
+          (let* ((a (-> sp scene actor i))
+                 (proc (if (and a (-> a name) (nonzero? (-> a process))) (handle->process (-> a process))))
+                 (skin (cond
+                         ((not proc)
+                          (the-as (pointer uint32) #f)
+                          )
+                         ((or (string-prefix= "jak" (-> a name)) (string-prefix= "darkjak" (-> a name)))
+                          jak
+                          )
+                         ((string-prefix= "sidekick" (-> a name))
+                          dax
+                          )
+                         (else
+                           (the-as (pointer uint32) #f)
+                           )
+                         )
+                       )
+                 )
+            (if (and proc skin (nonzero? (-> (the-as process-drawable proc) draw)))
+                (mp-skin-add (-> (the-as process-drawable proc) draw) skin)
+                )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-update-skins ()
   "Every frame: the models that wear an outfit. Ours and our Daxter, the Appearance page's preview
    (ours, its draft while the page is open), our model seated as a passenger, the other players'
@@ -4979,6 +5068,7 @@
         )
       )
     (mp-skin-add-copies)
+    (mp-scene-skins)
     )
   (none)
   )

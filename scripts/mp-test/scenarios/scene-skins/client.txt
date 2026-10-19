@@ -1,0 +1,19 @@
+# Outfits in cutscenes, guest side: plays Daxter (blue fur) for the host's first cutscene, then Jak for
+# the second.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+2 skin 10 2040ff 80
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 wait-scene
+52 log-scene-skins
+52.5 screenshot scene-daxter-player
+55 press triangle 100
+58 character 0
+64 wait-scene
+66 log-scene-skins
+66.5 screenshot scene-stock-daxter
+69 press triangle 100
+72 log
