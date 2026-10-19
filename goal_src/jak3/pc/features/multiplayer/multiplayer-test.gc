@@ -88,6 +88,7 @@
 (define-extern pc-mp-outline-pixels (function int))
 (define-extern pc-mp-dark-skin-draws (function int))
 (define-extern pc-mp-skin-draws (function int))
+(define-extern pc-mp-player-delay (function int int)) ;; the delay player n is drawn with (ms)
 
 ;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
 ;; (mp-test-update).
@@ -2464,7 +2465,9 @@
          (dotimes (i MP_MAX_PLAYERS)
            (let ((st (mp-remote-state i)))
              (if st
-                 (format 0 "[mp-test] ping player ~D ~D health ~,,1f/~,,1f~%" i (pc-mp-player-ping i) (-> st health) (-> st health-max))
+                 (format 0 "[mp-test] ping player ~D ~D health ~,,1f/~,,1f delay ~D~%" i (pc-mp-player-ping i) (-> st health)
+                         (-> st health-max) (pc-mp-player-delay i)
+                         )
                  )
              )
            )

@@ -390,6 +390,7 @@ void Remote::push(PlayerState s, double now) {
   // the fastest delivery. It may rise slowly so a lasting latency increase is followed.
   double offset = now - (double)s.time_ms;
   clock_offset = snaps.empty() ? offset : std::min(offset, clock_offset + 1.0);
+  jitter += (std::max(0.0, offset - clock_offset) - jitter) * 0.05;
   s.name[sizeof(s.name) - 1] = 0;
   s.level[sizeof(s.level) - 1] = 0;
   s.cont[sizeof(s.cont) - 1] = 0;
@@ -1440,6 +1441,7 @@ void Session::note_actor_clock(int source, double sent, double recv) {
   auto& est = m_actor_offset[source];
   est = !known ? offset : std::min(offset, est + 1.0);
   known = true;
+  m_actor_jitter[source] += (std::max(0.0, offset - est) - m_actor_jitter[source]) * 0.05;
 }
 
 double Session::offset_of(int source) const {
@@ -1451,8 +1453,16 @@ double Session::offset_of(int source) const {
                               : std::min(m_actor_offset[source], remote.clock_offset);
 }
 
+double Session::delay_of(int source) const {
+  if (source < 0 || source >= kMaxPlayers) {
+    return kInterpDelayMs;
+  }
+  double late = std::max(m_remotes[source].jitter, m_actor_jitter[source]);
+  return std::clamp(kMinDelayMs + 2.5 * late, kMinDelayMs, kMaxDelayMs);
+}
+
 double Session::drawn_time(int source, double now) const {
-  return now - offset_of(source) - kInterpDelayMs;
+  return now - offset_of(source) - delay_of(source);
 }
 
 void Session::add_pose(u32 id, const float* frame, const float* bones, int count, bool effects) {
@@ -2155,6 +2165,11 @@ u64 pc_mp_player_ping(u32 slot) {
   return (u64)(s64)mp::session().player_ping((s32)slot);
 }
 
+// (pc-mp-player-delay slot) -> the delay player `slot` and its objects are drawn with (ms).
+u64 pc_mp_player_delay(u32 slot) {
+  return (u64)(s64)mp::session().delay_of((s32)slot);
+}
+
 // (pc-mp-clock slot) -> tenths of a ms: this machine's clock for -1, else the time player `slot`'s
 // objects are drawn at now, in that player's clock (evidence lines of the test logs are stamped
 // with it).
@@ -2488,6 +2503,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-get-emitters", (void*)pc_mp_get_emitters);
   make_function_symbol_from_c("pc-mp-clock", (void*)pc_mp_clock);
   make_function_symbol_from_c("pc-mp-player-ping", (void*)pc_mp_player_ping);
+  make_function_symbol_from_c("pc-mp-player-delay", (void*)pc_mp_player_delay);
   make_function_symbol_from_c("pc-mp-outlines-drawn", (void*)pc_mp_outlines_drawn);
   make_function_symbol_from_c("pc-mp-outline-pixels", (void*)pc_mp_outline_pixels);
   make_function_symbol_from_c("pc-mp-dark-skin-draws", (void*)pc_mp_dark_skin_draws);

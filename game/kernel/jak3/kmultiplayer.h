@@ -32,6 +32,13 @@ constexpr u32 kProtocolVersion = 8;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
+// The delay a sender's player and objects are drawn with adapts to how late its messages come
+// (Session::delay_of), as the playout buffer of himstan's Jak and Daxter II Multiplayer
+// (game/multiplayer/platform/replication/snapshot_timeline.h, ISC): the object batch interval
+// (15 Hz) plus a margin plus 2.5 times the mean lateness, between kMinDelayMs and kMaxDelayMs.
+constexpr double kActorBatchMs = 1000.0 / 15.0;
+constexpr double kMinDelayMs = kActorBatchMs + 10.0;
+constexpr double kMaxDelayMs = 300.0;
 // Object batches (ACTORS, POSES) carry the sender clock in tenths of a millisecond (wraps after
 // 119 hours): the receiver's clock estimate and the blend between poses a frame apart need better
 // than the millisecond.
@@ -220,6 +227,7 @@ enum class Mode : s32 { Offline = 0, Connecting = 1, Client = 2, Host = 3 };
 struct Remote {
   std::deque<PlayerState> snaps;
   double clock_offset = 0;  // local ms minus sender ms, tracks the fastest delivery
+  double jitter = 0;        // mean lateness of its states behind the fastest delivery (ms)
   void clear() { snaps.clear(); }
   void push(PlayerState s, double now_ms);
   bool sample(double now_ms, PlayerState* out) const;
@@ -301,6 +309,10 @@ class Session {
   // Local ms minus `source`'s ms: the fastest delivery of its states and its batches alike, so its
   // puppet and its objects (the vehicle it drives) are drawn at the same moment.
   double offset_of(int source) const;
+ public:
+  // The delay player `source` and its objects are drawn with (ms), adapted to its lateness.
+  double delay_of(int source) const;
+ private:
   void drop(Peer& p, const std::string& reason);
   void refuse(Peer& p, const char* why);
   void receive_all(double now_ms);
@@ -328,6 +340,7 @@ class Session {
   // Per sender: local ms minus sender ms, for its actor batches (see Remote::clock_offset).
   std::array<double, kMaxPlayers> m_actor_offset{};
   std::array<bool, kMaxPlayers> m_actor_offset_known{};
+  std::array<double, kMaxPlayers> m_actor_jitter{};  // mean lateness of its object batches (ms)
   std::unordered_map<u32, PoseTrack> m_poses;
   std::vector<std::vector<u8>> m_pose_out;  // entries queued by add_pose, sent by send_poses
   float m_pose_frame[16] = {};              // frame of the last queued entry
