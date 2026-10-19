@@ -41,8 +41,9 @@ Daxter co-op duo with its own multiplayer save.
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
 - **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere. He
   fires every gun too: R1 fires the mod chosen with the D-pad, aimed at the nearest enemy ahead,
-  with the mod and its ammo shown at the bottom of the screen. He gets in vehicles and drives
-  them as Daxter.
+  with the mod and its ammo shown at the bottom of the screen. He holds the gun in his hands and
+  aims and fires it with the game's own Daxter animations, on every screen. He gets in vehicles
+  and drives them as Daxter.
 - **Every weapon:** a Mods menu option gives the gun with its twelve mods, their upgrades and full
   ammo, for Jak and for Daxter alike.
 - **See each other through walls:** a player hidden by a wall, a vehicle or anything else shows
@@ -63,7 +64,8 @@ Daxter co-op duo with its own multiplayer save.
   When players meet or part, the people and vehicles in front of you do not vanish at once: they
   leave when you look away, or fade out. Enemies killed, crates broken and pickups taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or L1 +
-  triangle to ride next to them when it has two seats (Daxter rides as Daxter). Guests can also
+  triangle to ride next to them when it has two seats, seated like the driver (Daxter rides as
+  Daxter). Guests can also
   take the host's traffic vehicles. The prompt shows the buttons, like the game's own. The
   shells and shots of vehicle guns show and hurt on every screen.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
@@ -180,8 +182,8 @@ task build-release-decomp
 
 ### 3. Asset Extraction
 - **Status:** Standard extraction sufficient.
-- **Details:** no custom asset. The mod only moves the playable-Daxter animations into the
-  always-loaded GAME package, which the normal build does.
+- **Details:** no custom asset. The mod only moves the playable-Daxter animations (on foot,
+  driving, holding the gun) into the always-loaded GAME package, which the normal build does.
 ```bash
 task extract
 ```

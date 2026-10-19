@@ -87,7 +87,7 @@
   "searchlight.o"
   "jak-pilot+0-ag.go"
   "jak-pilot-hcar+0-ag.go"
-  "jak-pilot-gun+0-ag.go"
+  ;; MOD multiplayer -- jak-pilot-gun+0-ag.go moved to GAME
   "tpage-127.go"
   "tpage-125.go"
   "tpage-128.go"

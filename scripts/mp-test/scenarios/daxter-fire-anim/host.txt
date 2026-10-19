@@ -1,0 +1,18 @@
+# Daxter's firing clips, host side: plays Jak and stands still, facing the guest (Daxter) who fires
+# at it: its puppet holds the gun and plays the firing clips on its upper body.
+1 enable
+1 name Host
+1 color 1
+1 cheat invuln
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55.5 look-player 1
+56.3 screenshot red-fire
+56.4 log-daxter-gun
+57.8 screenshot red-aim
+61.3 screenshot yellow-fire
+61.4 log-daxter-gun
+66.8 screenshot blue-fire
+66.9 log-daxter-gun
+71.3 screenshot dark-fire
+71.4 log-daxter-gun

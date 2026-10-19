@@ -467,9 +467,10 @@ Each is marked `MOD multiplayer`.
 | `game/kernel/jak3/kmachine.cpp` | `InitMachine_PCPort` registers the `pc-mp-*` functions. |
 | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | `game/CMakeLists.txt`, `test/CMakeLists.txt` | The new C++ file and its test. |
-| `goal_src/jak3/dgos/game.gd` | The five mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o`, `jak-indax+0-ag.go`, and `jak-pidax+0-ag.go` (Daxter's driving animations, for `pilot` with `as-daxter?`). |
+| `goal_src/jak3/dgos/game.gd` | The five mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o`, `jak-indax+0-ag.go`, `jak-pidax+0-ag.go` (Daxter's driving animations, for `pilot` with `as-daxter?`) and `jak-pilot-gun+0-ag.go` (Daxter holding and firing the gun, 4.8). |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
+| `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e` and `#x1550`-`#x155f` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard and the co-op pages. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls and colors) and `pc-merc-bits outline`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags (4.9). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
@@ -496,7 +497,8 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there. |
 | `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first; the art heap goes with its host level. |
 | `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world or in free roam; the co-op campaign's saves into its file (1.7). |
-| `target-gun-compute-pos` | `engine/target/target-gun.gc` | Where the gun is drawn: before Daxter, along his aim, while he fires (4.8). |
+| `target-gun-compute-pos` | `engine/target/target-gun.gc` | Where the gun is drawn: in Daxter's hand, opened to the mod, while he holds it (4.8). |
+| `joint-control-remap!` | `engine/anim/joint.gc` | The sidekick (Daxter's model in his mode) calls it after copying the player's clips: Daxter's clip holding the gun goes on his upper body there (4.8). |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -528,8 +530,11 @@ like `target-skel-group` does, the local outfit when that model is not loaded he
 (`skel-sidekick`), shows the body segments the remote player shows, and takes the remote player's
 exact pose (1.4). It also plays the remote player's animation by index, for the animation's
 effects and for the time before the first pose: a clip not loaded here falls back to the idle
-stance, or to the crouch for a driver or passenger. Its `mp-hurtbox` child sits in the actor hash,
-where the player's attacks look. A model change (character, outfit) respawns the puppet.
+stance, or to the crouch for a driver. A passenger sits (4.3). Daxter's puppet is never posed (his
+model has fewer bones than the player's skeleton the pose is taken from): it plays his clip by
+index, and his clip holding the gun on his upper body (`top-index`, `top-frame` in his state, 4.8).
+Its `mp-hurtbox` child sits in the actor hash, where the player's attacks look. A model change
+(character, outfit) respawns the puppet.
 
 The hurtbox is a `process-focusable` of kind crate, in the actor hash: its collide shape is made
 with `(collide-list-enum usually-hit-by-player)`, while the puppet's own `hit-by-others` shape is
@@ -577,10 +582,19 @@ from the old place to the new one, across the world.
   driving, from his state (`mp-playing-daxter?`).
 - **Ride (L1 + triangle, himstan's binding):** with a second seat no other player uses, from the
   ground (standing or crouched). An invisible `mp-seat` follows the driver's seat 1 and the player
-  rides it with the stock `target-grab-ride` state, or Daxter with `target-indax-grab`, placed at
-  the seat plus an offset (`mp-daxter-seat-offset`: 0.4 m up and 0.3 m back on a bike, 0.4 m back
-  in a car, adapted from the `daxter-seat-offsets` of himstan's `target-pilot.gc`). Each machine
-  draws the passenger in the driver's seat as it sees that vehicle.
+  rides it with the stock `target-grab-ride` state, or Daxter with `target-indax-grab`. Each
+  machine draws the passenger in the driver's seat as it sees that vehicle, facing its way (Jak's
+  `grab-ride` keeps the facing he got in with), our own model too (the others get its pose).
+- **Seated passengers** (`mp-seated-index`): the passenger's model plays the clips a driver of that
+  vehicle sits in (`target-pilot-stance`), steering straight (their middle frame), leaning neither
+  forward nor back (the forward clip and the back clip at the next index, half each): Jak's by
+  vehicle class (`jakb-pilot-bike-*` hover bikes, `jakb-pilot-car-*` hover cars,
+  `jakb-pilot-wcar-*` wasteland cars), Daxter's in every vehicle the clips he drives with
+  (`daxter-pidax-missile-turn-*`, resident). Both are placed from the seat point: Daxter's
+  `daxter-pilot-*` clips are not, they seat him next to Jak from Jak's shoulder. Jak's pilot clips
+  come with the levels that have vehicles; without them, Jak crouches and Daxter stands at the
+  seat plus an offset (`mp-daxter-seat-offset`: 0.4 m up and 0.3 m back on a bike, 0.4 m back in
+  a car, adapted from the `daxter-seat-offsets` of himstan's `target-pilot.gc`).
 - **Vehicle guns:** a vehicle's shells and shots are spawned under `*rigid-body-queue-manager*`
   with the vehicle as owner, not under the player: they are collected there too
   (`mp-collect-vehicle-shot`), and `mp-from-local-player?` follows owners (shot, explosion,
@@ -659,9 +673,22 @@ put away for him (`gun-type` 0) and `multiplayer-guns.gc` fires instead
   60-degree cone ahead (`fill-actor-list-for-box`, `find-nearest-focusable`, as
   `target-gun-find-track`), else straight ahead; the target found is the gun's tracked target
   for homing shots. `fire-point` is 0.6 m ahead, `fire-dir-out` the aim.
-- *The gun drawn:* `target-gun-compute-pos` (wrapped) puts the gun 0.6 m up and 0.35 m ahead
-  along the aim while he fires (2 s after R1 is let go), its barrel along the aim: the shots that
-  read the gun's joints fly right.
+- *The gun in his hand:* while he holds it (2 s after R1 is let go), `target-gun-compute-pos`
+  (wrapped, called by the gun's post) puts it at his gun joint (the sidekick's node 28) at that
+  joint's scale with `gun-daxter` 1, as the stock does when he fires from a vehicle, and sets the
+  gun's clip to the mod's open shape (`gun-idle-red-ja`...: the gun's `idle` state holds its folded
+  clip, and its post runs after its code). The gun's post hides it while the player is hidden,
+  which his mode is (`no-draw-bounds2`): the manager shows it again, after it (`*pc-pool*` runs
+  after the other pools).
+- *His clips:* the stock ones he fires from a vehicle with, by color: `daxter-pilot-gun-<color>-idle`
+  while he holds it, `-fire` from a shot for its length (looping while the vulcan fury, the arc
+  wielder or the needle lazer fire), from `jak-pilot-gun+0-ag`, moved to GAME. On his upper body
+  only (upper_body to the gun joint, 3-27, and the thumbs, 44-47): the sidekick copies the
+  player's clips then calls `joint-control-remap!` (wrapped), which adds a blend channel weighted 0
+  in the first sub-frame and 1 in the second, selects those joints (`interp-select`) and computes
+  the frame twice (`generate-frame-function` `create-interpolated2-joint-animation-frame`, as
+  `top-anim` does). His legs keep his mode's clip. The others draw the same on his puppet from
+  `top-index` and `top-frame`.
 - *Firing:* the stock per-mod functions (`target-gun-fire-yellow`, `-red`, `-blue`, `-dark`), as
   `target-gun-fire` calls them but without Jak's animations, the ammo taken as it takes it, at
   the stock rates; the vulcan fury and the needle lazer fire while R1 is held, the arc wielder
@@ -731,13 +758,14 @@ focused window. Default boot as `task boot-game`, `--retail` as `task boot-game-
 ### 5.3 Automated sessions
 
 ```bash
-python scripts/mp-test/run_mp_test.py <scenario> [--latency <ms>[:<jitter ms>]]
+python scripts/mp-test/run_mp_test.py <scenario> [--latency <ms>[:<jitter ms>]] [--loss <percent>] [--shot-size <w>x<h>]
 ```
 
 `--latency` holds what each instance receives that long, plus up to the jitter, before reading it,
 in order (`MP_TEST_LATENCY`, `Session::receive_all` in `kmultiplayer.cpp`), and `--loss <percent>`
 drops that share of the datagrams received (`MP_TEST_LOSS`): both instances run on one machine,
-these stand in for the network between two.
+these stand in for the network between two. `--shot-size` renders the screenshots at that size
+(`MP_TEST_SHOT_SIZE`, 1280x720 by default): 2560x1440 shows Daxter's hands from a few meters.
 
 `python scripts/mp-test/compare_poses.py` compares, after a `pose-all` run, the bones the host
 logged for its objects with those of their copies on the guest at the same moment: both log every
@@ -798,7 +826,9 @@ A script line is `<seconds> <command>`:
 | `log-ping` | Each player's round trip and health as the player list shows them, the list shown, and whether the game is paused. |
 | `look-player <slot>` | Face that player, the camera put 6 m behind us, 2 m up and 1.5 m aside on the line to it (`'teleport-to-vector-start-string`): a screenshot shows that player ahead. |
 | `log-outline` | Outlined models the renderer drew since boot, the pixels of fill and outline it drew last frame where walls hide players (`pc-mp-outline-pixels`), each player in the outline table with its color. |
-| `cheat weapons`, `daxter-mod <pickup-type>`, `log-daxter-gun` | Every weapon (Mods menu); the mod Daxter fires, as the D-pad sets it; Daxter's gun: out, mod, shots fired, ammo, aim, where the gun is drawn, the features. |
+| `cheat weapons`, `daxter-mod <pickup-type>`, `log-daxter-gun` | Every weapon (Mods menu); the mod Daxter fires, as the D-pad sets it; Daxter's gun: out, mod, shots fired, ammo, aim, the features, the gun's scale and state, its model's distance to his right hand, its draw status and clip, his clip holding it (index, frame), `gun-daxter`, the joints selected, the gun's distance to his gun joint; each other player's clip holding the gun as its state says. |
+| `log-seat` | Our model in a vehicle, in the vehicle's axes (x left, y up, z forward) from the seat point: as a passenger the model in the seat (its root, bone 3, its bones' extent, its clip), driving the model drawn (Daxter's in his mode) from the player's position. |
+| `log-joints`, `log-anim <daxter\|jak> <index>` | Daxter's joints (index, name, parent); the entry at that index of Daxter's or Jak's art group (a clip is loaded when it prints an `art-joint-anim`). |
 | `log-name` | The player name kept and the on-screen keyboard's text. |
 | `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered. |
 | `gun [pickup-type]`, `board` | Every gun mod unlocked with ammo, the gun out, the mod `pickup-type` picked (26 red 1 ... 31 yellow 3 ... 35 dark 1 ... 37 dark 3); the hoverboard unlocked with its zap, the player on it. |
@@ -826,7 +856,7 @@ Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcan
 | `npc-hit` | A guest's punch on a host NPC | The host applies both blows to its citizen (`player 1 hit ... punch`); in an earlier run the citizen struck back and the guest lost 2 health. |
 | `props`, `combat` | Daxter, gun, shots, impacts, emitters, laser | Daxter on the shoulder and the gun in the aiming pose on the remote puppet; the host's shots drawn on the guest as objects (2 copies), their impacts and the gun's emitters replayed; the gun's laser drawn from the gun's copy, ending on the ground where it points (screenshot). |
 | `vehicle` | A driven buggy, then stolen | Body and wheels replicated, its emitters (289 shown) and engine sound (932 updates played) on the guest; the driver is ejected and sees the thief's buggy. |
-| `ride` | Passenger seat (L1 + triangle) | The guest presses L1 + triangle beside the host's two-seat buggy and rides in it (`target-grab-ride`): carried 21.9 m, at most 1.14 m from the driver. |
+| `ride` | Passenger seat (L1 + triangle) | The guest presses L1 + triangle beside the host's two-seat buggy and rides in it (`target-grab-ride`): carried 21.9 m, at most 1.14 m from the driver. How passengers sit: `ride-seat`, `ride-seat-daxter` (round of 2026-10-19, afternoon). |
 | `crate` | A stack of crates broken by the host | The host breaks 4 (34 to 30 around it), the guest goes from 48 to 44. |
 | `pose` | The driver's pose (pilot animation), its dust and engine | The host's bones and their copy on the guest match within 5 mm (`log-pose`, 65 bones); 378 emitters shown and 1186 sounds played on the guest. |
 | `pose-all` | Every object type at the same moment: the player's model, NPC, Daxter, gun, buggy, wheel | `compare_poses.py`, about 60 samples each (122 for the player, on foot then driving), three runs: the player's model median 0.7 to 0.8 mm, largest 1.6 to 1.8 mm; a running NPC whose bones move 37 to 54 mm per frame, median 0.8 to 1.2 mm, largest 1.2 to 2.7 mm; Daxter 0.6 mm (1.0 mm); gun 0.2 mm; buggy 0.5 mm (1.1 mm); wheel 0.0 mm: the 1 mm steps of the wire format. Before the 0.1 ms clock, 6.7 mm at most; before every frame of the owner was logged, one sample at 18.9 mm (a 43 ms frame left a gap in the owner's samples, a measurement artifact). Two joints of the driver once read 1.5 m off: their matrix had `w` 0.9992 and the log read the translation alone, at 9.2 million units from the origin; the pose sent was right (traced in the runtime), the log now takes `w` in. |
@@ -894,6 +924,18 @@ pass, the reliable channel's under 20 % loss included): `smoke`, `pvp`, `join-wo
 | `player-list` | Health | The list gives each player's health (8/8) next to its ping (16 ms). |
 | `join-world --loss 10` | The world save over a lossy link | The 42928-byte world arrives whole: every check of `join-world` passes. |
 
+Round of 2026-10-19, afternoon (seated passengers, Daxter's firing animations; 20 scenarios,
+`check_results.py`: 157 checks passed, 0 failed, no crash): `smoke`, `daxter-fire`,
+`daxter-guns`, `ride`, `daxter-ride`, `daxter-drive`, `daxter-drive-own`, `coop`, `pose`,
+`guns-fx`, `vehicle-guns`, `outline`, `lobby`, `player-list`, `coop-campaign`, `drive` and
+`powers` as before (129 checks), and three players in each of:
+
+| Scenario | Checks | Result |
+|---|---|---|
+| `ride-seat` | Jak as a passenger, guest then host | The host drives a two-seat buggy, the guest rides in it; then the guest drives one and the host rides: each passenger in `target-grab-ride`, its model in the wasteland car clips (`jakb-pilot-wcar-turn-back` on channel 0) at the seat point, facing the vehicle's way (before: the facing it got in with, the same log 0.5 m apart from one run to the next); a third player beside the buggy (screenshot). Two runs. |
+| `ride-seat-daxter` | Daxter as a passenger, guest then host | The same with Daxters: each passenger in `target-indax-grab`, in Daxter's driving clips (`daxter-pidax-missile-turn-*`) at the seat point; its upper body (bone 3) 0.58 m above the seat, the Daxter driver's 0.51 m above his. Before: standing, 0.4 m behind the seat, hidden by its back. |
+| `daxter-fire-anim` | Daxter's clips holding the gun | Daxter fires a red, a yellow, a blue (held) and a dark mod 7 m from the host, the camera turned around him: his clips `daxter-pilot-gun-red-fire` (frame 5.2 after the shot), `-red-idle`, `-yellow-idle`, `-blue-fire` (looping), `-dark-fire`, then none once put away; upper body only (`interp-select` `#xf0000ffffff8`), `gun-daxter` 1, the gun at his gun joint and its model 0.16 to 0.26 m from his right hand, drawn (before: `no-draw`), opened to each mod's shape (`gun-idle-red` ...); the host draws his clip on his puppet; screenshots at 2560x1440 from behind, the side and the front. |
+
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
 passed, 0 failed, no crash):
@@ -923,10 +965,13 @@ passed, 0 failed, no crash):
 | ![The game mode list, six modes grayed out](multiplayer-screenshots/lobby-modes.jpg) | ![The lobby in free roam](multiplayer-screenshots/lobby-free-roam.jpg) |
 | ![The on-screen keyboard](multiplayer-screenshots/keyboard.jpg) | ![The player list with health and ping](multiplayer-screenshots/player-list-health.jpg) |
 | ![Co-op: Jak without Daxter on his shoulder, Daxter played by the other player](multiplayer-screenshots/coop-no-shoulder-daxter.jpg) | |
+| ![Two Jaks in a buggy: the host drives, the guest sits as a passenger](multiplayer-screenshots/passenger-seated-jak.jpg) | ![Two Daxters in a buggy: the host drives, the guest sits as a passenger](multiplayer-screenshots/passenger-seated-daxter.jpg) |
+| ![Daxter holding the scatter gun, from the side](multiplayer-screenshots/daxter-gun-aim.jpg) | ![Daxter firing the vulcan fury, from the front](multiplayer-screenshots/daxter-gun-fire.jpg) |
 
-The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the outline,
-Daxter's arc wielder, the lobby, the keyboard, the player list and the co-op one from the round of
-2026-10-19; `vehicle-prompt`, `remote-laser`, `remote-shot` and `join-*` from 2026-10-15; the others
+The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the seated
+passengers and Daxter holding the gun from the afternoon round of 2026-10-19 (`--shot-size
+2560x1440`, cropped); the outline, Daxter's arc wielder, the lobby, the keyboard, the player list
+and the co-op one from the round of 2026-10-19; `vehicle-prompt`, `remote-laser`, `remote-shot` and `join-*` from 2026-10-15; the others
 from earlier rounds.
 
 Over the Internet, the host forwards UDP port 7777 (or the port chosen) and guests use the host's
@@ -967,9 +1012,12 @@ public IP.
 - Text fields use the on-screen keyboard; a PC keyboard drives it as a controller (no typing).
 - Outlines show a player hidden by anything, our own player's model included, and a few pixels
   of a player's feet where they sink into the ground.
-- Daxter's gun is drawn in its holstered shape before him (the gun's `use` state, which shapes
-  each mod, would run Jak's gun code); his shots auto-aim at enemies, guards, civilians and
-  crates, not at players (as Jak's).
+- Daxter's shots leave from 0.6 m before his chest, not from the gun's muzzle, and auto-aim at
+  enemies, guards, civilians and crates, not at players (as Jak's). His clips holding the gun are
+  the ones he fires from a vehicle with (the scatter gun's throws his head back), on his upper
+  body over his running legs; the gun is Jak's size, as in the stock vehicles.
+- A Jak passenger sits in the driver's clip, hands forward as on a steering wheel (the game has no
+  passenger clip for Jak); without Jak's pilot clips (a level without vehicles), he crouches.
 - Six game modes of the list are placeholders (grayed out).
 - Free roam starts at Spargus; a guest's progress is the host's (it joins the host's world).
 - Co-op: one multiplayer campaign per host (a new campaign or a mission replaces it at its first
@@ -985,6 +1033,20 @@ public IP.
   stock pause rule is extended to other players as a safeguard (4.6).
 
 ## 7. Change log
+
+- **2026-10-19 (afternoon):** passengers seated, Daxter's firing animations.
+  - *Seated passengers.* A passenger, Jak or Daxter, host or guest, plays the clips a driver of
+    that vehicle sits in, steering straight and leaning neither way; Daxter's are the ones he
+    drives with, placed from the seat point (before: Jak crouched, Daxter stood). The passenger's
+    own model faces the vehicle's way (before: the way Jak faced when getting in) (4.3).
+  - *Daxter's firing animations.* He holds the gun in his hand, opened to the mod's shape (before:
+    not drawn, his mode hides the gun), and his upper body plays the stock clips he fires from a
+    vehicle with, aiming and firing by color, over his legs' clip, on every machine (the state
+    carries the clip, `top-index` and `top-frame`, in its former padding). `jak-pilot-gun+0-ag`
+    moved to GAME from four city levels (4.8).
+  - *Tests.* Scenarios `ride-seat`, `ride-seat-daxter`, `daxter-fire-anim` (three players: one
+    watches); commands `log-seat`, `log-joints`, `log-anim`; `log-daxter-gun` reports the gun in
+    his hand and his clips; `--shot-size`.
 
 - **2026-10-19:** the user's nine-point request.
   - *UDP.* The session runs over UDP: states, objects and poses unreliable (only newer than the

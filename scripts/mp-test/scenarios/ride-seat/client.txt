@@ -1,0 +1,16 @@
+# Seated passengers, guest side (Jak): rides in the host's buggy (screenshot of its own view), then
+# drives its own buggy with the host as the passenger.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+62 goto-player 0 0 3
+63 press l1+triangle 200
+67 screenshot riding
+67.5 log-seat
+68 log
+80 vehicle 13
+90 screenshot driver
+90.5 log-seat
+91 log

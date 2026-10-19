@@ -22,6 +22,7 @@
 #include <map>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -2327,11 +2328,20 @@ void pc_mp_test_pause(u32 on) {
   }
 }
 
-// (pc-mp-test-screenshot name) saves the next frame as <config>/screenshots/<name>.png.
+// (pc-mp-test-screenshot name) saves the next frame as <config>/screenshots/<name>.png, 1280x720 or
+// the size MP_TEST_SHOT_SIZE gives ("<width>x<height>").
 void pc_mp_test_screenshot(u32 name) {
   auto label = goal_string(name);
-  g_screen_shot_settings->width = 1280;
-  g_screen_shot_settings->height = 720;
+  int width = 1280;
+  int height = 720;
+  if (const char* size = std::getenv("MP_TEST_SHOT_SIZE")) {
+    if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width <= 0 || height <= 0) {
+      width = 1280;
+      height = 720;
+    }
+  }
+  g_screen_shot_settings->width = width;
+  g_screen_shot_settings->height = height;
   g_screen_shot_settings->msaa = 2;
   mp::copy_cstr(g_screen_shot_settings->name, sizeof(g_screen_shot_settings->name), label);
   g_want_screenshot = true;

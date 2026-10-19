@@ -46,7 +46,7 @@
   "glider-hud.o"
   "hanga-init.o"
   "jak-pilot-glider+0-ag.go"
-  "jak-pilot-gun+0-ag.go"
+  ;; MOD multiplayer -- jak-pilot-gun+0-ag.go moved to GAME
   "tpage-3030.go"
   "tpage-3031.go"
   "tpage-3029.go"

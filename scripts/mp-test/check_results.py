@@ -628,6 +628,47 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "his shots hurt the other player", len(kinds) >= 6 and len(taken) >= 6,
                 f"{len(taken)} hits taken, by {kinds}")
 
+    elif scenario in ("ride-seat", "ride-seat-daxter"):
+        daxter = scenario == "ride-seat-daxter"
+        riding = "target-indax-grab" if daxter else "target-grab-ride"
+        # Jak: the wasteland car clips (front 268, back 269 on channel 0); Daxter: his torpedo's (541, 542)
+        back = 542 if daxter else 269
+        for side, lines in (("guest", client), ("host", host)):
+            states = [st for (st,) in grab(lines, r"\] local pos \S+ \S+ \S+ hp \S+ state (\S+)")]
+            c.check(scenario, f"the {side} rides as passenger ({riding})", riding in states, f"{states}")
+            seat = grab(lines, r"seat passenger root " + " ".join([NUM] * 3) + r" anim (-?\d+)")
+            c.check(scenario, f"the {side} sits in the driver's seated clip, on the seat point",
+                    bool(seat) and int(seat[-1][3]) == back and max(abs(float(v)) for v in seat[-1][:3]) < 0.05,
+                    f"{seat[-1:]}")
+        if daxter:
+            # bone 3 (upper_body) of each Daxter, passenger or driver, as high above his seat point
+            sits = [float(y) for (y,) in grab(client + host, r"seat bone 3 \S+ " + NUM)]
+            drives = grab(host + client, r"seat driver root .* anim (\d+)")
+            c.check(scenario, "the driver sits in his torpedo's clips too", bool(drives) and all(int(a) == back for (a,) in drives),
+                    f"{drives}")
+            c.check(scenario, "both Daxters sit at one height (bone 3 within 0.15 m)",
+                    len(sits) >= 3 and max(sits) - min(sits) < 0.15, f"bone 3 heights {sits}")
+
+    elif scenario == "daxter-fire-anim":
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
+        clips = [(int(i), float(f)) for i, f in grab(client, r"daxter-gun clip (-?\d+) frame " + NUM)]
+        seen = [i for i, _ in clips]
+        # red fire / aim, yellow aim (its shot is short), blue fire held, dark fire, put away
+        c.check(scenario, "his clips: red fire, red aim, yellow, blue fire, dark fire, then none",
+                len(seen) == 6 and seen[0] == 312 and seen[1] == 308 and seen[2] in (310, 313)
+                and seen[3] == 296 and seen[4] == 314 and seen[5] == -1, f"{clips}")
+        sel = grab(client, r"daxter-gun clip \S+ frame \S+ daxter " + NUM + r" select #x(\w+) hand " + NUM)
+        held = [x for x in sel if x[1] != "0"]
+        c.check(scenario, "upper body only, gun at his gun joint (gun-daxter 1)",
+                bool(held) and all(x[1] == "f0000ffffff8" and float(x[0]) == 1.0 and float(x[2]) < 0.01 for x in held),
+                f"{sel}")
+        model = [(float(d), int(st, 16)) for d, st in grab(client, r"daxter-gun model " + NUM + r" from his right hand, status #x(\w+)")]
+        c.check(scenario, "the gun model drawn in his hand while held",
+                len(model) >= 5 and all(d < 0.4 for d, _ in model[:5]), f"{model}")
+        remote = grab(host, r"daxter-gun player 1 clip (\d+)")
+        c.check(scenario, "the host sees his clip on his upper body", bool(remote), f"{remote}")
+
     elif scenario == "outline":
         px = [int(v) for (v,) in grab(client, r"outlines drawn \d+ hidden pixels (\d+)")]
         table = grab(client, r"outline player 0 color (\S+)")

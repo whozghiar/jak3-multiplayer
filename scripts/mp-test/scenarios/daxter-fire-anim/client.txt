@@ -1,0 +1,35 @@
+# Daxter's firing clips, guest side: plays Daxter, takes every weapon, faces the host 7 m away and
+# fires a red, a yellow, a blue (held) and a dark mod; screenshots of its own view while firing, the
+# camera turned around Daxter (right stick) to see him from the side, then from the front.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 cheat weapons
+52.2 cheat invuln
+54 goto-player 0 7
+54.5 look-player 0
+54.7 stick-r 255 128 700
+55 daxter-mod 26
+56 press r1 200
+56.3 screenshot red-fire
+56.4 log-daxter-gun
+57.8 screenshot red-aim
+57.9 log-daxter-gun
+58.5 screenshot red-aim-side
+58.8 stick-r 255 128 700
+60 daxter-mod 29
+61 press r1 200
+61.3 screenshot yellow-fire
+61.4 log-daxter-gun
+65 daxter-mod 32
+66 press r1 1500
+66.8 screenshot blue-fire
+66.9 log-daxter-gun
+70 daxter-mod 35
+71 press r1 200
+71.3 screenshot dark-fire
+71.4 log-daxter-gun
+75 log-daxter-gun

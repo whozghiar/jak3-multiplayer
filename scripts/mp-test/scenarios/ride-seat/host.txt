@@ -1,0 +1,17 @@
+# Seated passengers, host side (Jak): drives a two-seat buggy (v-snake) and stands still while the
+# guest sits in it as a passenger; gets out, then rides in the guest's buggy as the passenger.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 13
+62 screenshot driver
+62.5 log-seat
+63 log
+75 press triangle 300
+85 goto-player 1 0 3
+85.3 press l1+triangle 200
+90 screenshot riding
+90.5 log-seat
+91 log

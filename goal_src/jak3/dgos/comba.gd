@@ -25,7 +25,7 @@
   "jak-pilot+0-ag.go"
   "jak-pilot-hcar+0-ag.go"
   "jak-pilot-wcar+0-ag.go"
-  "jak-pilot-gun+0-ag.go"
+  ;; MOD multiplayer -- jak-pilot-gun+0-ag.go moved to GAME
   "tpage-2431.go"
   "tpage-1577.go"
   "tpage-2889.go"

@@ -11,10 +11,12 @@
 ;;     gun-off, and the gun's own `use` state runs target-gun-check, which pushes Jak's gun
 ;;     animations onto the player's skeleton. So the stock gun stays put away, and this file fires
 ;;     for Daxter: R1 fires the mod chosen with the D-pad (the stock marking menu sets
-;;     using-gun-type in his mode too), from the gun held before him and aimed at the nearest
-;;     target ahead, through the stock fire functions of each mod (target-gun-fire-yellow ...). The
-;;     wave concussor and the peace maker charge in processes whose stock code gives up at once in
-;;     Daxter's mode: Daxter fires subtypes of them without that check.
+;;     using-gun-type in his mode too), aimed at the nearest target ahead, through the stock fire
+;;     functions of each mod (target-gun-fire-yellow ...). The wave concussor and the peace maker
+;;     charge in processes whose stock code gives up at once in Daxter's mode: Daxter fires
+;;     subtypes of them without that check. He holds the gun in his hand, opened to the mod's
+;;     shape, and his upper body plays the stock clips he fires from a vehicle with
+;;     (daxter-pilot-gun-*, resident: jak-pilot-gun+0-ag is in GAME), over his legs' clip.
 
 ;; ------------------------------------------------------------------------------------------------
 ;; Every weapon
@@ -73,6 +75,8 @@
    (charge    handle)     ;; wave concussor or peace maker charging
    (arc?      symbol)     ;; arc wielder firing: its tracker reads using-gun-type and active?
    (shots     int32)      ;; shots fired (test log)
+   (top-index int32)      ;; his clip holding the gun (index in his art group), -1 when put away
+   (top-frame float)      ;; its frame
    (aim       vector :inline) ;; direction fired
    (pose      matrix :inline) ;; where the gun is drawn
    )
@@ -82,6 +86,7 @@
 (set! (-> *mp-daxter-gun* out?) #f)
 (set! (-> *mp-daxter-gun* arc?) #f)
 (set! (-> *mp-daxter-gun* charge) (the-as handle #f))
+(set! (-> *mp-daxter-gun* top-index) -1)
 
 (defun mp-gun-mod-owned? ((type int))
   "#t when `type` is a gun mod (pickup-type 26-37) the player has: its feature bit is type - 20."
@@ -129,23 +134,156 @@
     )
   )
 
+(defun mp-daxter-gun-clip ((type int) (fire? symbol))
+  "Index in Daxter's art group of his clip holding mod `type` (pickup-type 26-37): firing it when
+   `fire?`, else aiming it. The clips of his color (art-elts.gc)."
+  (cond
+    ((<= type 28)
+     (if fire? 312 308) ;; daxter-pilot-gun-red-fire-ja, daxter-pilot-gun-red-idle-ja
+     )
+    ((<= type 31)
+     (if fire? 313 310) ;; daxter-pilot-gun-yellow-fire-ja, daxter-pilot-gun-yellow-idle-ja
+     )
+    ((<= type 34)
+     (if fire? 296 311) ;; daxter-pilot-gun-blue-fire-ja, daxter-pilot-gun-blue-idle-ja
+     )
+    (else
+      (if fire? 314 309) ;; daxter-pilot-gun-dark-fire-ja, daxter-pilot-gun-dark-idle-ja
+      )
+    )
+  )
+
+(defun mp-gun-shape-clip ((type int))
+  "Index in the gun's art group of its clip opened to mod `type` (gun-idle-red-ja ..., the clips its
+   `use` state holds; art-elts.gc)."
+  (case type
+    ((26) 13) ((27) 14) ((28) 15)
+    ((29) 19) ((30) 20) ((31) 21)
+    ((32) 22) ((33) 23) ((34) 24)
+    ((35) 16) ((36) 17) (else 18)
+    )
+  )
+
+(defbehavior mp-daxter-gun-clips target ()
+  "Daxter's clip holding the gun this frame, in *mp-daxter-gun* top-index and top-frame: the mod's
+   firing clip from its start for its length after a shot (looping while the vulcan fury, the arc
+   wielder or the needle lazer fire), else its aiming clip. -1 when not loaded."
+  (let* ((dg *mp-daxter-gun*)
+         (type (-> dg gun-type))
+         (ag (-> self sidekick 0 draw art-group))
+         (fire (-> ag data (mp-daxter-gun-clip type #t)))
+         (aim (-> ag data (mp-daxter-gun-clip type #f)))
+         ;; frames at 60 per second times the clip's speed, as num-func-seek! steps them
+         (since (/ (the float (- (current-time) (-> dg fire-time))) 5.0))
+         )
+    (set! (-> dg top-index) -1)
+    (when (and fire aim (type? fire art-joint-anim) (type? aim art-joint-anim))
+      (let ((fire-len (the float (+ (-> (the-as art-joint-anim fire) frames num-frames) -1)))
+            (fire-at (* since (-> (the-as art-joint-anim fire) speed)))
+            )
+        (cond
+          ((and (>= type 32) (<= type 34) (cpad-hold? 0 r1))
+           (set! (-> dg top-index) (mp-daxter-gun-clip type #t))
+           (set! (-> dg top-frame) (- fire-at (* fire-len (the float (the int (/ fire-at fire-len))))))
+           )
+          ((< fire-at fire-len)
+           (set! (-> dg top-index) (mp-daxter-gun-clip type #t))
+           (set! (-> dg top-frame) fire-at)
+           )
+          (else
+            (set! (-> dg top-index) (mp-daxter-gun-clip type #f))
+            (set! (-> dg top-frame) 0.0)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-daxter-upper-body! ((jc joint-control) (anim art-joint-anim) (frame float))
+  "Play `anim` at `frame` on Daxter's upper body only, over the clips `jc` holds: an extra blend
+   channel, at full weight in the sub-frame of the joints selected (interp-select), at none in the
+   other. Clearing interp-select afterwards ends it."
+  (when (< (-> jc active-channels) (-> jc allocated-length))
+    (let ((ch (-> jc channel (-> jc active-channels))))
+      (set! (-> ch parent) jc)
+      (set! (-> ch command) (joint-control-command blend))
+      (set! (-> ch frame-group) anim)
+      (set! (-> ch num-func) num-func-identity)
+      (set! (-> ch frame-num) (fmax 0.0 (fmin frame (the float (+ (-> anim frames num-frames) -1)))))
+      (set! (-> ch frame-interp 0) 0.0)
+      (set! (-> ch frame-interp 1) 1.0)
+      )
+    (+! (-> jc active-channels) 1)
+    (set! (-> jc interp-select 0) MP_DAXTER_UPPER_BODY)
+    (set! (-> jc interp-select 1) 0)
+    ;; the frame is computed twice, then each joint takes its sub-frame (with no joint selected, the
+    ;; plain computation runs instead)
+    (set! (-> jc generate-frame-function) create-interpolated2-joint-animation-frame)
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- Daxter's clips (engine/anim/joint.gc): the sidekick, which draws Daxter in his
+;; mode, copies the player's channels every frame then calls this. While he holds the gun, his upper
+;; body plays his clip holding it, over the copied ones.
+(define-perm *mp-stock-joint-control-remap!* (function joint-control art-group art-group pair int string symbol) joint-control-remap!)
+
+(defun joint-control-remap! ((jc joint-control)
+                    (dst-art-group art-group)
+                    (parent-art-group art-group)
+                    (remap-list pair)
+                    (seed int)
+                    (prefix string)
+                    )
+  "Stock, then for the local player's Daxter (multiplayer mod): his clip holding the gun on his upper
+   body while he holds it in his mode (mp-daxter-upper-body!), no joint selection otherwise (also on
+   Jak's shoulder)."
+  (let ((ret (*mp-stock-joint-control-remap!* jc dst-art-group parent-art-group remap-list seed prefix)))
+    (when (and *target* (nonzero? (-> *target* sidekick)) (= jc (-> *target* sidekick 0 skel)))
+      (let* ((dg *mp-daxter-gun*)
+             (anim (if (and (focus-test? *target* indax) (-> dg out?) (>= (-> dg top-index) 0))
+                       (-> dst-art-group data (-> dg top-index))
+                       )
+                   )
+             )
+        (if anim
+            (mp-daxter-upper-body! jc (the-as art-joint-anim anim) (-> dg top-frame))
+            (set! (-> jc interp-select 0) 0)
+            )
+        )
+      )
+    ret
+    )
+  )
+
 ;; MOD multiplayer -- where the gun is drawn (engine/target/target-gun.gc; the gun's post calls it
-;; every frame): held before Daxter, along his aim, while he fires; the stock place otherwise.
+;; every frame, as the player): in Daxter's hand while he holds it; the stock place otherwise.
 (define-perm *mp-stock-target-gun-compute-pos* (function matrix :behavior target) target-gun-compute-pos)
 
 (defbehavior target-gun-compute-pos target ()
-  "Stock, except for Daxter firing (multiplayer mod): the gun 0.6 m up, 0.35 m ahead along his aim."
+  "Stock, except while Daxter holds the gun (multiplayer mod): at his gun joint, at its scale, as the
+   stock places it when he fires from a vehicle (gun-daxter 1), opened to the mod's shape."
   (cond
-    ((and (-> *mp-daxter-gun* out?) (= self *target*) (focus-test? self indax))
+    ((and (-> *mp-daxter-gun* out?) (= self *target*) (focus-test? self indax) (>= (-> *mp-daxter-gun* top-index) 0))
      (let ((gun (-> self gun))
-           (aim (-> *mp-daxter-gun* aim))
+           (hand (-> self sidekick 0 node-list data 28 bone transform))
+           (proc (the-as process-drawable (ppointer->process (-> self gun gun))))
            )
-       (vector+float*! (-> gun gun-pos trans) (-> self control trans) *up-vector* (meters 0.6))
-       (vector+float*! (-> gun gun-pos trans) (-> gun gun-pos trans) aim (meters 0.35))
-       (quaternion-look-at! (-> gun gun-pos quat) aim *up-vector*)
-       (vector-copy! (-> gun gun-pos scale) (-> self control scale))
-       (quaternion->matrix (-> *mp-daxter-gun* pose) (-> gun gun-pos quat))
-       (vector-copy! (-> *mp-daxter-gun* pose trans) (-> gun gun-pos trans))
+       (matrix->transformq (-> gun gun-pos) hand)
+       (matrix->scale hand (-> gun gun-pos scale))
+       (set! (-> gun gun-daxter) 1.0)
+       ;; the gun's idle state holds its folded clip: its post (after its code) opens it to the mod
+       (when (and proc (> (-> proc skel active-channels) 0))
+         (let ((shape (-> proc draw art-group data (mp-gun-shape-clip (-> *mp-daxter-gun* gun-type)))))
+           (when (and shape (type? shape art-joint-anim))
+             (joint-control-channel-group! (-> proc skel root-channel 0) (the-as art-joint-anim shape) num-func-identity)
+             (set! (-> proc skel root-channel 0 frame-num) 0.0)
+             )
+           )
+         )
+       (matrix-copy! (-> *mp-daxter-gun* pose) hand)
        (-> *mp-daxter-gun* pose)
        )
      )
@@ -477,6 +615,9 @@
       (set! (-> dg arc?) #f)
       )
     (set! (-> dg out?) #f)
+    (set! (-> dg top-index) -1)
+    ;; the gun back to the stock place (his mode skips target-gun-joint-points, which sets it)
+    (set! (-> self gun gun-daxter) 0.0)
     ;; the ranges set again when it comes out (Jak's gun may have changed them meanwhile)
     (set! (-> dg gun-type) 0)
     )
@@ -541,6 +682,7 @@
                  (mp-daxter-gun-shoot type)
                  )
                 )
+              (mp-daxter-gun-clips)
               (if (and (not held?) (time-elapsed? (-> dg out-time) (seconds 2)))
                   (mp-daxter-gun-put-away)
                   )
@@ -566,9 +708,26 @@
         )
       )
     )
-  (if (and (-> *mp-daxter-gun* out?) (not (and *target* (focus-test? *target* indax))))
-      (set! (-> *mp-daxter-gun* out?) #f)
+  (when (and (-> *mp-daxter-gun* out?) (not (and *target* (focus-test? *target* indax))))
+    (set! (-> *mp-daxter-gun* out?) #f)
+    (set! (-> *mp-daxter-gun* top-index) -1)
+    )
+  ;; the gun's post hides it while the player is hidden (his mode hides Jak's model): the manager
+  ;; runs after the player's processes (*pc-pool* runs last), so the gun is drawn in his hand
+  (when (and (-> *mp-daxter-gun* out?) (>= (-> *mp-daxter-gun* top-index) 0))
+    (let ((gun (the-as process-drawable (ppointer->process (-> *target* gun gun)))))
+      (if gun
+          (logclear! (-> gun draw status) (draw-control-status no-draw))
+          )
       )
+    )
+  ;; the others draw the clip on our Daxter's upper body (mp-puppet-update)
+  (set! (-> *mp-local* top-index) (if (-> *mp-daxter-gun* out?)
+                                      (-> *mp-daxter-gun* top-index)
+                                      -1
+                                      )
+        )
+  (set! (-> *mp-local* top-frame) (-> *mp-daxter-gun* top-frame))
   (none)
   )
 

@@ -73,8 +73,9 @@ struct PlayerState {
   u8 lobby_mode;        // 194 host: game mode chosen in the lobby
   u8 lobby_start;       // 195 host: co-op start (new campaign, continue, mission)
   s16 lobby_mission;    // 196 host: co-op mission chosen
-  u16 pad2;             // 198
-  u32 pad1[2];          // 200
+  s16 top_index;        // 198 Daxter's gun clip on his upper body (art group index), -1 = none
+  float top_frame;      // 200 its frame
+  u32 pad1;             // 204
 };
 static_assert(sizeof(PlayerState) == 208, "PlayerState must match mp-player-state");
 

@@ -46,6 +46,9 @@
 ;;   log-vehicles                                            every vehicle within 30 m of us, ours and copies
 ;;   log-ping                                                players' round trip to the host and health, list shown, paused
 ;;   log-name | log-session                                  name and keyboard; game started (free roam, campaign), unlocks
+;;   log-anim <daxter|jak> <index>                           the art group entry there (a clip is loaded when shown)
+;;   log-seat                                                our model as a passenger: root and bones from the seat
+;;   log-joints                                              Daxter's joints, index and name
 ;;   coop-start <0|1|2> [n]                                  co-op starts a new campaign, continues it, or the n-th mission
 ;;   log-outline                                             outlined players drawn through walls (renderer count, table)
 ;;   spawn-vehicle <type>                                    an empty vehicle 3 m in front of us
@@ -374,6 +377,81 @@
               (- (-> pos z) (-> root z))
               )
             )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-test-log-seat ()
+  "Where our model sits (log-seat): its root and its bones' extent, relative to the seat point, in
+   the vehicle's axes (x left, y up, z forward), as this machine draws it. As a passenger, the model
+   in the seat; driving, the one drawn (Daxter's in his mode) from the player's position."
+  (let* ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+         (riding? (>= *mp-ride-slot* 0))
+         (driver (if riding?
+                     (mp-remote-state *mp-ride-slot*)
+                     *mp-local*
+                     )
+                 )
+         (proc (the-as process-drawable (cond
+                                          ((not *target*)
+                                           #f
+                                           )
+                                          (riding?
+                                           (if manager
+                                               (handle->process (-> manager self-puppet))
+                                               )
+                                           )
+                                          ((not (logtest? (-> *mp-local* flags) (mp-flag driving)))
+                                           #f
+                                           )
+                                          ((mp-playing-daxter? *target*)
+                                           (ppointer->process (-> *target* sidekick))
+                                           )
+                                          (else
+                                            *target*
+                                            )
+                                          )
+                       )
+               )
+         (seat (if riding?
+                   (-> driver seat-trans)
+                   (-> *mp-local* trans)
+                   )
+               )
+         )
+    (cond
+      ((not (and proc driver (nonzero? (-> proc node-list))))
+       (format 0 "[mp-test] seat none~%")
+       )
+      (else
+        (let ((inv (quaternion-conjugate! (new 'stack-no-clear 'quaternion) (-> driver veh-quat)))
+              (lo (new 'stack 'vector))
+              (hi (new 'stack 'vector))
+              (v (new 'stack-no-clear 'vector))
+              (nodes (-> proc node-list))
+              )
+          (vector-! v (-> proc root trans) seat)
+          (vector-orient-by-quat! v v inv)
+          (format 0 "[mp-test] seat ~A root ~m ~m ~m anim ~D~%" (if riding? 'passenger 'driver) (-> v x) (-> v y) (-> v z) (mp-anim-index proc))
+          (set-vector! lo 1000000.0 1000000.0 1000000.0 1.0)
+          (set-vector! hi -1000000.0 -1000000.0 -1000000.0 1.0)
+          (dotimes (i (-> nodes length))
+            (when (>= i 3)
+              (vector-! v (-> nodes data i bone transform trans) seat)
+              (vector-orient-by-quat! v v inv)
+              (dotimes (k 3)
+                (set! (-> lo data k) (fmin (-> lo data k) (-> v data k)))
+                (set! (-> hi data k) (fmax (-> hi data k) (-> v data k)))
+                )
+              (when (= i 3)
+                (format 0 "[mp-test] seat bone 3 ~m ~m ~m~%" (-> v x) (-> v y) (-> v z))
+                )
+              )
+            )
+          (format 0 "[mp-test] seat bones x ~m ~m y ~m ~m z ~m ~m~%" (-> lo x) (-> hi x) (-> lo y) (-> hi y) (-> lo z) (-> hi z))
           )
         )
       )
@@ -1077,6 +1155,14 @@
   (none)
   )
 
+(defun mp-test-clip-skel ((who string))
+  "The model `who` names (log-anim): \"daxter\" (the sidekick, whose model Daxter's mode draws), else Jak's."
+  (if (string= who "daxter")
+      (mp-character-skel #t 0)
+      (mp-character-skel #f (mp-local-outfit))
+      )
+  )
+
 (defun mp-test-face-player ((slot int))
   "Turn the player toward a remote player."
   (let ((st (mp-remote-state slot)))
@@ -1239,6 +1325,41 @@
                        )
                )
              )
+           )
+         )
+        ((string= cmd "log-seat")
+         (mp-test-log-seat)
+         )
+        ((string= cmd "log-joints")
+         ;; log-joints: Daxter's joints (the sidekick's skeleton): index, name, parent
+         (let ((dax (if *target*
+                        (the-as process-drawable (ppointer->process (-> *target* sidekick)))
+                        )
+                    )
+               )
+           (when dax
+             (let ((jgeo (-> dax draw jgeo)))
+               (dotimes (i (-> jgeo length))
+                 (format 0 "[mp-test] joint ~D ~S parent ~S~%" i (-> jgeo data i name)
+                         (if (-> jgeo data i parent) (-> jgeo data i parent name) "none")
+                         )
+                 )
+               )
+             )
+           )
+         )
+        ((string= cmd "log-anim")
+         ;; log-anim <daxter|jak> <index>: the element at that index of the model's art group (a clip
+         ;; is loaded when it is an art-joint-anim)
+         (mp-test-word)
+         (let* ((sg (mp-test-clip-skel (-> *mp-test* word)))
+                (ag (art-group-get-by-name *level* (-> sg art-group-name) (the-as (pointer level) #f)))
+                (index (mp-test-int))
+                )
+           (if (and ag (< index (-> ag length)))
+               (format 0 "[mp-test] anim ~S ~D ~A~%" (-> sg art-group-name) index (-> ag data index))
+               (format 0 "[mp-test] anim ~S ~D none~%" (-> sg art-group-name) index)
+               )
            )
          )
         ((string= cmd "log-name")
@@ -1600,6 +1721,42 @@
                      (vector-vector-distance (-> *target* gun gun-pos trans) (-> *target* control trans))
                      (-> *game-info* features)
                      )
+             ;; his clip holding the gun (upper body), and the gun to his hand (the sidekick's gun joint)
+             (let ((gp (the-as process-drawable (ppointer->process (-> *target* gun gun)))))
+               (format 0 "[mp-test] daxter-gun scale ~,,2f state ~A~%"
+                       (-> *target* gun gun-pos scale x)
+                       (if gp
+                           (-> gp next-state name)
+                           )
+                       )
+               ;; the gun model: where it is drawn from his right hand, its draw status, its clip
+               (when (and gp (nonzero? (-> *target* sidekick)))
+                 (format 0 "[mp-test] daxter-gun model ~,,2m from his right hand, status #x~X clip ~A~%"
+                         (vector-vector-distance (-> gp root trans) (-> *target* sidekick 0 node-list data 23 bone transform trans))
+                         (-> gp draw status)
+                         (if (> (-> gp skel active-channels) 0) (-> gp skel root-channel 0 frame-group))
+                         )
+                 )
+               )
+             (format 0 "[mp-test] daxter-gun clip ~D frame ~,,1f daxter ~,,2f select #x~X hand ~,,2m~%"
+                     (-> dg top-index) (-> dg top-frame) (-> *target* gun gun-daxter)
+                     (if (nonzero? (-> *target* sidekick)) (-> *target* sidekick 0 skel interp-select 0) 0)
+                     (if (nonzero? (-> *target* sidekick))
+                         (vector-vector-distance
+                           (-> *target* gun gun-pos trans)
+                           (-> *target* sidekick 0 node-list data 28 bone transform trans)
+                           )
+                         -1.0
+                         )
+                     )
+             )
+           ;; the clip each other player's Daxter holds the gun with, as its state says
+           (dotimes (i MP_MAX_PLAYERS)
+             (let ((st (mp-remote-state i)))
+               (if (and st (>= (-> st top-index) 0))
+                   (format 0 "[mp-test] daxter-gun player ~D clip ~D frame ~,,1f~%" i (-> st top-index) (-> st top-frame))
+                   )
+               )
              )
            )
          )

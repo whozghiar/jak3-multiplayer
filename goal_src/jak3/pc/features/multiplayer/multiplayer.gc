@@ -123,8 +123,9 @@
    (lobby-mode uint8)      ;; host: game mode chosen in the lobby (config mode: 0 free roam, 1 co-op)
    (lobby-start uint8)     ;; host: co-op start (mp-session-state coop-start)
    (lobby-mission int16)   ;; host: game-task of the co-op mission chosen, -1 none
-   (pad2       uint16)
-   (pad1       uint32 2)
+   (top-index  int16)      ;; Daxter's gun clip on his upper body, index in his art group, -1 none
+   (top-frame  float)      ;; its frame
+   (pad1       uint32)
    )
   :size-assert #xd0
   )
@@ -429,16 +430,94 @@
   (or (= state 'target-grab-ride) (= state 'target-indax-grab))
   )
 
-;; Where Daxter sits as a passenger, from the seat point in the vehicle's frame: above and behind it
-;; on a bike, behind it in a car. Values adapted from the daxter-seat-offsets of himstan's Jak and
-;; Daxter II Multiplayer (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer,
+;; The clips a driver sits in (target-pilot-stance, pilot-states.gc): leaning forward, then back at
+;; the next index, blended by how the vehicle pitches; frames steer. In jakb-ag for Jak by vehicle
+;; class, in daxter-ag for Daxter, who drives every vehicle in the clips of his torpedo, resident
+;; (jak-pidax+0-ag is in GAME) and placed from the seat point (his daxter-pilot-* clips sit him
+;; next to Jak, from Jak's shoulder). Indices: art-elts.gc.
+(defconstant MP_SEATED_BIKE 240)   ;; jakb-pilot-bike-turn-front-ja (hover bikes, rider-stance 0)
+(defconstant MP_SEATED_CAR 233)    ;; jakb-pilot-car-turn-front-ja (hover cars, rider-stance 1)
+(defconstant MP_SEATED_WCAR 268)   ;; jakb-pilot-wcar-turn-front-ja (wasteland cars, rider-stance 2)
+(defconstant MP_SEATED_DAXTER 541) ;; daxter-pidax-missile-turn-front-ja
+
+;; Daxter's joints his clips holding the gun move (multiplayer-guns.gc): upper_body to the gun joint
+;; (3-27) and the thumbs (44-47), one bit per joint of his skeleton (interp-select,
+;; create-interpolated2-joint-animation-frame). His legs keep the clip of his mode.
+(defconstant MP_DAXTER_UPPER_BODY #xf0000ffffff8)
+
+(defun mp-ride-driver ((st mp-player-state))
+  "The state of the player driving the vehicle the passenger `st` rides in; #f when `st` does not
+   ride or that player no longer drives."
+  (when (logtest? (-> st flags) (mp-flag riding))
+    (let ((driver (if (= (-> st ride-slot) *mp-local-slot*)
+                      *mp-local*
+                      (mp-remote-state (-> st ride-slot))
+                      )
+                  )
+          )
+      (if (and driver (logtest? (-> driver flags) (mp-flag driving)))
+          (return driver)
+          )
+      )
+    )
+  (the-as mp-player-state #f)
+  )
+
+(defun mp-seated-index ((ag art-group) (daxter? symbol) (vtype int))
+  "Where, in art group `ag`, the clips a passenger of a vehicle of type `vtype` sits in start: the
+   leaning-forward clip a driver of that vehicle sits in, Daxter's when `daxter?`, the leaning-back
+   one next. -1 when they are not loaded here (Jak's pilot clips come with the levels that have
+   vehicles)."
+  (let* ((idx (cond
+                (daxter?
+                 MP_SEATED_DAXTER
+                 )
+                ((or (and (>= vtype 0) (<= vtype 2)) (= vtype 6))
+                 MP_SEATED_BIKE
+                 )
+                ((>= vtype 12)
+                 MP_SEATED_WCAR
+                 )
+                (else
+                  MP_SEATED_CAR
+                  )
+                )
+              )
+         (front (if (< (+ idx 1) (-> ag length))
+                    (-> ag data idx)
+                    )
+                )
+         (back (if front
+                   (-> ag data (+ idx 1))
+                   )
+               )
+         )
+    (if (and front back (type? front art-joint-anim) (type? back art-joint-anim))
+        (return idx)
+        )
+    )
+  -1
+  )
+
+;; Where Daxter stands as a passenger when his seated clips are not loaded, from the seat point in
+;; the vehicle's frame: above and behind it on a bike, behind it in a car. Values adapted from the
+;; daxter-seat-offsets of himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer,
 ;; goal_src/jak2/levels/city/common/target-pilot.gc, ISC license).
-(defun mp-daxter-seat-offset ((vtype int) (quat quaternion) (out vector))
-  "Daxter's offset from a passenger seat of a vehicle of type `vtype` turned by `quat`, in `out`."
-  (if (or (and (>= vtype 0) (<= vtype 2)) (= vtype 6))
-      (set-vector! out 0.0 (meters 0.4) (meters -0.3) 1.0)
+(defun mp-daxter-seat-offset ((vtype int) (quat quaternion) (out vector) (seated? object))
+  "Daxter's offset from a passenger seat of a vehicle of type `vtype` turned by `quat`, in `out`:
+   none when he sits in his driving clips (`seated?`, see mp-seated-index), which place him."
+  (cond
+    (seated?
+     (vector-reset! out)
+     )
+    ((or (and (>= vtype 0) (<= vtype 2)) (= vtype 6))
+     (set-vector! out 0.0 (meters 0.4) (meters -0.3) 1.0)
+     )
+    (else
       (set-vector! out 0.0 0.0 (meters -0.4) 1.0)
       )
+    )
   (vector-orient-by-quat! out out quat)
   (set! (-> out w) 1.0)
   out
@@ -1076,30 +1155,24 @@
             (set! shown? #f)
             )
         ;; a passenger sits in its driver's seat as this machine sees that vehicle: its own reported
-        ;; position comes through the network twice and would trail behind the vehicle
-        (let ((driver (cond
-                        ((or (-> self local?) (not (logtest? (-> st flags) (mp-flag riding))))
-                         (the-as mp-player-state #f)
-                         )
-                        ((= (-> st ride-slot) *mp-local-slot*)
-                         *mp-local*
-                         )
-                        (else
-                          (mp-remote-state (-> st ride-slot))
-                          )
-                        )
-                      )
-              )
+        ;; position comes through the network twice and would trail behind the vehicle. Our own
+        ;; model too, facing the vehicle's way: Jak's grab-ride keeps the facing he got in with.
+        (let ((driver (mp-ride-driver st)))
           (let ((was (vector-copy! (new 'stack-no-clear 'vector) (-> self root trans))))
             (cond
-              ((and driver (logtest? (-> driver flags) (mp-flag driving)))
+              (driver
                (if (-> self daxter?)
                    (move-to-point!
                      (-> self root)
                      (vector+!
                        (new 'stack-no-clear 'vector)
                        (-> driver seat-trans)
-                       (mp-daxter-seat-offset (-> driver veh-type) (-> driver veh-quat) (new 'stack-no-clear 'vector))
+                       (mp-daxter-seat-offset
+                         (-> driver veh-type)
+                         (-> driver veh-quat)
+                         (new 'stack-no-clear 'vector)
+                         (>= (mp-seated-index (-> self draw art-group) #t (-> driver veh-type)) 0)
+                         )
                        )
                      )
                    (move-to-point! (-> self root) (-> driver seat-trans))
@@ -1152,8 +1225,51 @@
                          (the-as art-element #f)
                          )
                      )
+               (num (-> st anim-frame))
+               (driver (mp-ride-driver st))
+               (seated (if driver
+                           (mp-seated-index ag (-> self daxter?) (-> driver veh-type))
+                           -1
+                           )
+                       )
+               ;; Daxter's clip holding the gun, on his upper body (multiplayer-guns.gc)
+               (top (if (and (-> self daxter?) (< seated 0) (>= (-> st top-index) 0) (< (-> st top-index) (-> ag length)))
+                        (-> ag data (-> st top-index))
+                        )
+                    )
+               (top? (and top (type? top art-joint-anim)))
                )
-          (if (not (and anim (type? anim art-joint-anim)))
+          ;; a passenger sits as a driver does, steering straight (the clips' middle frame), leaning
+          ;; neither forward nor back (half of each clip); its own animation is Jak held (none) or
+          ;; Daxter standing
+          (cond
+            ((>= seated 0)
+             (let ((front (the-as art-joint-anim (-> ag data seated)))
+                   (back (the-as art-joint-anim (-> ag data (+ seated 1))))
+                   )
+               (if (!= (-> self skel active-channels) 2)
+                   (ja-channel-set! 2)
+                   )
+               (ja :group! back :num! (identity (* 0.5 (the float (+ (-> back frames num-frames) -1)))))
+               (ja :chan 1
+                   :group! front
+                   :num! (identity (* 0.5 (the float (+ (-> front frames num-frames) -1))))
+                   :frame-interp0 0.5
+                   :frame-interp1 0.5
+                   )
+               )
+             (set! anim #f)
+             )
+            (top?
+              (if (!= (-> self skel active-channels) 2)
+                  (ja-channel-set! 2)
+                  )
+              )
+            ((!= (-> self skel active-channels) 1)
+             (ja-channel-set! 1)
+             )
+            )
+          (if (and (< seated 0) (not (and anim (type? anim art-joint-anim))))
               (set! anim (cond
                            ((-> self daxter?)
                             (-> ag data 473) ;; daxter-indax-stance-ja
@@ -1172,8 +1288,26 @@
           (when (and anim (type? anim art-joint-anim))
             (let ((ja-anim (the-as art-joint-anim anim)))
               (ja :group! ja-anim
-                  :num! (identity (fmax 0.0 (fmin (-> st anim-frame) (the float (+ (-> ja-anim frames num-frames) -1)))))
+                  :num! (identity (fmax 0.0 (fmin num (the float (+ (-> ja-anim frames num-frames) -1)))))
                   )
+              )
+            )
+          ;; the gun clip at full weight on the upper body's joints, at none on the others
+          (cond
+            (top?
+              (let ((top-anim (the-as art-joint-anim top)))
+                (ja :chan 1
+                    :group! top-anim
+                    :num! (identity (fmax 0.0 (fmin (-> st top-frame) (the float (+ (-> top-anim frames num-frames) -1)))))
+                    :frame-interp0 0.0
+                    :frame-interp1 1.0
+                    )
+                )
+              (set! (-> self skel interp-select 0) MP_DAXTER_UPPER_BODY)
+              (set! (-> self skel generate-frame-function) create-interpolated2-joint-animation-frame)
+              )
+            (else
+              (set! (-> self skel interp-select 0) 0)
               )
             )
           )
@@ -1540,7 +1674,13 @@
         (vector+!
           (-> *target* control trans)
           (-> st seat-trans)
-          (mp-daxter-seat-offset (-> st veh-type) (-> st veh-quat) (new 'stack-no-clear 'vector))
+          ;; his mode plays Daxter's clips: the target's art group is Daxter's
+          (mp-daxter-seat-offset
+            (-> st veh-type)
+            (-> st veh-quat)
+            (new 'stack-no-clear 'vector)
+            (>= (mp-seated-index (-> *target* draw art-group) #t (-> st veh-type)) 0)
+            )
           )
         (quaternion-copy! (-> *target* control quat) (-> st veh-quat))
         (quaternion-copy! (-> *target* control quat-for-control) (-> st veh-quat))

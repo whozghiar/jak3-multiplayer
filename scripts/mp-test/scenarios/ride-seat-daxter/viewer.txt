@@ -1,0 +1,20 @@
+# Seated passengers, third player: looks at the buggy from its side while each player is the
+# passenger. Plays Daxter, who hides less of the view.
+1 enable
+1 name Viewer
+1 color 3
+1 character 1
+46 join 127.0.0.1:7777
+46.1 wait-joined
+64 goto-player 0 5 0
+65 look-player 0
+66.5 screenshot guest-seated
+67.5 goto-player 0 -5 0
+68 look-player 0
+69 screenshot guest-seated-other-side
+86 goto-player 1 5 0
+87 look-player 1
+89.5 screenshot host-seated
+90.5 goto-player 1 -5 0
+91 look-player 1
+92 screenshot host-seated-other-side
