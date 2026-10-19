@@ -751,6 +751,14 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "coop-respawn":
+        gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
+        hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")
+        c.check(scenario, "co-op: the guest who died comes back next to the host, health full, no continue point",
+                any("back next to player 0" in l for l in client) and gr[:1] == [("1", "target-stance", "8.0")], f"{gr}")
+        c.check(scenario, "and the host next to the guest",
+                any("back next to player 1" in l for l in host) and hr[-1:] == [("1", "target-stance", "8.0")], f"{hr}")
+
     elif scenario == "scene-skins":
         hs = grab(host, r"\] scene actor (\S+) shirt #x(\w+) fur #x(\w+)")
         gs = grab(client, r"\] scene actor (\S+) shirt #x(\w+) fur #x(\w+)")

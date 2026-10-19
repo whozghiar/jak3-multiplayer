@@ -1,0 +1,15 @@
+# Co-op respawn, host side: the guest dies next to the host and comes back next to it; then the host
+# dies and comes back next to the guest (no continue point, no mission told).
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-respawn
+64 die
+70 log-respawn
+70.5 log-me
+71 screenshot back-host
+75 log

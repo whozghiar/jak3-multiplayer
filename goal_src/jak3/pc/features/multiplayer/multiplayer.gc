@@ -5104,6 +5104,75 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
+;; Co-op: back next to a teammate
+;;
+;; As the respawn policy of himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, goal_src/jak2/multiplayer/player/
+;; mp-respawn-policy.gc and mp-death-spectate.gc, ISC): in co-op, a player who dies on foot while a
+;; teammate is alive in game within 300 m comes back next to that teammate, health full, briefly
+;; invulnerable, and the mission is not told (target-death-reset sends the task managers 'target
+;; 'die, which fails a mission that fails on death): a mission fails only once every player is dead.
+;; Dying alone, or in a vehicle, the stock: the continue point, and the mission fails if it does so.
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_RESPAWN_RANGE (meters 300))
+
+(define *mp-respawns* 0) ;; times we came back next to a teammate (test log)
+
+(defun mp-living-teammate ()
+  "In co-op, the slot of a teammate alive in game within 300 m of us (the nearest), -1 none."
+  (let ((best -1)
+        (best-d MP_RESPAWN_RANGE)
+        )
+    (when (and (mp-coop?) *target*)
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (when (and st (not (logtest? (-> st flags) (mp-flag dead hidden))))
+            (let ((d (vector-vector-distance (-> st trans) (-> *target* control trans))))
+              (when (< d best-d)
+                (set! best-d d)
+                (set! best i)
+                )
+              )
+            )
+          )
+        )
+      )
+    best
+    )
+  )
+
+;; MOD multiplayer -- engine/target/target-death.gc: the end of a death (the task managers told,
+;; then the game reset at the continue point).
+(define-perm *mp-stock-target-death-reset* (function symbol symbol none :behavior target) target-death-reset)
+
+(defbehavior target-death-reset target ((arg0 symbol) (arg1 symbol))
+  "Stock, except in co-op on foot with a living teammate (see above): back next to that teammate,
+   health full, 3 s invulnerable; no task manager told, so no mission fails."
+  (let ((mate (if (focus-test? self pilot) -1 (mp-living-teammate))))
+    (cond
+      ((>= mate 0)
+       (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> (mp-remote-state mate) trans))))
+         (+! (-> pos x) (meters 2))
+         (+! (-> pos y) (meters 0.5))
+         (+! *mp-respawns* 1)
+         (format 0 "[multiplayer] co-op: back next to player ~D~%" mate)
+         (move-to-point! (-> self control) pos)
+         (vector-reset! (-> self control transv))
+         (set! (-> self fact health) (-> self fact health-max))
+         (target-timed-invulnerable (seconds 3) self 1)
+         (go target-stance)
+         )
+       )
+      (else
+        (*mp-stock-target-death-reset* arg0 arg1)
+        )
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
 ;; Per-frame hook
 ;; ------------------------------------------------------------------------------------------------
 

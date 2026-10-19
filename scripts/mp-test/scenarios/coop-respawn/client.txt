@@ -1,0 +1,15 @@
+# Co-op respawn, guest side: dies 6 m from the host and comes back next to it, health full.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+45 join 127.0.0.1:7777
+45.1 wait-joined
+46 character 0
+50 goto-player 0 6 0
+52 die
+58 log-respawn
+58.5 log-me
+59 screenshot back-guest
+70 log-respawn
+75 log
