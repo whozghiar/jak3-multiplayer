@@ -660,6 +660,33 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(gmenu) and gmenu[0]["prevent"] == "#f" and all(d["master"] != "pause" for d in hp[-3:]),
                 f"guest {[(d['master'], d['prevent']) for d in gmenu]}, host {[d['master'] for d in hp[-3:]]}")
 
+    elif scenario == "skin":
+        cfg = ROOT / "out" / "mp-test" / "skin" / "client" / "OpenGOAL" / "jak3" / "settings" / "multiplayer.cfg"
+        saved = cfg.read_text(encoding="utf-8") if cfg.exists() else ""
+        c.check(scenario, "the guest's outfit is saved in its config",
+                "skin=0,ffe02020,0,e5202020,0,ff20e020,0,0,ff3060ff" in saved, f"{[l for l in saved.splitlines() if l.startswith('skin=')]}")
+        got = grab(host, r"\] skin player 1 (.*)")
+        c.check(scenario, "the host receives the guest's outfit (shirt, pants, scarf, hair)",
+                bool(got) and got[-1][0].split()[:9] == ["0", "ffe02020", "0", "e5202020", "0", "ff20e020", "0", "0", "ff3060ff"],
+                f"{got[-1:]}")
+        worn = grab(host, r"\] skin models (\d+) draws (\d+):(.*)")
+        c.check(scenario, "the guest's puppet is drawn with it on the host",
+                bool(worn) and "mp-puppet" in worn[0][2] and int(worn[-1][1]) > int(worn[0][1]), f"{worn[:1]}, draws then {worn[-1][1] if worn else None}")
+        page = grab(host, r"\] skin editing #t group (\d+) slider \d+ draft-shirt (\w+) preview (\S+)")
+        prev = grab(host, r"\] skin preview \"(\w+)\" status #x(\w+) .*")
+        c.check(scenario, "the Appearance page edits a draft with a turning preview of Jak, then of Daxter",
+                any(g == "1" and d != "0" and p == "#t" for g, d, p in page) and any(g == "10" for g, _, _ in page)
+                and {"jakb", "daxter"} <= {n for n, _ in prev} and all(int(st, 16) & 8 for _, st in prev),
+                f"{page[-2:]}, previews {prev}")
+        own = grab(host, r"\] skin own (.*)")
+        c.check(scenario, "X keeps it: saved (shirt and Daxter's fur) and the preview gone",
+                bool(own) and own[-1][0].split()[1] == "68ff3010" and own[-1][0].split()[10] == "68ff3040"
+                and bool(grab(host, r"outfit saved")) and grab(host, r"\] skin editing (\S+)")[-1] == ("#f",),
+                f"{own[-1:]}")
+        gseen = grab(client, r"\] skin player 0 (.*)")
+        c.check(scenario, "the guest receives the host's new outfit",
+                bool(gseen) and gseen[-1][0].split()[1] == "68ff3010", f"{gseen[-1:]}")
+
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
         c.check(scenario, "holding SELECT shows the player list without pausing",

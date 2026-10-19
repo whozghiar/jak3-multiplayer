@@ -1793,6 +1793,11 @@ std::atomic<int>& dark_skin_draws() {
   return count;
 }
 
+std::atomic<int>& skin_draws() {
+  static std::atomic<int> count{0};
+  return count;
+}
+
 namespace test {
 struct Step {
   double at_ms;
@@ -1973,6 +1978,12 @@ u64 pc_mp_config_load(u32 dest) {
         cfg->enabled = std::stoi(val);
       } else if (key == "mode") {
         cfg->mode = std::stoi(val);
+      } else if (key == "skin") {
+        // the outfit: one hex value per group, comma separated
+        auto parts = str_util::split_string(val, ",");
+        for (size_t i = 0; i < parts.size() && i < 16; i++) {
+          cfg->skin[i] = (u32)std::stoul(parts[i], nullptr, 16);
+        }
       }
     } catch (...) {
       lg::warn("[multiplayer] ignored bad line in {}: {}", config_path().string(), line);
@@ -1990,10 +2001,14 @@ void pc_mp_config_save(u32 src) {
   auto name = std::string(cfg->name, strnlen(cfg->name, sizeof(cfg->name)));
   auto address = std::string(cfg->address, strnlen(cfg->address, sizeof(cfg->address)));
   file_util::create_dir_if_needed_for_file(config_path());
+  std::string skin;
+  for (int i = 0; i < 16; i++) {
+    skin += fmt::format("{}{:x}", i ? "," : "", cfg->skin[i]);
+  }
   file_util::write_text_file(
       config_path(),
-      fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\n", name,
-                  address, cfg->character, cfg->color, cfg->enabled, cfg->mode));
+      fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\nskin={}\n",
+                  name, address, cfg->character, cfg->color, cfg->enabled, cfg->mode, skin));
 }
 
 // (pc-mp-send-actors states count): send the `count` mp-actor-state this player simulates.
@@ -2129,6 +2144,11 @@ u64 pc_mp_outline_pixels() {
 // (pc-mp-dark-skin-draws) -> draws of other players' models with their own Dark Jak skin since boot.
 u64 pc_mp_dark_skin_draws() {
   return (u64)mp::dark_skin_draws().load();
+}
+
+// (pc-mp-skin-draws) -> draws of players' models with an outfit tint since boot.
+u64 pc_mp_skin_draws() {
+  return (u64)mp::skin_draws().load();
 }
 
 u64 pc_mp_player_ping(u32 slot) {
@@ -2471,6 +2491,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-outlines-drawn", (void*)pc_mp_outlines_drawn);
   make_function_symbol_from_c("pc-mp-outline-pixels", (void*)pc_mp_outline_pixels);
   make_function_symbol_from_c("pc-mp-dark-skin-draws", (void*)pc_mp_dark_skin_draws);
+  make_function_symbol_from_c("pc-mp-skin-draws", (void*)pc_mp_skin_draws);
   make_function_symbol_from_c("pc-mp-campaign-write", (void*)pc_mp_campaign_write);
   make_function_symbol_from_c("pc-mp-campaign-read", (void*)pc_mp_campaign_read);
   make_function_symbol_from_c("pc-mp-set-max-players", (void*)pc_mp_set_max_players);

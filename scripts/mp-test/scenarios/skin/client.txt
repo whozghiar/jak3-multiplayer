@@ -1,0 +1,19 @@
+# Outfits, guest side: its shirt red, scarf green, hair blue, pants dark (saved in its config, sent to
+# the host), 3 m from the host; then the host's outfit arrives and its puppet wears it (screenshot).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+47 skin 1 e02020 100
+47.5 skin 5 20e020 100
+48 skin 8 3060ff 100
+48.5 skin 3 202020 90
+49 goto-player 0 3
+50 face-player 0
+51 log-skin
+52 screenshot guest-own
+76 log-skin
+77 look-player 0
+78 screenshot host-outfit
+80 log

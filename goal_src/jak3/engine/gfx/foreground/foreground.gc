@@ -1637,6 +1637,7 @@
   (no-textures 4)
   (outline 5) ;; MOD multiplayer: drawn again where hidden, in outline-color (Merc2 outline pass)
   (dark-skin 6) ;; MOD multiplayer: Dark Jak's skin of its own, at dark-morph (another player's model)
+  (skin 7) ;; MOD multiplayer: a player's outfit, 16 tints after the flags (*pc-merc-skins*)
   )
 
 (deftype pc-merc-flags (structure)
@@ -1658,10 +1659,24 @@
   ((dc    draw-control 8)
    (color rgba 8)
    (dark  uint8 8)
+   (off?  symbol)     ;; outlines not drawn (a menu is open), the skins still
    )
   )
 
 (define *pc-merc-outlines* (new 'global 'pc-merc-outline-table))
+
+;; MOD multiplayer -- players' outfits: up to 24 draw-controls (the players' models, their Daxters,
+;; the preview of the character page) drawn with one tint per group of their textures, 16 each: rgb
+;; with the strength in the top byte, 0 for the stock texture (Merc2 skin tint). Empty unless the
+;; multiplayer mod fills it (mp-update-skins).
+(deftype pc-merc-skin-table (structure)
+  ((count int32)
+   (dc    draw-control 24)
+   (tint  uint32 384)
+   )
+  )
+
+(define *pc-merc-skins* (new 'global 'pc-merc-skin-table))
 
 (defun pc-merc-draw-request ((dc draw-control) (dma-buf pointer) (matrix-buf pointer) (tex-idx int) (update-verts symbol) (blercs (pointer float)))
   "Send a request to PC Merc2 to draw the given object.
@@ -1754,6 +1769,13 @@
             (+! matrix-out-idx 1)
             )
 
+          ;; MOD multiplayer: a player's outfit (*pc-merc-skins*)
+          (let ((skin-idx -1))
+            (dotimes (i (-> *pc-merc-skins* count))
+              (if (= (-> *pc-merc-skins* dc i) dc)
+                  (set! skin-idx i)
+                  )
+              )
           ;; flags
           (let ((flags (the (pc-merc-flags) dma-buf)))
             (set! (-> flags effect-count) (-> merc-ctrl header effect-count))
@@ -1776,16 +1798,30 @@
             ;; MOD multiplayer: an outlined model (another player)
             (dotimes (i 8)
               (when (= (-> *pc-merc-outlines* dc i) dc)
-                (logior! (-> flags bit-flags) (pc-merc-bits outline dark-skin))
+                (logior! (-> flags bit-flags) (if (-> *pc-merc-outlines* off?)
+                                                  (pc-merc-bits dark-skin)
+                                                  (pc-merc-bits outline dark-skin)
+                                                  )
+                         )
                 (set! (-> flags outline-color) (-> *pc-merc-outlines* color i))
                 (set! (-> flags dark-morph) (-> *pc-merc-outlines* dark i))
                 )
               )
+            (if (>= skin-idx 0)
+                (logior! (-> flags bit-flags) (pc-merc-bits skin))
+                )
             (set! (-> flags enable-mask) enable-mask)
             (set! (-> flags ignore-alpha-mask) ignore-alpha-mask)
             )
           (&+! dma-buf (* 16 2))
           (+! qwc-total 2)
+          ;; MOD multiplayer: its 16 tints after the flags
+          (when (>= skin-idx 0)
+            (mem-copy! dma-buf (the pointer (&-> *pc-merc-skins* tint (* skin-idx 16))) 64)
+            (&+! dma-buf 64)
+            (+! qwc-total 4)
+            )
+            )
 
           ;; include blerc weights.
           (when (= update-verts 'blerc)

@@ -1099,6 +1099,24 @@
    )
   )
 
+(defun mp-skin-add-copies ()
+  "The copies of another player's Daxter (its sidekick, one of its props) wear that player's outfit
+   (mp-update-skins, multiplayer.gc)."
+  (let ((ws *mp-world-state*))
+    (dotimes (i (-> ws replica-count))
+      (let ((rep (the-as mp-replica (handle->process (-> ws replica i)))))
+        (when (and rep
+                   (logtest? (-> rep net flags) (mp-actor-flag prop))
+                   (string-charp= "skel-sidekick" (-> rep net skel))
+                   )
+          (mp-skin-add (-> rep draw) (mp-slot-skin (the-as int (shr (-> rep id) 24))))
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defmethod get-search-info-flag ((this mp-replica))
   "What the original answers (its state's aim bits): the local player's weapons pick the copy as
    they would the original. Nothing for props, shots, hidden or dying copies."

@@ -60,6 +60,9 @@ class Merc2 {
  private:
   const std::vector<GLuint>* m_anim_slot_array;
   const std::vector<GLuint>* m_darkjak_variants = nullptr;  // MOD multiplayer
+  // MOD multiplayer: outfit groups of the animated slots, and the lookup of a draw's texture
+  std::vector<u8> m_skin_slot_groups;
+  u8 mp_skin_texture_group(const LevelData* lev, s32 tex);
   enum MercDataMemory {
     LOW_MEMORY = 0,
     BUFFER_BASE = 442,
@@ -144,6 +147,7 @@ class Merc2 {
     GLuint gfx_hack_no_tex;
 
     GLuint fade;
+    GLuint skin_tint;  // MOD multiplayer
   };
 
   Uniforms m_merc_uniforms, m_emerc_uniforms;
@@ -199,6 +203,7 @@ class Merc2 {
     u16 light_idx;
     u8 flags;
     u8 dark_level;  // MOD multiplayer: Dark Jak's skin level of an animated slot, 0xff = shared slot
+    u32 skin_tint;  // MOD multiplayer: outfit tint, rgb and strength in the top byte, 0 = none
     ModBuffers mod_vtx_buffer;
     u8 fade[4];
     // no strip hack for custom models
@@ -231,6 +236,8 @@ class Merc2 {
     u32 lights;
     u32 first_bone;
     u8 dark_level = 0xff;  // MOD multiplayer, see Draw::dark_level
+    const u32* skin = nullptr;  // MOD multiplayer: a player's outfit, one tint per group
+    const LevelData* skin_level = nullptr;
   };
 
   Draw* alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawArgs& args);

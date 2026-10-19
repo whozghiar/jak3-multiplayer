@@ -1,0 +1,44 @@
+# Outfits, host side. The guest's outfit arrives and its puppet wears it (screenshot). The host opens
+# the Appearance page: its preview turns on the right; up selects the tint, R1 raises it, up again the
+# blue, L1 lowers it (the shirt red-orange, the marker's color); circle switches to Daxter, whose fur
+# gets a tint with more blue; X keeps both (saved, sent to the guest). Its own model wears the outfit
+# (screenshot from behind).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-skin
+55 face-player 1
+56 look-player 1
+58 log-skin
+58.5 screenshot guest-outfit
+60 skin-page
+61 log-skin
+61.5 screenshot page
+63 press up 100
+63.5 press r1 100
+64 press r1 100
+64.5 press r1 100
+65 press r1 100
+65.5 press up 100
+66 press l1 100
+66.5 press l1 100
+67 log-skin
+67.2 screenshot page-shirt
+67.6 press circle 100
+68 press up 100
+68.4 press r1 100
+68.8 press r1 100
+69.2 press r1 100
+69.6 press r1 100
+70 press up 100
+70.4 press r1 100
+70.6 log-skin
+70.8 screenshot page-daxter
+71 press x 100
+72 log-skin
+73 look-player 1
+74 screenshot host-own
+76 log-skin
+78 log

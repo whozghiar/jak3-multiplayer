@@ -48,6 +48,7 @@
 ;;   log-vehicles                                            every vehicle within 30 m of us, ours and copies
 ;;   log-ping                                                players' round trip to the host and health, list shown, paused
 ;;   log-pause                                               the host's pause for everyone, the START menu over the world
+;;   skin <group> <rrggbb> <percent> | skin-page | log-skin  our outfit's part (saved, sent); the Appearance page; outfits
 ;;   log-name | log-session                                  name and keyboard; game started (free roam, campaign), unlocks
 ;;   log-anim <daxter|jak> <index>                           the art group entry there (a clip is loaded when shown)
 ;;   log-seat                                                our model as a passenger: root and bones from the seat
@@ -77,6 +78,7 @@
 (define-extern pc-mp-outlines-drawn (function int))
 (define-extern pc-mp-outline-pixels (function int))
 (define-extern pc-mp-dark-skin-draws (function int))
+(define-extern pc-mp-skin-draws (function int))
 
 ;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
 ;; (mp-test-update).
@@ -116,6 +118,25 @@
 (defun mp-test-word ()
   "Pop the next word of the command into (-> *mp-test* word). #f when none is left."
   (string-get-arg!! (-> *mp-test* word) (-> *mp-test* line))
+  )
+
+(defun mp-test-hex ((str string))
+  "A hexadecimal number (rrggbb)."
+  (let ((v 0))
+    (dotimes (i (length str))
+      (let ((c (the-as int (-> str data i))))
+        (set! v (+ (* v 16) (cond
+                              ((and (>= c 48) (<= c 57)) (+ c -48))
+                              ((and (>= c 97) (<= c 102)) (+ c -87))
+                              ((and (>= c 65) (<= c 70)) (+ c -55))
+                              (else 0)
+                              )
+                   )
+              )
+        )
+      )
+    v
+    )
   )
 
 (defun mp-test-int ()
@@ -2378,6 +2399,82 @@
                )
              )
            )
+         )
+        ((string= cmd "skin")
+         ;; skin <group> <rrggbb> <percent>: our outfit's part, saved and sent as the page's X does
+         (let* ((group (mp-test-int))
+                (rgb (begin (mp-test-word) (mp-test-hex (-> *mp-test* word))))
+                (strength (/ (* (mp-test-int) 255) 100))
+                )
+           (when (and (> group 0) (<= group MP_SKIN_LAST))
+             (set! (-> *mp-config* skin group) (the-as uint (logior (shl strength 24) (logand rgb #xffffff))))
+             (mp-config-save!)
+             (if (mp-online?)
+                 (mp-send-skin -1)
+                 )
+             )
+           )
+         )
+        ((string= cmd "skin-page")
+         ;; skin-page: the Appearance page, as Options > Multiplayer > Appearance opens it
+         (cond
+           (*progress-process*
+             (mp-skin-open (-> *progress-process* 0))
+             )
+           (else
+             (mp-skin-begin)
+             (activate-progress *dproc* 'mp-skin)
+             )
+           )
+         )
+        ((string= cmd "log-skin")
+         ;; log-skin: our outfit (saved, draft), the others' as received, the models wearing one this
+         ;; frame, the draws tinted since boot, the page's preview
+         (format 0 "[mp-test] skin own")
+         (dotimes (i 13)
+           (format 0 " ~X" (-> *mp-config* skin i))
+           )
+         (format 0 "~%[mp-test] skin editing ~A group ~D slider ~D draft-shirt ~X preview ~A~%"
+                 (-> *mp-skins* editing?) (-> *mp-skin-edit* group) (-> *mp-skin-edit* slider) (-> *mp-skins* draft 1)
+                 (if (handle->process (-> *mp-skins* preview)) #t #f)
+                 )
+         (format 0 "[mp-test] skin sent ~D received ~D responds ~D last-keys #x~X~%" (-> *mp-skins* sent) (-> *mp-skins* received)
+                 (-> *mp-skin-edit* responds) (-> *mp-skin-edit* last-keys)
+                 )
+         (when *progress-process*
+           (format 0 "[mp-test] skin menu ~A next ~A transition ~,,2f ring ~,,1f want ~,,1f~%"
+                   (-> *progress-process* 0 current) (-> *progress-process* 0 next) (-> *progress-process* 0 menu-transition)
+                   (-> *progress-process* 0 ring-angle) (-> *progress-process* 0 ring-want-angle)
+                   )
+           (format 0 "[mp-test] skin menu option ~D selected ~A frame ~D~%" (-> *progress-process* 0 option-index)
+                   (-> *progress-process* 0 selected-option) (-> *display* real-frame-clock frame-counter)
+                   )
+           )
+         (dotimes (slot MP_MAX_PLAYERS)
+           (when (mp-remote-state slot)
+             (format 0 "[mp-test] skin player ~D" slot)
+             (dotimes (i 13)
+               (format 0 " ~X" (-> (mp-slot-skin slot) i))
+               )
+             (format 0 "~%")
+             )
+           )
+         (let ((pv (the-as manipy (handle->process (-> *mp-skins* preview)))))
+           (when pv
+             (format 0 "[mp-test] skin preview ~A status #x~X seg #x~X effect #x~X lod ~D~%" (-> pv draw art-group name)
+                     (-> pv draw status) (-> pv draw seg-mask) (-> pv draw effect-mask) (-> pv draw cur-lod)
+                     )
+             (format 0 "[mp-test] skin preview at ~m from the camera, scale ~,,2f anim ~A~%"
+                     (vector-vector-distance (-> pv root trans) (math-camera-pos)) (-> pv root scale y)
+                     (if (> (-> pv skel active-channels) 0) (-> pv skel root-channel 0 frame-group name))
+                     )
+             )
+           )
+         (format 0 "[mp-test] skin models ~D draws ~D:" (-> *pc-merc-skins* count) (pc-mp-skin-draws))
+         (dotimes (i (-> *pc-merc-skins* count))
+           (format 0 " ~A" (-> *pc-merc-skins* dc i process name))
+           )
+         (format 0 "~%")
          )
         ((string= cmd "log-pause")
          ;; log-pause: master mode, the host's pause as seen here, the menu over a running world, and

@@ -32,6 +32,9 @@ struct LevelData {
   GLuint hfrag_indices;
 
   int frames_since_last_used = 0;
+
+  // MOD multiplayer: outfit group of each texture (Merc2 skin tint), filled on first use
+  mutable std::vector<u8> mp_skin_groups;
 };
 
 struct MercRef {

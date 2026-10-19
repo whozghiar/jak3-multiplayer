@@ -8,6 +8,8 @@
 
 #include "game/graphics/opengl_renderer/EyeRenderer.h"
 #include "game/graphics/opengl_renderer/TextureAnimator.h"
+
+#include "common/texture/texture_slots.h"
 #include "game/graphics/opengl_renderer/background/background_common.h"
 
 #include "third-party/imgui/imgui.h"
@@ -554,9 +556,16 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   // MOD multiplayer: another player's model, its own Dark Jak skin (morph 0-255 at byte 18)
   bool model_dark_skin = flags->bitflags & 64;
   u8 dark_morph = ((const u8*)flags)[18];
+  // MOD multiplayer: a player's outfit, 16 tints after the flags (one per group, mp_skin_group)
+  bool model_skin = flags->bitflags & 128;
   u32 outline_rgba;
   memcpy(&outline_rgba, (const u8*)flags + 20, 4);
   input_data += 32;
+  u32 skin[16];
+  if (model_skin) {
+    memcpy(skin, input_data, sizeof(skin));
+    input_data += sizeof(skin);
+  }
 
   float blerc_weights[kMaxBlerc];
   if (model_uses_pc_blerc) {
@@ -649,6 +658,10 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.dark_level = model_dark_skin && m_darkjak_variants
                         ? (u8)((dark_morph * (TextureAnimator::kDarkjakLevels - 1) + 127) / 255)
                         : 0xff;
+  if (model_skin && render_state->version == GameVersion::Jak3) {
+    args.skin = skin;
+    args.skin_level = lev;
+  }
 
   if (model_outline) {
     record_outline(model, lev, skel_matrix_buffer, bone_count, current_effect_enable_bits,
@@ -775,6 +788,61 @@ void Merc2::init_shader_common(Shader& shader, Uniforms* uniforms, bool include_
   uniforms->ignore_alpha = glGetUniformLocation(id, "ignore_alpha");
 
   uniforms->gfx_hack_no_tex = glGetUniformLocation(id, "gfx_hack_no_tex");
+  uniforms->skin_tint = glGetUniformLocation(id, "skin_tint");  // MOD multiplayer
+}
+
+/*!
+ * MOD multiplayer: the outfit group of a texture of Jak 3's player models (skin tints, chosen in
+ * the multiplayer mod's character page): 1 shirt, 2 armor, 3 pants, 4 boots, 5 scarf, 6 straps and
+ * belts, 7 gloves and wraps, 8 hair, 9 goggles (Jak); 10 fur, 11 light fur, 12 belt (Daxter); 0xff
+ * none. Matches mp-skin-group in goal_src/jak3/pc/features/multiplayer/multiplayer.gc.
+ */
+static u8 mp_skin_group_of(const std::string& name) {
+  static const std::unordered_map<std::string, u8> groups = {
+      {"jakc-jacketbody", 1},        {"jakbsmall-jacketbody", 1}, {"jakbsmall-jacketsleeve", 1},
+      {"jakc-armor", 2},             {"jakc-chestplate", 2},      {"jakc-shoulderarmor-01", 2},
+      {"jakc-pants", 3},             {"jakc-leggging", 3},        {"jakc-skirt", 3},
+      {"jakc-flap", 3},              {"jakc-shoetop", 4},         {"jakc-shoebottom", 4},
+      {"jakc-shoeplate", 4},         {"jakc-scarf", 5},           {"jakc-scarfhanging", 5},
+      {"jakc-blackstrap", 6},        {"jakc-brownstrap", 6},      {"jakc-leatherstrap", 6},
+      {"jakc-chestplate-straps", 6}, {"jakc-beltbuckles", 6},     {"jakc-waistband", 6},
+      {"jakc-waistband2", 6},        {"jakc-leatherpouch", 6},    {"jakbsmall-brownleather", 6},
+      {"jakc-glovetop", 7},          {"jakc-wraps", 7},           {"jakc-wristband-a2", 7},
+      {"jakc-wristbands-a", 7},      {"jakc-forearm-arm", 7},     {"jakc-hair", 8},
+      {"jakc-lens", 9},              {"jakc-gogglemetal", 9},     {"sk-solidorangefur", 10},
+      {"sk-armfur", 10},             {"sk-bodyfur", 10},          {"sk-ear", 10},
+      {"sk-finger", 10},             {"sk-eye-lid", 10},          {"sk-orange2yellowfur", 10},
+      {"bam-hairhilite", 10},        {"sk-yellowfurnew", 11},     {"bam-leather-belt", 12},
+  };
+  auto it = groups.find(name);
+  return it == groups.end() ? 0xff : it->second;
+}
+
+/*!
+ * MOD multiplayer: the outfit group of texture `tex` of a merc draw: a texture of level `lev`, or
+ * an animated slot (negative, Jak's hair).
+ */
+u8 Merc2::mp_skin_texture_group(const LevelData* lev, s32 tex) {
+  if (tex < 0) {
+    if (m_skin_slot_groups.empty()) {
+      for (const auto& name : jak3_animated_texture_slots()) {
+        m_skin_slot_groups.push_back(mp_skin_group_of(name));
+      }
+    }
+    size_t slot = -(tex + 1);
+    return slot < m_skin_slot_groups.size() ? m_skin_slot_groups[slot] : 0xff;
+  }
+  if (!lev || !lev->level) {
+    return 0xff;
+  }
+  auto& groups = lev->mp_skin_groups;
+  if (groups.size() != lev->level->textures.size()) {
+    groups.clear();
+    for (const auto& t : lev->level->textures) {
+      groups.push_back(mp_skin_group_of(t.debug_name));
+    }
+  }
+  return (size_t)tex < groups.size() ? groups[tex] : 0xff;
 }
 
 void Merc2::switch_to_merc2(SharedRenderState* render_state) {
@@ -1100,6 +1168,7 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
   }
   draw->texture = envmap_texture;
   draw->dark_level = 0xff;  // MOD multiplayer
+  draw->skin_tint = 0;      // MOD multiplayer
   draw->first_bone = args.first_bone;
   draw->light_idx = args.lights;
   draw->num_triangles = mdraw.num_triangles;
@@ -1128,6 +1197,15 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
   }
 
   draw->texture = mdraw.eye_id == 0xff ? mdraw.tree_tex_id : (0xefffff00 | mdraw.eye_id);
+  draw->skin_tint = 0;
+  if (args.skin && mdraw.eye_id == 0xff) {
+    // MOD multiplayer: the outfit group of this texture (a level texture, or Jak's hair slot)
+    u8 group = mp_skin_texture_group(args.skin_level, mdraw.tree_tex_id);
+    if (group < 16 && (args.skin[group] >> 24)) {
+      draw->skin_tint = args.skin[group];
+      mp::skin_draws()++;
+    }
+  }
   draw->dark_level = 0xff;
   if (args.dark_level != 0xff && mdraw.eye_id == 0xff && mdraw.tree_tex_id < 0) {
     // MOD multiplayer: an animated slot with a Dark Jak skin of its own
@@ -1256,6 +1334,7 @@ void Merc2::do_draws(const Draw* draw_array,
   glBindVertexArray(m_vao);
   s32 last_tex = INT32_MIN;
   u8 last_dark = 0xff;  // MOD multiplayer: Dark Jak skin level of the texture bound
+  u32 last_skin = UINT32_MAX;  // MOD multiplayer: outfit tint set in the shader
   int last_light = -1;
   bool normal_vtx_buffer_bound = true;
 
@@ -1277,6 +1356,13 @@ void Merc2::do_draws(const Draw* draw_array,
       }
     }
     glUniform1i(uniforms.ignore_alpha, draw.flags & DrawFlags::IGNORE_ALPHA);
+    if (draw.skin_tint != last_skin) {
+      // MOD multiplayer: a player's outfit tint (0: the stock texture)
+      glUniform4f(uniforms.skin_tint, ((draw.skin_tint >> 16) & 0xff) / 255.f,
+                  ((draw.skin_tint >> 8) & 0xff) / 255.f, (draw.skin_tint & 0xff) / 255.f,
+                  (draw.skin_tint >> 24) / 255.f);
+      last_skin = draw.skin_tint;
+    }
 
     if (fog_on && !draw.mode.get_fog_enable()) {
       // on -> off

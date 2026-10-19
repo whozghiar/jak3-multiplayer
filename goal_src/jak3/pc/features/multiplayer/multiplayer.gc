@@ -83,6 +83,8 @@
   (weapon 19)     ;; a weapon effect that is not a shot: iarg 0 = gun (27 wave concussor, 36 mass
                   ;; inverter, 33 arc wielder), fvec = where, iarg 1-2 = its parameters (float
                   ;; bits), text = the arc's points (33)
+  (skin 20)       ;; the sender's outfit (Appearance page): its tints of groups 0-7 in text (uint32
+                  ;; each), 8-11 in iarg 0-3, 12 in pad
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -147,16 +149,17 @@
   :size-assert #x50
   )
 
-;; Settings kept between boots in <settings>/multiplayer.cfg. 64 bytes, mirrors mp::Config.
+;; Settings kept between boots in <settings>/multiplayer.cfg. 128 bytes, mirrors mp::Config.
 (deftype mp-config (structure)
   ((name      uint8 16)
    (address   uint8 32)
    (character int32)
    (color     int32)
    (enabled   int32)
-   (mode      int32)   ;; game mode when hosting: 0 free roam, 1 co-op
+   (mode      int32)     ;; game mode when hosting: 0 free roam, 1 co-op
+   (skin      uint32 16) ;; the player's outfit (Appearance page, "Outfits" below)
    )
-  :size-assert #x40
+  :size-assert #x80
   )
 
 ;; The remote players' interpolated states, refreshed every frame by the hook.
@@ -242,6 +245,23 @@
 (define *mp-perch-count* 0)
 ;; Co-op: the character the other players' was offered against already (once per session).
 (define *mp-coop-offered?* #f)
+
+;; Players' outfits ("Outfits" below): per player slot, 16 tints, one per group of Jak's and
+;; Daxter's textures (MP_SKIN_* groups), each rgb with its strength in the top byte, 0 for the stock
+;; texture. Ours lives in the config; the others' come with their skin events.
+(deftype mp-skin-table (structure)
+  ((tint     uint32 128) ;; slot * 16 + group
+   (editing? symbol)     ;; the Appearance page is open: our models show its draft
+   (draft    uint32 16)
+   (preview  handle)     ;; the page's turning preview of our character
+   (sent     int32)      ;; skin events sent and received (test log)
+   (received int32)
+   )
+  )
+
+(define *mp-skins* (new 'global 'mp-skin-table))
+(set! (-> *mp-skins* editing?) #f)
+(set! (-> *mp-skins* preview) (the-as handle #f))
 
 ;; The host's pause for everyone, and the START menu over a running world ("Pause for everyone",
 ;; below). In a structure: a time-frame or a handle is 64 bits, a global symbol holds 32.
@@ -684,6 +704,9 @@
   (set! (-> *mp-config* color) 0)
   (set! (-> *mp-config* enabled) 0)
   (set! (-> *mp-config* mode) 0)
+  (dotimes (i 16)
+    (set! (-> *mp-config* skin i) (the-as uint 0))
+    )
   (pc-mp-config-load *mp-config*)
   (string<-charp *mp-name* (-> *mp-config* name))
   (string<-charp *mp-address* (-> *mp-config* address))
@@ -955,6 +978,8 @@
   )
 
 (define-extern mp-send-all-progress (function int none)) ;; below, "Shared story progress"
+(define-extern mp-send-skin (function int none)) ;; below, "Outfits"
+(define-extern mp-apply-skin (function mp-event none))
 
 (defun mp-read-remote-states ()
   "Copy every remote player's interpolated state into *mp-players*, announcing joins and leaves."
@@ -968,6 +993,13 @@
       (if (and now (not was) (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag progress)))
           (mp-send-all-progress i)
           )
+      ;; and every player's outfit: ours to it (it sends us its own as we appear in its table)
+      (when (and now (not was) (mp-online?))
+        (dotimes (g 16)
+          (set! (-> *mp-skins* tint (+ (* i 16) g)) (the-as uint 0))
+          )
+        (mp-send-skin i)
+        )
       ;; no announcement once the session is over: the reason it ended stays on screen
       (when (and (!= was now) (mp-online?))
         (string<-charp *mp-temp-string* (-> *mp-players* state i name))
@@ -2836,6 +2868,9 @@
         (((mp-event-kind world))
          (mp-apply-world ev)
          )
+        (((mp-event-kind skin))
+         (mp-apply-skin ev)
+         )
         )
       )
     )
@@ -3995,6 +4030,137 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
+;; Outfits
+;;
+;; Each player chooses a color for each part of Jak's and Daxter's clothes on the Appearance page
+;; (multiplayer-menu.gc), after himstan's Jak and Daxter II Multiplayer skin editor
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, ISC). A part is a group of textures
+;; (the renderer's table, Merc2.cpp mp_skin_group_of): 1 shirt, 2 armor, 3 pants, 4 boots, 5 scarf,
+;; 6 straps and belts, 7 gloves and wraps, 8 hair, 9 goggles for Jak; 10 fur, 11 light fur, 12 belt
+;; for Daxter. Its tint is drawn over the texture's detail (merc2.frag). Ours is saved in the
+;; config and sent to every player who joins and whenever it changes (skin event); every frame,
+;; *pc-merc-skins* lists the models that wear one.
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_SKIN_FIRST_DAXTER 10) ;; first group of Daxter's parts (1-9 are Jak's)
+(defconstant MP_SKIN_LAST 12)
+
+(defun mp-local-skin ()
+  "Our outfit: the Appearance page's draft while it is open, else the saved one."
+  (if (-> *mp-skins* editing?)
+      (-> *mp-skins* draft)
+      (-> *mp-config* skin)
+      )
+  )
+
+(defun mp-slot-skin ((slot int))
+  "The outfit of player `slot` as received."
+  (&-> *mp-skins* tint (* slot 16))
+  )
+
+(defun mp-send-skin ((to int))
+  "Our saved outfit to player `to` (-1: everyone)."
+  (let ((ev (new 'stack 'mp-event))
+        (skin (-> *mp-config* skin))
+        )
+    (set! (-> ev kind) (mp-event-kind skin))
+    (set! (-> ev to) to)
+    (let ((text (the-as (pointer uint32) (-> ev text))))
+      (dotimes (i 8)
+        (set! (-> text i) (-> skin i))
+        )
+      )
+    (dotimes (i 4)
+      (set! (-> ev iarg i) (the-as int (-> skin (+ i 8))))
+      )
+    (set! (-> ev pad) (the-as int (-> skin 12)))
+    (pc-mp-send-event ev)
+    (+! (-> *mp-skins* sent) 1)
+    )
+  (none)
+  )
+
+(defun mp-apply-skin ((ev mp-event))
+  "Another player's outfit (skin event)."
+  (let ((slot (-> ev from)))
+    (when (and (>= slot 0) (< slot MP_MAX_PLAYERS))
+      (let ((dst (mp-slot-skin slot))
+            (text (the-as (pointer uint32) (-> ev text)))
+            )
+        (dotimes (i 8)
+          (set! (-> dst i) (-> text i))
+          )
+        (dotimes (i 4)
+          (set! (-> dst (+ i 8)) (the-as uint (-> ev iarg i)))
+          )
+        (set! (-> dst 12) (the-as uint (-> ev pad)))
+        (dotimes (i 3)
+          (set! (-> dst (+ i 13)) (the-as uint 0))
+          )
+        )
+      (+! (-> *mp-skins* received) 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-skin-add ((dc draw-control) (skin (pointer uint32)))
+  "Draw `dc` with the outfit `skin` this frame (*pc-merc-skins*, engine/gfx/foreground/foreground.gc)."
+  (let ((table *pc-merc-skins*))
+    (when (and dc (nonzero? dc) (< (-> table count) 24))
+      (set! (-> table dc (-> table count)) dc)
+      (mem-copy! (the-as pointer (&-> table tint (* (-> table count) 16))) (the-as pointer skin) 64)
+      (+! (-> table count) 1)
+      )
+    )
+  (none)
+  )
+
+(define-extern mp-skin-add-copies (function none)) ;; multiplayer-world.gc
+
+(defun mp-update-skins ()
+  "Every frame: the models that wear an outfit. Ours and our Daxter, the Appearance page's preview
+   (ours, its draft while the page is open), our model seated as a passenger, the other players'
+   puppets and the copies of their Daxter. None while the mod is off: the stock textures."
+  (set! (-> *pc-merc-skins* count) 0)
+  (when (mp-enabled?)
+    (let ((own (mp-local-skin)))
+      (when *target*
+        (mp-skin-add (-> *target* draw) own)
+        (let ((dax (ppointer->process (-> *target* sidekick))))
+          (if dax
+              (mp-skin-add (-> (the-as process-drawable dax) draw) own)
+              )
+          )
+        )
+      (let ((preview (handle->process (-> *mp-skins* preview))))
+        (if preview
+            (mp-skin-add (-> (the-as process-drawable preview) draw) own)
+            )
+        )
+      (let ((manager (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+        (when manager
+          (let ((self-puppet (handle->process (-> manager self-puppet))))
+            (if self-puppet
+                (mp-skin-add (-> (the-as mp-puppet self-puppet) draw) own)
+                )
+            )
+          (dotimes (i MP_MAX_PLAYERS)
+            (let ((puppet (handle->process (-> manager puppets i))))
+              (if puppet
+                  (mp-skin-add (-> (the-as mp-puppet puppet) draw) (mp-slot-skin i))
+                  )
+              )
+            )
+          )
+        )
+      )
+    (mp-skin-add-copies)
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
 ;; Per-frame hook
 ;; ------------------------------------------------------------------------------------------------
 
@@ -4022,6 +4188,7 @@
 
 (define-extern mp-keep-seen-npcs (function none)) ;; multiplayer-world.gc
 (define-extern mp-update-title (function none)) ;; multiplayer-menu.gc
+(define-extern mp-skin-watch (function none))
 
 (defun mp-frame-hook ()
   "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
@@ -4068,6 +4235,10 @@
        )
      (mp-draw-overlay)
      (mp-draw-pause)
+     ;; no outline over a menu (the players behind it would show through the page)
+     (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
+     (mp-skin-watch)
+     (mp-update-skins)
      (mp-keep-seen-npcs)
      ;; the title screen's Host Game and Join Game (its layout follows the Secrets entry, which
      ;; appears once the memory card says it is unlocked)
@@ -4076,6 +4247,7 @@
     ((or (!= *mp-mode* (mp-mode offline)) (handle->process (-> *mp-globals* manager)))
      (mp-shutdown)
      (mp-update-pause)
+     (mp-update-skins)
      )
     )
   (none)

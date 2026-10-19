@@ -248,6 +248,8 @@
 ;; Start menu pages
 ;; ------------------------------------------------------------------------------------------------
 
+(define-extern mp-skin-open (function progress none)) ;; "Appearance", below
+
 (define *mp-menu-options*
   (progress-new-generic-scrolling-page (text-id progress-mp-multiplayer)
     (new 'static 'menu-mp-label-option
@@ -292,6 +294,10 @@
                     (mp-config-save!)
                     (none)
                     )
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-appearance)
+      :on-confirm (lambda ((the-progress progress)) (mp-skin-open the-progress) (none))
       )
     (new 'static 'menu-mp-text-option
       :name (text-id progress-mp-address)
@@ -1173,6 +1179,485 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
+;; Appearance: a color for each part of Jak's and Daxter's clothes ("Outfits" in multiplayer.gc).
+;; The page follows himstan's Jak and Daxter II Multiplayer skin editor
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, goal_src/jak2/multiplayer/ui/
+;; mp-lobby-skin-editor.gc, ISC license), written anew for Jak 3: the part chosen with L2 / R2, its
+;; red, green, blue and tint strength on sliders (up / down choose one, left / right change it, L1 /
+;; R1 by larger steps), a color swatch, a turning preview of the character wearing it (circle: Jak
+;; or Daxter, each with his parts), X keeps it (saved, sent to the others), triangle puts back the
+;; outfit the page opened with. Our own model shows the draft meanwhile.
+;; ------------------------------------------------------------------------------------------------
+
+;; The preview's size, 2.6 m in front of the camera.
+(defconstant MP_SKIN_PREVIEW_JAK 0.26)
+(defconstant MP_SKIN_PREVIEW_DAXTER 0.52)
+
+(deftype mp-skin-edit-state (structure)
+  ((group           int32)      ;; part edited (1-9 Jak's, 10-12 Daxter's)
+   (slider          int32)      ;; 0 red, 1 green, 2 blue, 3 strength
+   (daxter?         symbol)     ;; the page shows Daxter (his parts) rather than Jak
+   (preview-daxter? symbol)     ;; what the preview shows
+   (last-move       time-frame) ;; repeat of held keys
+   (spin            float)      ;; the preview's turn
+   (original        uint32 16)  ;; the outfit when the page opened
+   (responds        int32)      ;; frames the page read its keys, and the last ones (test log)
+   (last-keys       uint32)
+   )
+  )
+
+(define *mp-skin-edit* (new 'global 'mp-skin-edit-state))
+
+;; The parts' names, by group (0 unused).
+(define *mp-skin-names*
+  (new 'static 'boxed-array :type text-id
+    (text-id progress-mp-appearance)
+    (text-id progress-mp-skin-shirt)
+    (text-id progress-mp-skin-armor)
+    (text-id progress-mp-skin-pants)
+    (text-id progress-mp-skin-boots)
+    (text-id progress-mp-skin-scarf)
+    (text-id progress-mp-skin-straps)
+    (text-id progress-mp-skin-gloves)
+    (text-id progress-mp-skin-hair)
+    (text-id progress-mp-skin-goggles)
+    (text-id progress-mp-skin-fur)
+    (text-id progress-mp-skin-light-fur)
+    (text-id progress-mp-skin-belt)
+    )
+  )
+
+(defun mp-skin-begin ()
+  "Start editing: the draft and the original are the saved outfit; the page shows the character we
+   play."
+  (let ((e *mp-skin-edit*)
+        (s *mp-skins*)
+        )
+    (dotimes (i 16)
+      (set! (-> e original i) (-> *mp-config* skin i))
+      (set! (-> s draft i) (-> *mp-config* skin i))
+      )
+    (set! (-> e daxter?) (= (-> *mp-config* character) 1))
+    (set! (-> e group) (if (-> e daxter?) MP_SKIN_FIRST_DAXTER 1))
+    (set! (-> e slider) 0)
+    (set! (-> s editing?) #t)
+    )
+  (none)
+  )
+
+(defun mp-skin-open ((progress progress))
+  "The Appearance page, from the multiplayer options."
+  (mp-skin-begin)
+  (push-state progress)
+  (set-next-state progress 'mp-skin 0)
+  (none)
+  )
+
+(defun mp-skin-preview-kill ()
+  "Remove the page's preview."
+  (let ((proc (handle->process (-> *mp-skins* preview))))
+    (if proc
+        (deactivate proc)
+        )
+    )
+  (set! (-> *mp-skins* preview) (the-as handle #f))
+  (none)
+  )
+
+(defun mp-skin-end ((keep? symbol))
+  "Stop editing: keep the draft (saved, sent to the others) or put the original back."
+  (let ((s *mp-skins*))
+    (when keep?
+      (dotimes (i 16)
+        (set! (-> *mp-config* skin i) (-> s draft i))
+        )
+      (mp-config-save!)
+      (if (mp-online?)
+          (mp-send-skin -1)
+          )
+      (format 0 "[multiplayer] outfit saved~%")
+      )
+    (set! (-> s editing?) #f)
+    )
+  (mp-skin-preview-kill)
+  (none)
+  )
+
+(defun mp-skin-watch ()
+  "Every frame from the hook: the page closed some other way than X (START, the menu gone) keeps
+   the outfit it opened with; no preview left without the page."
+  (when (-> *mp-skins* editing?)
+    (when (not (and *progress-process*
+                    (or (= (-> *progress-process* 0 current) 'mp-skin) (= (-> *progress-process* 0 next) 'mp-skin))
+                    )
+               )
+      (mp-skin-end #f)
+      )
+    )
+  (if (and (not (-> *mp-skins* editing?)) (handle->process (-> *mp-skins* preview)))
+      (mp-skin-preview-kill)
+      )
+  (none)
+  )
+
+(defun mp-skin-value ((slider int))
+  "The slider's value in the part edited: red, green, blue 0-255, strength 0-255. A part never
+   tinted starts at the player's marker color."
+  (let ((tint (-> *mp-skins* draft (-> *mp-skin-edit* group))))
+    (when (zero? tint)
+      (let ((c (mp-color-rgba (-> *mp-config* color))))
+        (set! tint (the-as uint (logior (shl (min 255 (* 2 (-> c r))) 16) (shl (min 255 (* 2 (-> c g))) 8) (min 255 (* 2 (-> c b))))))
+        )
+      )
+    (the-as int (logand (shr tint (case slider ((0) 16) ((1) 8) ((2) 0) (else 24))) 255))
+    )
+  )
+
+(defun mp-skin-set-value ((slider int) (value int))
+  "Set a slider of the part edited (0-255); the others keep their value."
+  (let ((v (new 'stack-no-clear 'array 'int32 4)))
+    (dotimes (i 4)
+      (set! (-> v i) (mp-skin-value i))
+      )
+    (set! (-> v slider) (max 0 (min 255 value)))
+    (set! (-> *mp-skins* draft (-> *mp-skin-edit* group))
+          (the-as uint (logior (shl (-> v 3) 24) (shl (-> v 0) 16) (shl (-> v 1) 8) (-> v 2)))
+          )
+    )
+  (none)
+  )
+
+(defun mp-skin-next-part ((step int))
+  "The next part (step 1) or the previous one (-1) of the character shown."
+  (let* ((e *mp-skin-edit*)
+         (first (if (-> e daxter?) MP_SKIN_FIRST_DAXTER 1))
+         (n (if (-> e daxter?) (+ (- MP_SKIN_LAST MP_SKIN_FIRST_DAXTER) 1) (+ MP_SKIN_FIRST_DAXTER -1)))
+         )
+    (set! (-> e group) (+ first (mod (+ (- (-> e group) first) step n) n)))
+    )
+  (none)
+  )
+
+(defun mp-skin-preview-update ((x float) (y float))
+  "The page's preview of our character wearing the draft: spawned when missing (Jak or Daxter as the
+   page shows), in the 3D scene 2.6 m in front of the camera at screen offset x, y (from the
+   center), turning, lit as the menu's ring (title-light). The page's background leaves that part
+   of the screen open (draw-bg-box-alpha-1, below): HUD models are drawn by the generic renderer,
+   which has no outfit tint. It lives in the first pool, which runs under every menu."
+  (let ((e *mp-skin-edit*)
+        (proc (the-as manipy (handle->process (-> *mp-skins* preview))))
+        )
+    (when (and proc (!= (-> e preview-daxter?) (-> e daxter?)))
+      (mp-skin-preview-kill)
+      (set! proc #f)
+      )
+    (when (not proc)
+      (let ((sg (mp-character-skel (-> e daxter?) (mp-local-outfit))))
+        (when sg
+          (let ((pp (process-spawn
+                      manipy
+                      :init manipy-init
+                      (math-camera-pos)
+                      (the-as entity-actor #f)
+                      sg
+                      (the-as vector #f)
+                      (the-as manipy-options 0)
+                      :name "mp-skin-preview"
+                      :to *mp-input-pool*
+                      ;; Jak's model and its scarf (cloth) need the room a puppet has
+                      :stack-size #x20000
+                      )
+                    )
+                )
+            (when pp
+              (set! proc (the-as manipy (ppointer->process pp)))
+              (set! (-> *mp-skins* preview) (ppointer->handle pp))
+              (set! (-> e preview-daxter?) (-> e daxter?))
+              (logclear! (-> proc mask) (process-mask freeze pause menu progress actor-pause))
+              (logior! (-> proc draw global-effect) (draw-control-global-effect title-light))
+              ;; no cloth (Jak's scarf and flap): it is simulated at world scale, the preview is
+              ;; drawn small, so it stretched far out of the model
+              (set! (-> proc draw cloth-instances) (the-as (array cloth-on-skeleton) #f))
+              ;; Jak's body segments as ours shows them (a new model shows none)
+              (if (not (-> e daxter?))
+                  (setup-masks (-> proc draw) -1 (if (and *target* (not (focus-test? *target* indax)))
+                                                     (the-as int (-> *target* draw seg-mask))
+                                                     1
+                                                     )
+                               )
+                  )
+              ;; standing idle, the clip found by name in the model's art group
+              (send-event proc 'art-joint-anim (if (-> e daxter?) "daxter-indax-stance" "jakb-stance-loop") 0)
+              (send-event proc 'anim-mode 'loop)
+              )
+            )
+          )
+        )
+      )
+    (when proc
+      (let ((pos (new 'stack-no-clear 'vector))
+            (scr (new 'stack 'vector))
+            (dir (new 'stack-no-clear 'vector))
+            )
+        (set! (-> scr x) x)
+        (set! (-> scr y) y)
+        (position-in-front-of-screen! pos (meters 2.6) scr)
+        (vector-copy! (-> proc root trans) pos)
+        ;; facing the camera, turning
+        (+! (-> e spin) (* 8192.0 (seconds-per-frame)))
+        (vector-! dir (math-camera-pos) pos)
+        (set! (-> dir y) 0.0)
+        (vector-normalize! dir 1.0)
+        (quaternion-look-at! (-> proc root quat) dir *up-vector*)
+        (quaternion-rotate-y! (-> proc root quat) (-> proc root quat) (-> e spin))
+        (let ((k (if (-> e daxter?) MP_SKIN_PREVIEW_DAXTER MP_SKIN_PREVIEW_JAK)))
+          (set-vector! (-> proc root scale) k k k 1.0)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- the menu pages' background hides the 3D scene behind them
+;; (engine/ui/progress/progress-draw.gc, pc/progress/progress-draw-pc.gc): on the Appearance page it
+;; covers the left part only, where the sliders are; the preview turns in the right part.
+(define-perm *mp-stock-draw-bg-box-alpha-1* (function progress progress-box float object)
+  (method-of-type progress draw-bg-box-alpha-1)
+  )
+
+(defmethod draw-bg-box-alpha-1 ((this progress) (arg0 progress-box) (arg1 float))
+  "Stock, except on the Appearance page: the left 60 % of the box (multiplayer mod)."
+  (cond
+    ((and (= (-> this current) 'mp-skin) (-> *mp-skins* editing?))
+     (let ((box (new 'stack-no-clear 'progress-box)))
+       (mem-copy! (the-as pointer box) (the-as pointer arg0) (size-of progress-box))
+       (set! (-> box aspect4x3 max x) (+ (-> box aspect4x3 min x) (* 0.6 (- (-> box aspect4x3 max x) (-> box aspect4x3 min x)))))
+       (set! (-> box aspect16x9 max x) (+ (-> box aspect16x9 min x) (* 0.6 (- (-> box aspect16x9 max x) (-> box aspect16x9 min x)))))
+       (*mp-stock-draw-bg-box-alpha-1* this box arg1)
+       )
+     )
+    (else
+      (*mp-stock-draw-bg-box-alpha-1* this arg0 arg1)
+      )
+    )
+  )
+
+(defun mp-skin-rgba ()
+  "The part's color, for its swatch and its strength bar (#x80 is full)."
+  (the-as rgba (logior (shr (mp-skin-value 0) 1) (shl (shr (mp-skin-value 1) 1) 8) (shl (shr (mp-skin-value 2) 1) 16) (shl #x80 24)))
+  )
+
+(deftype menu-mp-skin-option (menu-option)
+  ()
+  )
+
+(define *mp-skin-options*
+  (new 'static 'menu-option-list
+    :y-center #xc6
+    :y-space 15
+    :scale 0.82
+    :options (new 'static 'boxed-array :type menu-option
+      (new 'static 'menu-mp-skin-option :name (text-id progress-mp-appearance))
+      )
+    )
+  )
+
+(defmethod draw-option ((this menu-mp-skin-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "The part edited (character and name), its color swatch, the four sliders (the chosen one
+   highlighted), the keys; the preview turns on the right."
+  (let* ((e *mp-skin-edit*)
+         (alpha (fmax 0.0 (* 2.0 (- 0.5 (-> progress menu-transition)))))
+         (wide? (= (get-aspect-ratio) 'aspect16x9))
+         (vis? (-> *pc-settings* use-vis?))
+         (x0 (if wide? 79.0 70.0))
+         (x1 (if wide? 435.0 445.0))
+         (left (+ 8.0 (if vis? x0 (the float (adjust-game-x x0)))))
+         (width (- (if vis? x1 (the float (adjust-game-x x1))) left 8.0))
+         (top (if wide? 86.0 112.0))
+         (bottom (if wide? 362.0 329.0))
+         (col-w (* 0.58 width))
+         (bar-x (+ left (* 0.06 width)))
+         (bar-w (* 0.46 width))
+         (strength (mp-skin-value 3))
+         )
+    (when (-> *mp-skins* editing?)
+      (set! (-> font-ctx alpha) alpha)
+      (draw-page-header font-ctx (text-id progress-mp-appearance) alpha)
+      ;; the part: "Jak: Shirt"
+      (set-flags! font-ctx (font-flags kerning middle large))
+      (format (clear *mp-lobby-line*) "~S: ~S"
+              (lookup-text! *common-text* (if (-> e daxter?) (text-id progress-mp-daxter) (text-id progress-mp-jak)) #f)
+              (lookup-text! *common-text* (-> *mp-skin-names* (-> e group)) #f)
+              )
+      (mp-lobby-print font-ctx *mp-lobby-line* left (+ top 6.0) col-w 0.6 (font-color font-color-33))
+      ;; the color swatch (gray striped when the part keeps its stock texture)
+      (let ((sw-x (the int (+ left (* 0.2 width))))
+            (sw-y (the int (+ top 30.0)))
+            )
+        (mp-menu-box (+ sw-x -1) (+ sw-y -1) (+ (the int (* 0.18 width)) 2) 20 (new 'static 'rgba :a #x80))
+        (mp-menu-box sw-x sw-y (the int (* 0.18 width)) 18
+                     (if (zero? strength)
+                         (new 'static 'rgba :r #x40 :g #x40 :b #x40 :a #x80)
+                         (mp-skin-rgba)
+                         )
+                     )
+        )
+      ;; the sliders
+      (set-flags! font-ctx (font-flags kerning large))
+      (dotimes (i 4)
+        (let* ((y (+ top 52.0 (* 28.0 (the float i))))
+               (v (mp-skin-value i))
+               (on? (= i (-> e slider)))
+               )
+          (if on?
+              (mp-menu-box (the int (+ bar-x -4.0)) (the int (+ y -2.0)) (the int (+ bar-w 8.0)) 27
+                           (new 'static 'rgba :r #x50 :g #x50 :b #x60 :a #x50)
+                           )
+              )
+          (cond
+            ((< i 3)
+             (format (clear *mp-lobby-line*) "~S: ~D"
+                     (lookup-text! *common-text* (case i
+                                                   ((0) (text-id progress-mp-skin-red))
+                                                   ((1) (text-id progress-mp-skin-green))
+                                                   (else (text-id progress-mp-skin-blue))
+                                                   )
+                                   #f
+                                   )
+                     v
+                     )
+             )
+            ((zero? v)
+             (format (clear *mp-lobby-line*) "~S: 0% (~S)" (lookup-text! *common-text* (text-id progress-mp-skin-strength) #f)
+                     (lookup-text! *common-text* (text-id progress-mp-skin-stock) #f)
+                     )
+             )
+            (else
+              (format (clear *mp-lobby-line*) "~S: ~D%" (lookup-text! *common-text* (text-id progress-mp-skin-strength) #f)
+                      (/ (+ (* v 100) 127) 255)
+                      )
+              )
+            )
+          (mp-lobby-print font-ctx *mp-lobby-line* bar-x y col-w 0.38 (if on? (font-color font-color-33) (font-color font-color-32)))
+          (mp-menu-box (the int bar-x) (the int (+ y 15.0)) (the int bar-w) 6 (new 'static 'rgba :r #x18 :g #x18 :b #x1c :a #x80))
+          (mp-menu-box (the int bar-x) (the int (+ y 15.0)) (the int (/ (* bar-w (the float v)) 255.0)) 6
+                       (case i
+                         ((0) (new 'static 'rgba :r #x80 :g #x18 :b #x18 :a #x80))
+                         ((1) (new 'static 'rgba :r #x18 :g #x80 :b #x18 :a #x80))
+                         ((2) (new 'static 'rgba :r #x18 :g #x18 :b #x80 :a #x80))
+                         (else (mp-skin-rgba))
+                         )
+                       )
+          )
+        )
+      ;; the keys
+      (set-flags! font-ctx (font-flags kerning middle large))
+      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys) #f) left (- bottom 64.0) width 0.38 (font-color font-color-32))
+      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys-2) #f) left (- bottom 46.0) width 0.38 (font-color font-color-32))
+      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys-3) #f) left (- bottom 28.0) width 0.38 (font-color font-color-32))
+      ;; the preview, on the page's right side (offsets from the screen's center)
+      (mp-skin-preview-update (+ (* 0.78 width) left -256.0) (- bottom 290.0))
+      )
+    )
+  (none)
+  )
+
+(defmethod respond-progress ((this menu-mp-skin-option) (progress progress) (selected? symbol))
+  "The page's keys (see above). Triangle is left to the stock, which goes back a page, once the
+   outfit the page opened with is put back."
+  (let* ((e *mp-skin-edit*)
+         (repeat? (time-elapsed? (-> e last-move) (seconds 0.05))) ;; held: after 0.3 s, every 0.05 s
+         (big (if (= (-> e slider) 3) 26 16))
+         (small (if (= (-> e slider) 3) 3 1))
+         )
+    (when (-> *mp-skins* editing?)
+      (+! (-> e responds) 1)
+      (if (nonzero? (-> *cpad-list* cpads 0 button0-rel 0))
+          (set! (-> e last-keys) (the-as uint (-> *cpad-list* cpads 0 button0-rel 0)))
+          )
+      (cond
+        ((cpad-pressed? 0 triangle)
+         (mp-skin-end #f)
+         )
+        ((cpad-pressed? 0 confirm)
+         (cpad-clear! 0 confirm)
+         (mp-skin-end #t)
+         (sound-play "generic-beep")
+         (pop-state progress)
+         )
+        ((cpad-pressed? 0 l2)
+         (cpad-clear! 0 l2)
+         (mp-skin-next-part -1)
+         (set! (-> e slider) 0)
+         (sound-play "roll-over")
+         )
+        ((cpad-pressed? 0 r2)
+         (cpad-clear! 0 r2)
+         (mp-skin-next-part 1)
+         (set! (-> e slider) 0)
+         (sound-play "roll-over")
+         )
+        ((cpad-pressed? 0 circle)
+         (cpad-clear! 0 circle)
+         (set! (-> e daxter?) (not (-> e daxter?)))
+         (set! (-> e group) (if (-> e daxter?) MP_SKIN_FIRST_DAXTER 1))
+         (set! (-> e slider) 0)
+         (sound-play "generic-beep")
+         )
+        ((cpad-pressed? 0 up l-analog-up)
+         (cpad-clear! 0 up l-analog-up)
+         (set! (-> e slider) (mod (+ (-> e slider) 3) 4))
+         (sound-play "roll-over")
+         )
+        ((cpad-pressed? 0 down l-analog-down)
+         (cpad-clear! 0 down l-analog-down)
+         (set! (-> e slider) (mod (+ (-> e slider) 1) 4))
+         (sound-play "roll-over")
+         )
+        ((cpad-pressed? 0 left l-analog-left)
+         (set! (-> e last-move) (+ (current-time) (seconds 0.25)))
+         (mp-skin-set-value (-> e slider) (- (mp-skin-value (-> e slider)) small))
+         )
+        ((cpad-pressed? 0 right l-analog-right)
+         (set! (-> e last-move) (+ (current-time) (seconds 0.25)))
+         (mp-skin-set-value (-> e slider) (+ (mp-skin-value (-> e slider)) small))
+         )
+        ((cpad-pressed? 0 l1)
+         (set! (-> e last-move) (+ (current-time) (seconds 0.25)))
+         (mp-skin-set-value (-> e slider) (- (mp-skin-value (-> e slider)) big))
+         )
+        ((cpad-pressed? 0 r1)
+         (set! (-> e last-move) (+ (current-time) (seconds 0.25)))
+         (mp-skin-set-value (-> e slider) (+ (mp-skin-value (-> e slider)) big))
+         )
+        (repeat?
+          (cond
+            ((cpad-hold? 0 left l-analog-left)
+             (set-time! (-> e last-move))
+             (mp-skin-set-value (-> e slider) (- (mp-skin-value (-> e slider)) (* 4 small)))
+             )
+            ((cpad-hold? 0 right l-analog-right)
+             (set-time! (-> e last-move))
+             (mp-skin-set-value (-> e slider) (+ (mp-skin-value (-> e slider)) (* 4 small)))
+             )
+            ((cpad-hold? 0 l1)
+             (set-time! (-> e last-move))
+             (mp-skin-set-value (-> e slider) (- (mp-skin-value (-> e slider)) big))
+             )
+            ((cpad-hold? 0 r1)
+             (set-time! (-> e last-move))
+             (mp-skin-set-value (-> e slider) (+ (mp-skin-value (-> e slider)) big))
+             )
+            )
+          )
+        )
+      )
+    )
+  0
+  )
+
+;; ------------------------------------------------------------------------------------------------
 ;; Game modes (square in the lobby, host): the eight modes, those not playable yet grayed out; co-op
 ;; then asks how the campaign starts, and a mission when one is chosen. See "Game modes" in
 ;; multiplayer.gc for what each starts.
@@ -1389,6 +1874,10 @@
      )
     (('mp-keyboard)
      (set! (-> this current-options) *mp-keyboard-options*)
+     0
+     )
+    (('mp-skin)
+     (set! (-> this current-options) *mp-skin-options*)
      0
      )
     (('mp-join-game)

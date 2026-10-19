@@ -210,8 +210,9 @@ struct Config {
   s32 color;         // 52
   s32 enabled;       // 56
   s32 mode;          // 60 game mode when hosting: 0 free roam, 1 co-op
+  u32 skin[16];      // 64 the player's outfit: per group, rgb and strength in the top byte
 };
-static_assert(sizeof(Config) == 64, "Config must match mp-config");
+static_assert(sizeof(Config) == 128, "Config must match mp-config");
 
 enum class Mode : s32 { Offline = 0, Connecting = 1, Client = 2, Host = 3 };
 
@@ -375,6 +376,9 @@ std::atomic<int>& outline_pixels();
 // Draws of another player's model with a Dark Jak skin of its own (morph above 0) since boot,
 // counted by Merc2::do_draws, read by the test log (pc-mp-dark-skin-draws).
 std::atomic<int>& dark_skin_draws();
+// Draws of a player's model with an outfit tint since boot (Merc2), read by the test log
+// (pc-mp-skin-draws).
+std::atomic<int>& skin_draws();
 
 }  // namespace mp
 
