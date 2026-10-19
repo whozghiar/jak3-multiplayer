@@ -1792,5 +1792,7 @@
 ;; One of the reasons we didn't do this is because it makes it obvious which strings are remaining,
 ;; but there are better ways to keep track or check if strings are missing.
 (#when PC_PORT
-  (kheap-alloc (define *fallback-text-heap* (new 'global 'kheap)) (* 80 1024))
+  ;; MOD multiplayer -- 128 KB as *common-text-heap*: the English text with the mod's strings outgrew
+  ;; 80 KB (0COMMON.TXT 78.6 KB, its link overran the heap and the boot stopped in c_symlink2)
+  (kheap-alloc (define *fallback-text-heap* (new 'global 'kheap)) (* 128 1024))
   (define *fallback-text* (the game-text-info #f)))
