@@ -1,4 +1,5 @@
-# Co-op respawn, guest side: dies 6 m from the host and comes back next to it, health full.
+# Co-op respawn, guest side: dies 6 m from the host, watches it 5 s (camera on its puppet, its name
+# on screen, the countdown), comes back next to it, health full.
 1 enable
 1 name Guest
 1 color 2
@@ -8,8 +9,11 @@
 46 character 0
 50 goto-player 0 6 0
 52 die
-58 log-respawn
-58.5 log-me
-59 screenshot back-guest
-70 log-respawn
-75 log
+57 log-respawn
+57.5 screenshot spectating-guest
+63 log-respawn
+63.5 log-me
+64 screenshot back-guest
+69 screenshot host-body
+76 log-respawn
+80 log

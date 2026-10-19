@@ -1699,6 +1699,12 @@
          (format 0 "[mp-test] respawn ~D state ~A health ~,,1f teammate ~D~%" *mp-respawns* (mp-target-state-name)
                  (if *target* (-> *target* fact health) 0.0) (mp-living-teammate)
                  )
+         (format 0 "[mp-test] spectate slot ~D left ~D ms shown ~D camera-on-puppet ~A~%" (-> *mp-spectate* slot)
+                 (if (>= (-> *mp-spectate* slot) 0) (/ (- (-> *mp-spectate* until) (mp-now)) 300) 0) (-> *mp-spectate* shown)
+                 (and (>= (-> *mp-spectate* slot) 0) *camera*
+                      (= (handle->process (-> *camera* focus handle)) (mp-puppet-process (-> *mp-spectate* slot)))
+                      )
+                 )
          )
         ((string= cmd "shop-buy")
          ;; shop-buy <item>: buy shop item n, as the shop page's X does

@@ -869,9 +869,15 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")
         c.check(scenario, "co-op: the guest who died comes back next to the host, health full, no continue point",
-                any("back next to player 0" in l for l in client) and gr[:1] == [("1", "target-stance", "8.0")], f"{gr}")
+                any("back next to player 0" in l for l in client) and ("1", "target-stance", "8.0") in gr, f"{gr}")
         c.check(scenario, "and the host next to the guest",
                 any("back next to player 1" in l for l in host) and hr[-1:] == [("1", "target-stance", "8.0")], f"{hr}")
+
+        gs = grab(client, r"\] spectate slot \S+ left \S+ ms shown (\d+)")
+        hs = grab(host, r"\] spectate slot \S+ left \S+ ms shown (\d+)")
+        c.check(scenario, "before coming back each dead player watches its teammate 5 s (\"Spectating: <name>\" drawn about 300 frames)",
+                any("dead, watching player 0 for 5 s" in l for l in client) and any("dead, watching player 1 for 5 s" in l for l in host)
+                and bool(gs) and int(gs[-1][0]) >= 250 and bool(hs) and int(hs[-1][0]) >= 250, f"guest {gs[-1:]}, host {hs[-1:]}")
 
     elif scenario == "economy-trophy":
         c.check(scenario, "a Metal Head killed by the host's blow: a trophy for the host",

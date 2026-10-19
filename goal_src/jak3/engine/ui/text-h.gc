@@ -1748,6 +1748,8 @@
   (progress-mp-race-choice-daxter #x1595)
   (progress-mp-race-choice-riding #x1596)
   (progress-mp-race-choice-perched #x1597)
+  (progress-mp-spectating #x1598)
+  (progress-mp-respawn-in #x1599)
   )
 ;; ---text-id
 

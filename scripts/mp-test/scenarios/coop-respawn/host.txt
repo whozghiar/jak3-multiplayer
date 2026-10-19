@@ -1,5 +1,5 @@
-# Co-op respawn, host side: the guest dies next to the host and comes back next to it; then the host
-# dies and comes back next to the guest (no continue point, no mission told).
+# Co-op respawn, host side: the guest dies next to the host, watches it 5 s, comes back next to it;
+# then the host dies, watches the guest 5 s (its body on the ground), comes back next to the guest.
 1 enable
 1 name Host
 1 color 1
@@ -9,7 +9,9 @@
 44.9 wait-player 1
 50 log-respawn
 64 die
-70 log-respawn
-70.5 log-me
-71 screenshot back-host
-75 log
+69 log-respawn
+69.5 screenshot spectating-host
+76 log-respawn
+76.5 log-me
+77 screenshot back-host
+80 log

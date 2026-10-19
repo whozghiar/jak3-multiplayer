@@ -2644,6 +2644,7 @@
 (define-extern mp-draw-race-wait (function none))
 (define-extern mp-draw-beam-count (function none)) ;; "Waypoints reached together", below
 (define-extern mp-draw-merchant (function none))
+(define-extern mp-draw-spectate (function none)) ;; "Co-op: back next to a teammate", below
 (define-extern mp-econ-claim-orb (function int uint none))
 (define-extern mp-econ-apply (function mp-event none))
 (define-extern mp-econ-buy (function int int none))
@@ -5047,6 +5048,7 @@
     (mp-draw-beam-count)
     (mp-draw-race-wait)
     (mp-draw-merchant)
+    (mp-draw-spectate)
     (cond
       ((>= *mp-prompt-slot* 0)
        (mp-draw-prompt (text-id progress-mp-prompt-steal))
@@ -5306,11 +5308,36 @@
 ;; invulnerable, and the mission is not told (target-death-reset sends the task managers 'target
 ;; 'die, which fails a mission that fails on death): a mission fails only once every player is dead.
 ;; Dying alone, or in a vehicle, the stock: the continue point, and the mission fails if it does so.
+;; Before coming back, the dead player watches a living teammate for 5 s (the camera on its puppet,
+;; "Spectating: <name>" and the countdown on screen), its body left where it fell, as himstan's
+;; death spectate does; a teammate who dies meanwhile is left for another, and with none left the
+;; stock death follows.
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_RESPAWN_RANGE (meters 300))
 
 (define *mp-respawns* 0) ;; times we came back next to a teammate (test log)
+
+(defconstant MP_RESPAWN_DELAY (seconds 5))
+
+(deftype mp-spectate-state (structure)
+  ((slot  int32)      ;; the teammate watched while we wait to come back, -1 none
+   (until time-frame) ;; real-clock time we come back
+   (shown int32)      ;; frames the spectating line was drawn (test log)
+   )
+  )
+
+(define *mp-spectate* (new 'global 'mp-spectate-state))
+(set! (-> *mp-spectate* slot) -1)
+
+(defun mp-puppet-process ((slot int))
+  "Player `slot`'s puppet here, #f none."
+  (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+    (if mgr
+        (the-as process-focusable (handle->process (-> mgr puppets slot)))
+        )
+    )
+  )
 
 (defun mp-living-teammate ()
   "In co-op, the slot of a teammate alive in game within 300 m of us (the nearest), -1 none."
@@ -5340,9 +5367,31 @@
 (define-perm *mp-stock-target-death-reset* (function symbol symbol none :behavior target) target-death-reset)
 
 (defbehavior target-death-reset target ((arg0 symbol) (arg1 symbol))
-  "Stock, except in co-op on foot with a living teammate (see above): back next to that teammate,
-   health full, 3 s invulnerable; no task manager told, so no mission fails."
+  "Stock, except in co-op on foot with a living teammate (see above): 5 s watching it, our body on
+   the ground, then back next to it, health full, 3 s invulnerable; no task manager told, so no
+   mission fails."
   (let ((mate (if (focus-test? self pilot) -1 (mp-living-teammate))))
+    (when (>= mate 0)
+      (let ((sp *mp-spectate*))
+        (set! (-> sp until) (+ (mp-now) MP_RESPAWN_DELAY))
+        (format 0 "[multiplayer] co-op: dead, watching player ~D for 5 s~%" mate)
+        (while (and (>= mate 0) (< (mp-now) (-> sp until)))
+          ;; the camera on the watched teammate's puppet (another one when it dies meanwhile)
+          (when (!= mate (-> sp slot))
+            (set! (-> sp slot) mate)
+            (let ((pp (mp-puppet-process mate)))
+              (if pp
+                  (send-event *camera* 'change-target pp)
+                  )
+              )
+            )
+          (suspend)
+          (set! mate (mp-living-teammate))
+          )
+        (set! (-> sp slot) -1)
+        (send-event *camera* 'change-target self)
+        )
+      )
     (cond
       ((>= mate 0)
        (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> (mp-remote-state mate) trans))))
@@ -5359,6 +5408,34 @@
        )
       (else
         (*mp-stock-target-death-reset* arg0 arg1)
+        )
+      )
+    )
+  (none)
+  )
+
+(define *mp-spectate-line* (new 'global 'string 128 (the-as string #f)))
+
+(defun mp-draw-spectate ()
+  "While we wait to come back (co-op): 'Spectating: <name>' and the seconds left, at the top."
+  (let ((sp *mp-spectate*))
+    (when (and (>= (-> sp slot) 0) (mp-remote-state (-> sp slot)))
+      (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 60 0.0 (font-color default) (font-flags shadow kerning middle large))))
+        (set-width! ctx 512)
+        (set-height! ctx 40)
+        (set! (-> ctx scale) 0.6)
+        (string<-charp *mp-temp-string* (-> (mp-remote-state (-> sp slot)) name))
+        (format (clear *mp-spectate-line*) (lookup-text! *common-text* (text-id progress-mp-spectating) #f)
+                (mp-user-text *mp-temp-string*)
+                )
+        (print-game-text *mp-spectate-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        (set! (-> ctx origin y) 84.0)
+        (set! (-> ctx scale) 0.5)
+        (format (clear *mp-spectate-line*) (lookup-text! *common-text* (text-id progress-mp-respawn-in) #f)
+                (max 1 (/ (+ (- (-> sp until) (mp-now)) (seconds 0.99)) (seconds 1)))
+                )
+        (print-game-text *mp-spectate-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        (+! (-> sp shown) 1)
         )
       )
     )
