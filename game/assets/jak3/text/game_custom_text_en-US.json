@@ -373,5 +373,6 @@
   "157d": "Skip: waiting for the others (~D/~D)",
   "157e": "Players here: ~D/~D",
   "157f": "Waiting for every player aboard: ~D/~D",
-  "1580": "The race starts in ~D"
+  "1580": "The race starts in ~D",
+  "1581": "The host ended the session"
 }

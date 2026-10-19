@@ -1725,6 +1725,7 @@
   (progress-mp-beam-here #x157e)
   (progress-mp-race-wait #x157f)
   (progress-mp-race-start #x1580)
+  (progress-mp-host-ended #x1581)
   )
 ;; ---text-id
 

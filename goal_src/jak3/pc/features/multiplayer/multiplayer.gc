@@ -351,6 +351,18 @@
 
 ;; On-screen notification (joins, leaves, kicks...).
 (define *mp-message* (new 'global 'string 128 (the-as string #f)))
+
+;; A session that ended without us ("Session ended", below): the note shown on the title screen.
+(deftype mp-end-state (structure)
+  ((pending?   symbol)     ;; back to the title screen, the note still to show
+   (shown-from time-frame) ;; when the title screen first showed it, 0 not yet
+   (count      int32)      ;; sessions ended this way (test log)
+   )
+  )
+
+(define *mp-end* (new 'global 'mp-end-state))
+(set! (-> *mp-end* pending?) #f)
+(define *mp-end-text* (new 'global 'string 128 (the-as string #f)))
 (define *mp-status* (new 'global 'string 128 (the-as string #f)))
 (define *mp-temp-string* (new 'global 'string 64 (the-as string #f)))
 
@@ -3495,13 +3507,82 @@
 
 (defun mp-update-session-title ()
   "Back at the title screen (10 s after a game started from the lobby, so its loading screen does
-   not count): no free roam or campaign running any more."
+   not count): no free roam or campaign running any more. A host that went back there ends its
+   session: every guest goes back to its title screen too (\"Session ended\", below)."
   (when (and (-> *mp-session* kind)
              (= (level-status? *level* 'title #f) 'active)
              (>= (- (mp-now) (-> *mp-session* since)) (seconds 10))
              )
     (set! (-> *mp-session* kind) #f)
     (set! (-> *mp-session* unlock-pending) #f)
+    (when (= *mp-mode* (mp-mode host))
+      (format 0 "[multiplayer] the host is back at the title screen: the session ends~%")
+      (mp-leave!)
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Session ended
+;;
+;; When the host stops its server (Stop the server, Disconnect, back at the title screen), leaves the
+;; lobby or is lost (its game closed: 15 s without a message), every guest goes back to the title
+;; screen, its menu on its first page, where "The host ended the session" shows for 10 s. A guest
+;; kicked or banned goes there too, with that reason. A guest that leaves by itself stays where it is.
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_END_NOTE_TIME (seconds 10))
+
+(defun mp-session-ended ()
+  "A guest's session ended without its asking (*mp-status* holds the runtime's reason): the note
+   to show, and back to the title screen: a new game at title-restart, as the pause menu's Quit
+   does, or, already in the title screen's menus (the lobby), its first page."
+  (if (string-prefix= "You were" *mp-status*)
+      (copy-string<-string *mp-end-text* *mp-status*)
+      (copy-string<-string *mp-end-text* (lookup-text! *common-text* (text-id progress-mp-host-ended) #f))
+      )
+  (set! (-> *mp-end* pending?) #t)
+  (set! (-> *mp-end* shown-from) 0)
+  (+! (-> *mp-end* count) 1)
+  (format 0 "[multiplayer] the session ended (~S): back to the title screen~%" *mp-status*)
+  (cond
+    ((= (level-status? *level* 'title #f) 'active)
+     (if *progress-process*
+         (set-next-state (the-as progress (ppointer->process *progress-process*)) 'title 0)
+         )
+     )
+    (else
+      (set! (-> *game-info* mode) 'play)
+      (initialize! *game-info* 'game (the-as game-save #f) "title-restart" (the-as resetter-spec #f))
+      (set-master-mode 'game)
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-session-end ()
+  "Back at the title screen after a session ended without us: why, at the top of the screen, for
+   10 s from when the title screen shows it."
+  (let ((e *mp-end*))
+    (when (and (-> e pending?) (= (level-status? *level* 'title #f) 'active))
+      (if (zero? (-> e shown-from))
+          (set! (-> e shown-from) (mp-now))
+          )
+      (cond
+        ((>= (- (mp-now) (-> e shown-from)) MP_END_NOTE_TIME)
+         (set! (-> e pending?) #f)
+         )
+        (else
+          (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 24 0.0 (font-color red) (font-flags shadow kerning middle large))))
+            (set-width! ctx 512)
+            (set-height! ctx 40)
+            (set! (-> ctx scale) 0.6)
+            (print-game-text *mp-end-text* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+            )
+          )
+        )
+      )
     )
   (none)
   )
@@ -4886,10 +4967,14 @@
        (mp-build-local-state)
        (set! *mp-mode* (the-as mp-mode (pc-mp-update *mp-local*)))
        (set! *mp-local-slot* (pc-mp-local-slot))
-       ;; the session ended on its own (host gone, kicked...): say why
+       ;; the session ended on its own (host gone, kicked...): say why; a guest goes back to the
+       ;; title screen ("Session ended", below)
        (when (and (!= was (mp-mode offline)) (= *mp-mode* (mp-mode offline)))
          (pc-mp-message *mp-status*)
          (mp-show-message *mp-status*)
+         (if (= was (mp-mode client))
+             (mp-session-ended)
+             )
          )
        )
      (mp-read-remote-states)
@@ -4916,6 +5001,7 @@
        )
      (mp-draw-overlay)
      (mp-draw-pause)
+     (mp-draw-session-end)
      (mp-update-scene-skip)
      (mp-draw-scene-skip)
      (mp-update-beams)

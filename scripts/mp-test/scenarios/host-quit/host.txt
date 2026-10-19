@@ -1,0 +1,26 @@
+# The host ends the session, host side. 1: free roam from the lobby with the guest, then the host goes
+# back to the title screen (as the pause menu's Quit): its session ends. 2: Host Game again, the
+# guest joins the lobby, the host leaves it (triangle).
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+70 press x 100
+71 log-lobby
+90 wait-player 1
+92 log-session
+95 title
+100 wait-menu title
+102 log-session
+104 press down 100
+105 press x 100
+106 wait-menu mp-lobby-host
+124 log-lobby
+126 press triangle 100
+128 log-session
+130 log

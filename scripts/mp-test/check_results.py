@@ -749,6 +749,14 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "host-quit":
+        ends = grab(client, r"\] end count (\d+) pending (\S+) note .* title (\S+) menu (\S+)")
+        c.check(scenario, "the host back at its title screen ends the session: the guest in game goes back to its title screen",
+                any("the host is back at the title screen: the session ends" in l for l in host)
+                and bool(ends) and ends[0] == ("1", "#t", "#t", "title"), f"{ends[:1]}")
+        c.check(scenario, "the host leaving its lobby: the guest in it goes back to the title screen's first page",
+                len(ends) > 1 and ends[1] == ("2", "#t", "#t", "title"), f"{ends[1:2]}")
+
     elif scenario == "retail-general":
         viewer = s.get("viewer", (None, []))[1]
         c.check(scenario, "a retail boot: no debug segment, three players in the host's free roam",
