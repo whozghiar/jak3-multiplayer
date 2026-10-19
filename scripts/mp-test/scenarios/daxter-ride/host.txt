@@ -1,5 +1,5 @@
-# Passenger test with Daxter, host side: gets in a two-seat buggy (v-snake) and drives off (X); the
-# guest, playing Daxter, rides along.
+# Riding along with Daxter, host side: gets in a two-seat buggy (v-snake) and drives off (X); the
+# guest, playing Daxter, rides along on its shoulder: its own Daxter is shown there.
 1 enable
 1 name Host
 1 color 1
@@ -8,4 +8,5 @@
 52 vehicle 13
 64 press x 3000
 66 screenshot driving
+66.5 log-coop
 67 log

@@ -10,6 +10,8 @@
 58 log-coop
 60 goto-player 0 1 0
 66 press triangle 100
+66.15 screenshot climb-1
+66.45 screenshot climb-2
 67 log-coop
 67.5 screenshot perched
 70 log-coop

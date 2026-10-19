@@ -1,5 +1,6 @@
 # Co-op, host side: hosts in co-op playing Jak; crouches (L1) next to the guest, who was offered
-# Daxter and jumps on its shoulder; walks a few meters with Daxter there.
+# Daxter and jumps on its shoulder: the host's own Daxter, in the guest's outfit, climbs on with the
+# stock clips and stands for the guest, who is hidden; walks a few meters with Daxter there.
 1 enable
 1 name Host
 1 color 1
@@ -8,7 +9,12 @@
 38 host 0.0.0.0:7777
 44.9 wait-player 1
 62 press l1 4000
-66 screenshot perched
+65.6 log-coop
+65.8 screenshot climb-a
+66.3 screenshot climb-b
+66.8 screenshot climb-c
+67.3 log-coop
+67.5 screenshot perched
 68 stick 128 0 1500
 70 log-coop
 70.5 screenshot carried

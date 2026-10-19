@@ -1,5 +1,6 @@
-# Passenger test with Daxter, guest side: plays Daxter, presses L1 + triangle next to the host's
-# buggy, then rides in its seat as Daxter.
+# Riding along with Daxter, guest side: plays Daxter, presses L1 + triangle next to the buggy the
+# host (Jak) drives: rides on the host's shoulder, as the stock Daxter, hidden (the host's own Daxter,
+# in this player's outfit, sits there for him).
 1 enable
 1 name Guest
 1 color 2
@@ -7,6 +8,7 @@
 45 join 127.0.0.1:7777
 45.1 wait-joined
 58 goto-player 0 0 3
+58.6 log-coop
 59 press l1+triangle 200
 62 log
 66 screenshot riding

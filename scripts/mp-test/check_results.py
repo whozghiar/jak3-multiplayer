@@ -226,7 +226,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, f"the guest rides as passenger ({riding})", any(st == riding for (st,) in states), f"{[s for (s,) in states]}")
         if scenario == "daxter-ride":
             flags = [int(f, 16) for (f,) in grab(host, r"\] remote 1 flags #x(\w+)")]
-            c.check(scenario, "the host sees Daxter riding (Daxter model, riding)", any(f & 0x22 == 0x22 for f in flags), f"{[hex(f) for f in flags]}")
+            climb = grab(host, r"\] climb rider (-?\d+) climbs \d+ frames \d+ playing \S+ sidekick (\S+)")
+            c.check(scenario, "Daxter rides on the driving host's shoulder: the host's own Daxter is shown there for him",
+                    any(f & 0x8020 == 0x8020 for f in flags) and climb[-1:] == [("1", "#t")], f"{[hex(f) for f in flags]}, {climb}")
         gpos = counter(client, r"\] local pos " + " ".join([NUM] * 3))
         hpos = counter(client, r"\] remote 0 \S+ pos " + " ".join([NUM] * 3))
         moved = math.dist(gpos[0], gpos[-1]) if gpos else 0

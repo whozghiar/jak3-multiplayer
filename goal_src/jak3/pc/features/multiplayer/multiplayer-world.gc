@@ -1100,7 +1100,8 @@
   )
 
 (defun mp-skin-add-copies ()
-  "The copies of another player's Daxter (its sidekick, one of its props) wear that player's outfit
+  "The copies of another player's Daxter (its sidekick, one of its props) wear that player's outfit,
+   or, while a Daxter player rides on that player's shoulder, the rider's (us included)
    (mp-update-skins, multiplayer.gc)."
   (let ((ws *mp-world-state*))
     (dotimes (i (-> ws replica-count))
@@ -1109,7 +1110,22 @@
                    (logtest? (-> rep net flags) (mp-actor-flag prop))
                    (string-charp= "skel-sidekick" (-> rep net skel))
                    )
-          (mp-skin-add (-> rep draw) (mp-slot-skin (the-as int (shr (-> rep id) 24))))
+          (let* ((owner (the-as int (shr (-> rep id) 24)))
+                 (rider (mp-rider-on owner))
+                 )
+            (mp-skin-add (-> rep draw) (cond
+                                         ((= rider MP_MAX_PLAYERS)
+                                          (mp-local-skin)
+                                          )
+                                         ((>= rider 0)
+                                          (mp-slot-skin rider)
+                                          )
+                                         (else
+                                           (mp-slot-skin owner)
+                                           )
+                                         )
+                         )
+            )
           )
         )
       )

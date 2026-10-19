@@ -2158,6 +2158,21 @@
          (format 0 "[mp-test] coop ~A authority ~A character ~D perch ~D perched ~D state ~A~%" (mp-coop?) *mp-authority*
                  (-> *mp-config* character) *mp-perch-slot* *mp-perch-count* (mp-target-state-name)
                  )
+         ;; Daxter on a shoulder: the rider on ours, the climbs our Daxter played, his clip and whether
+         ;; he is drawn; whether our own model is drawn (a rider is hidden)
+         (let ((dax (if (and *target* (nonzero? (-> *target* sidekick))) (the-as process-drawable (ppointer->process (-> *target* sidekick))))))
+           (format 0 "[mp-test] climb rider ~D climbs ~D frames ~D playing ~A " (-> *mp-climb* rider) (-> *mp-climb* climbs)
+                   (-> *mp-climb* played) (nonzero? (-> *mp-climb* from))
+                   )
+           (format 0 "sidekick ~A clip ~A self-drawn ~A~%"
+                   (and dax (not (logtest? (-> dax draw status) (draw-control-status no-draw))))
+                   (if (and dax (> (-> dax skel active-channels) 0) (-> dax skel channel 0 frame-group))
+                       (-> dax skel channel 0 frame-group name)
+                       'none
+                       )
+                   (and *target* (not (logtest? (-> *target* draw status) (draw-control-status no-draw))))
+                   )
+           )
          (let ((host (mp-remote-state 0)))
            (if (and host *target*)
                (format 0 "[mp-test] coop distance to the host ~m host anim ~D flags #x~X candidate ~D~%"

@@ -230,6 +230,55 @@
 ;; body plays his clip holding it, over the copied ones.
 (define-perm *mp-stock-joint-control-remap!* (function joint-control art-group art-group pair int string symbol) joint-control-remap!)
 
+(defun mp-climb-anim! ((jc joint-control) (ag art-group))
+  "While a Daxter player climbs onto our shoulder (*mp-climb*, multiplayer.gc): our Daxter plays the
+   stock climb of the end of Dark Jak (daxter-darkjak-get-off, then -end) instead of the clip copied
+   from ours, each at its own speed from the climb's start (as ja's seek! advances a clip: its speed
+   per 60th of a second); ended once both played. #t while it plays."
+  (let ((c *mp-climb*))
+    (when (and (>= (-> c rider) 0) (nonzero? (-> c from)))
+      (let ((a (-> ag data MP_DAX_CLIMB))
+            (b (-> ag data MP_DAX_CLIMB_END))
+            )
+        (when (and a b (type? a art-joint-anim) (type? b art-joint-anim))
+          (let* ((ticks (* 0.2 (the float (- (mp-now) (-> c from))))) ;; 60ths of a second
+                 (sa (-> (the-as art-joint-anim a) speed))
+                 (sb (-> (the-as art-joint-anim b) speed))
+                 (na (the float (+ (-> (the-as art-joint-anim a) frames num-frames) -1)))
+                 (nb (the float (+ (-> (the-as art-joint-anim b) frames num-frames) -1)))
+                 (first? (< (* ticks sa) na))
+                 (f (if first? (* ticks sa) (* (- ticks (/ na sa)) sb)))
+                 )
+            (cond
+              ((or first? (< f nb))
+               (let ((ch (-> jc channel 0)))
+                 (set! (-> jc active-channels) 1)
+                 (set! (-> jc float-channels) (the-as uint 0))
+                 (set! (-> jc root-channel) (the-as (inline-array joint-control-channel) ch))
+                 (set! (-> ch parent) jc)
+                 (set! (-> ch command) (joint-control-command push))
+                 (set! (-> ch frame-group) (the-as art-joint-anim (if first? a b)))
+                 (set! (-> ch num-func) num-func-identity)
+                 (set! (-> ch frame-num) f)
+                 (set! (-> ch frame-interp 0) 1.0)
+                 (set! (-> ch frame-interp 1) 1.0)
+                 )
+               (set! (-> jc interp-select 0) 0)
+               (+! (-> c played) 1)
+               (return #t)
+               )
+              (else
+                (set! (-> c from) 0)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  #f
+  )
+
 (defun joint-control-remap! ((jc joint-control)
                     (dst-art-group art-group)
                     (parent-art-group art-group)
@@ -239,9 +288,15 @@
                     )
   "Stock, then for the local player's Daxter (multiplayer mod): his clip holding the gun on his upper
    body while he holds it in his mode (mp-daxter-upper-body!), no joint selection otherwise (also on
-   Jak's shoulder)."
+   Jak's shoulder); on Jak's shoulder, the climb of a Daxter player sitting there (mp-climb-anim!)."
   (let ((ret (*mp-stock-joint-control-remap!* jc dst-art-group parent-art-group remap-list seed prefix)))
-    (when (and *target* (nonzero? (-> *target* sidekick)) (= jc (-> *target* sidekick 0 skel)))
+    ;; our Daxter (the sidekick pointer is #f while he is away: in some cutscenes, or hidden online)
+    (when (and *target*
+               (nonzero? (-> *target* sidekick))
+               (-> *target* sidekick)
+               (= jc (-> (the-as process-drawable (ppointer->process (-> *target* sidekick))) skel))
+               (not (and (not (focus-test? *target* indax)) (mp-climb-anim! jc dst-art-group)))
+               )
       (let* ((dg *mp-daxter-gun*)
              (anim (if (and (focus-test? *target* indax) (-> dg out?) (>= (-> dg top-index) 0))
                        (-> dst-art-group data (-> dg top-index))

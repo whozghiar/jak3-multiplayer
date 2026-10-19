@@ -759,7 +759,7 @@
    (coop-start       int32)      ;; the lobby's co-op start: 0 a new campaign, 1 continue it, 2 a mission
    (coop-mission     int32)      ;; game-task of that mission, -1 none
    (saves            int32)      ;; campaign saves written (test log)
-   (sidekick-hidden? symbol)     ;; co-op: our Daxter off our shoulder (the other player plays Daxter)
+   (sidekick-hidden? symbol)     ;; online, playing Jak: our own Daxter off our shoulder
    )
   )
 
@@ -2537,6 +2537,44 @@
        )
   )
 
+;; Daxter on Jak's shoulder, as in himstan's Jak and Daxter II Multiplayer
+;; (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer, goal_src/jak2/multiplayer/player/
+;; mp-player-visibility.gc and engine/target/daxter/states/daxter-ride-along.gc, ISC): the Daxter
+;; player on a Jak's shoulder is hidden, and the Jak's own Daxter (his sidekick, hidden while nobody
+;; rides) sits there in that player's outfit, with the stock clips: on foot, driving, in every
+;; vehicle. He climbs on with the stock climb of the end of Dark Jak (daxter-darkjak-get-off, then
+;; -end, the clips of Daxter jumping back on Jak's shoulder), on every machine (his pose is sent).
+(defconstant MP_DAX_CLIMB 420)     ;; daxter-darkjak-get-off-ja (engine/data/art-elts.gc)
+(defconstant MP_DAX_CLIMB_END 427) ;; daxter-darkjak-get-off-end-ja
+
+(deftype mp-climb-state (structure)
+  ((rider  int32)      ;; the Daxter player on our shoulder last frame (slot), -1 none
+   (from   time-frame) ;; when our Daxter's climb started, 0 none playing (mp-climb-anim!)
+   (climbs int32)      ;; climbs started, and frames of climb our Daxter played (test log)
+   (played int32)
+   )
+  )
+
+(define *mp-climb* (new 'global 'mp-climb-state))
+(set! (-> *mp-climb* rider) -1)
+(set! (-> *mp-climb* from) 0)
+
+(defun mp-rider-on ((jak-slot int))
+  "The Daxter player on the shoulder of player `jak-slot` (us included): its slot, MP_MAX_PLAYERS
+   when it is us, -1 none."
+  (if (and (>= *mp-perch-slot* 0) (= *mp-perch-slot* jak-slot))
+      (return MP_MAX_PLAYERS)
+      )
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i)))
+      (if (and st (logtest? (-> st flags) (mp-flag perched)) (= (-> st ride-slot) jak-slot))
+          (return i)
+          )
+      )
+    )
+  -1
+  )
+
 (defun mp-draw-perch-prompt ()
   "Daxter's prompts: jump on the crouching Jak next to him, or off the shoulder he rides."
   (cond
@@ -3480,10 +3518,11 @@
   )
 
 (defbehavior mp-update-session mp-manager ()
-  "Every frame in game: free roam unlocked once the host is in game; in co-op, our Daxter is taken
-   off our shoulder while the other player plays Daxter (a features setting held by the manager,
-   as the game does when Daxter is away: the game's own features, which are saved, stay as they
-   are)."
+  "Every frame in game: free roam unlocked once the host is in game; online, a player playing Jak
+   has no Daxter of his own on his shoulder, whatever the mode, unless a Daxter player rides there:
+   then his own Daxter, in that player's outfit, stands for him (\"Daxter on Jak's shoulder\") (a
+   features setting held by the manager, as the game does when Daxter is away: the game's own
+   features, which are saved, stay as they are)."
   (when (and (-> *mp-session* unlock-pending) (mp-in-game?))
     (set! (-> *mp-session* unlock-pending) #f)
     (mp-unlock-everything)
@@ -3493,7 +3532,24 @@
   (if (and (-> *mp-join* foreign?) (logtest? *mp-world* (mp-world-flag free)))
       (logior! (-> *game-info* features) MP_FREE_FEATURES)
       )
-  (let ((hide? (and (mp-coop?) (!= (-> *mp-config* character) 1) (not (focus-test? *target* indax)) (mp-other-plays-daxter?))))
+  (let* ((rider (mp-rider-on *mp-local-slot*))
+         (hide? (and (mp-online?) (!= (-> *mp-config* character) 1) (not (focus-test? *target* indax)) (< rider 0)))
+         )
+    ;; a Daxter player just sat on our shoulder: our Daxter, shown again in his outfit, climbs on (on
+    ;; foot: in a vehicle he is simply seated there, as the stock does)
+    (when (and (>= rider 0) (< (-> *mp-climb* rider) 0))
+      (cond
+        ((focus-test? *target* pilot)
+         (set! (-> *mp-climb* from) 0)
+         )
+        (else
+          (set! (-> *mp-climb* from) (mp-now))
+          (+! (-> *mp-climb* climbs) 1)
+          (format 0 "[multiplayer] player ~D climbs on our shoulder~%" rider)
+          )
+        )
+      )
+    (set! (-> *mp-climb* rider) rider)
     (when (!= hide? (-> *mp-session* sidekick-hidden?))
       (set! (-> *mp-session* sidekick-hidden?) hide?)
       (if hide?
@@ -3615,8 +3671,7 @@
   )
 
 (defbehavior mp-stop-perch mp-manager ()
-  "Daxter jumps off Jak's shoulder: out of the held state, drawn again, falling next to Jak (in
-   co-op he was drawn all along)."
+  "Daxter jumps off Jak's shoulder: out of the held state, drawn again, falling next to Jak."
   (if (= (mp-target-state-name) 'target-indax-grab)
       (send-event *target* 'end-mode 'grab)
       )
@@ -3626,11 +3681,10 @@
   )
 
 (defbehavior mp-update-perch mp-manager ()
-  "Daxter on Jak's shoulder: held in his mode (target-indax-grab), he follows the shoulder of Jak's
-   puppet. In free roam he is hidden: Jak's own Daxter is drawn there on every machine (no double).
-   In co-op Jak has no Daxter of his own while we play Daxter (mp-update-session): we stay drawn,
-   sitting on his left shoulder. X, Jak gone, dead or hidden, or the held state ended put him
-   down."
+  "Daxter on Jak's shoulder: held in his mode (target-indax-grab) and hidden, he follows the shoulder
+   of Jak's puppet (the camera with him); the Jak's own Daxter, in his outfit, is drawn there instead
+   (\"Daxter on Jak's shoulder\"). X, Jak gone, dead or hidden, or the held state ended put him
+   down, drawn again."
   (cond
     ((>= *mp-perch-slot* 0)
      (let ((st (mp-remote-state *mp-perch-slot*))
@@ -3663,12 +3717,13 @@
      (set! *mp-perch-candidate* -1)
      )
     (else
-      ;; a crouching Jak within 2.5 m of Daxter standing or walking in his mode, or a Jak driving
-      ;; within 3.5 m; in co-op, a Jak driving a vehicle within 5 m of him (Daxter does not rob it
+      ;; a crouching Jak within 2.5 m of Daxter on the ground in his mode, or a Jak driving
+      ;; within 3.5 m; in co-op, or with L1 held (riding along), a Jak driving a vehicle within 5 m of
+      ;; him: Daxter rides with a Jak on his shoulder, as the stock (he does not rob that vehicle
       ;; there, and its vehicle prompt is not shown: mp-update-vehicle-interaction)
       (set! *mp-perch-candidate* -1)
       (when (and (focus-test? *target* indax)
-                 (or (= (mp-target-state-name) 'target-indax-stance) (= (mp-target-state-name) 'target-indax-walk))
+                 (not (focus-test? *target* in-air grabbed dead hit))
                  (< *mp-ride-slot* 0)
                  )
         (let ((best-dist (meters 2.5)))
@@ -3676,7 +3731,7 @@
             (let ((st (mp-remote-state i)))
               (when (and st (or (mp-jak-crouching? st) (mp-jak-driving? st)))
                 (let ((d (cond
-                           ((and (mp-jak-driving? st) (mp-coop?))
+                           ((and (mp-jak-driving? st) (or (mp-coop?) (cpad-hold? 0 l1)))
                             (+ (vector-vector-distance (-> *target* control trans) (-> st veh-trans)) (meters -2.5))
                             )
                            ((mp-jak-driving? st)
@@ -3702,11 +3757,9 @@
           (set! *mp-perch-slot* *mp-perch-candidate*)
           (set! *mp-perch-candidate* -1)
           (+! *mp-perch-count* 1)
+          ;; hidden: the Jak's own Daxter, in our outfit, sits there for us on every machine
           (send-event *target* 'change-mode 'grab #t)
-          ;; in co-op Jak has no Daxter of his own: we stay drawn on his shoulder
-          (if (not (mp-coop?))
-              (send-event *target* 'draw #f)
-              )
+          (send-event *target* 'draw #f)
           )
         )
       )
@@ -4238,8 +4291,9 @@
           (dotimes (slot MP_MAX_PLAYERS)
             (let ((st (mp-remote-state slot)))
               (when st
-                ;; a player not in game yet (loading the host's world, hidden) is far away
-                (let ((d (if (logtest? (-> st flags) (mp-flag hidden))
+                ;; a player not in game yet (loading the host's world, hidden) is far away; Daxter on
+                ;; a Jak's shoulder is hidden but there
+                (let ((d (if (and (logtest? (-> st flags) (mp-flag hidden)) (not (logtest? (-> st flags) (mp-flag perched))))
                              MP_BEAM_HOLD
                              (vector-vector-xz-distance (-> st trans) (-> b pos i))
                              )
@@ -4889,9 +4943,16 @@
     (let ((own (mp-local-skin)))
       (when *target*
         (mp-skin-add (-> *target* draw) own)
-        (let ((dax (ppointer->process (-> *target* sidekick))))
+        ;; our Daxter: the outfit of the Daxter player he stands for on our shoulder, else ours
+        (let ((dax (ppointer->process (-> *target* sidekick)))
+              (rider (mp-rider-on *mp-local-slot*))
+              )
           (if dax
-              (mp-skin-add (-> (the-as process-drawable dax) draw) own)
+              (mp-skin-add (-> (the-as process-drawable dax) draw) (if (and (>= rider 0) (< rider MP_MAX_PLAYERS))
+                                                                      (mp-slot-skin rider)
+                                                                      own
+                                                                      )
+                           )
               )
           )
         )
