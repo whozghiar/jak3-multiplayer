@@ -4,7 +4,7 @@
 ;; name: multiplayer.gc
 ;; dgos: GAME
 ;;
-;; Jak 3 multiplayer mod -- everything that runs in game. The network session itself (TCP host or
+;; Jak 3 multiplayer mod -- everything that runs in game. The network session itself (UDP host or
 ;; client, relay, interpolation of remote players) is C++: game/kernel/jak3/kmultiplayer.cpp,
 ;; reached through the pc-mp-* kernel functions declared below. The menus live in
 ;; multiplayer-menu.gc.
@@ -93,6 +93,7 @@
   (pvp 2)       ;; players can hit each other
   (progress 3)  ;; players share their story progress (closed task nodes)
   (coop 4)      ;; co-op mode (else free roam)
+  (free 5)      ;; the host plays the free roam it started from the lobby (everything unlocked)
   )
 
 ;; One player's state. 208 bytes, mirrors mp::PlayerState.
@@ -119,8 +120,11 @@
    (level      uint8 16)
    (cont       uint8 32)
    (ping-ms    uint16)     ;; the player's round trip to the host (ms), 0 for the host, set by the runtime
-   (pad0       uint16)
-   (pad1       uint32 3)
+   (lobby-mode uint8)      ;; host: game mode chosen in the lobby (config mode: 0 free roam, 1 co-op)
+   (lobby-start uint8)     ;; host: co-op start (mp-session-state coop-start)
+   (lobby-mission int16)   ;; host: game-task of the co-op mission chosen, -1 none
+   (pad2       uint16)
+   (pad1       uint32 2)
    )
   :size-assert #xd0
   )
@@ -514,6 +518,39 @@
       )
   )
 
+;; The gun, its twelve mods, the ammo upgrades (every weapon: multiplayer-guns.gc; free roam).
+(defconstant MP_ALL_GUN_FEATURES
+  (game-feature gun
+                gun-red-1 gun-red-2 gun-red-3
+                gun-yellow-1 gun-yellow-2 gun-yellow-3
+                gun-blue-1 gun-blue-2 gun-blue-3
+                gun-dark-1 gun-dark-2 gun-dark-3
+                gun-upgrade-yellow-ammo-1 gun-upgrade-yellow-ammo-2
+                gun-upgrade-red-ammo-1 gun-upgrade-red-ammo-2
+                gun-upgrade-blue-ammo-1 gun-upgrade-blue-ammo-2
+                gun-upgrade-dark-ammo-1 gun-upgrade-dark-ammo-2
+                )
+  )
+
+;; The game the host started from the lobby (game modes, "Game modes" below).
+(deftype mp-session-state (structure)
+  ((kind             symbol)     ;; 'free or 'campaign while that game runs, #f otherwise
+   (since            time-frame) ;; when it started (real clock)
+   (unlock-pending   symbol)     ;; free roam: everything still to unlock once in game
+   (coop-start       int32)      ;; the lobby's co-op start: 0 a new campaign, 1 continue it, 2 a mission
+   (coop-mission     int32)      ;; game-task of that mission, -1 none
+   (saves            int32)      ;; campaign saves written (test log)
+   (sidekick-hidden? symbol)     ;; co-op: our Daxter off our shoulder (the other player plays Daxter)
+   )
+  )
+
+(define *mp-session* (new 'global 'mp-session-state))
+(set! (-> *mp-session* kind) #f)
+(set! (-> *mp-session* unlock-pending) #f)
+(set! (-> *mp-session* sidekick-hidden?) #f)
+(set! (-> *mp-session* coop-mission) -1)
+(define *mp-mission-spec* (new 'global 'resetter-spec))
+
 ;; ------------------------------------------------------------------------------------------------
 ;; Config
 ;; ------------------------------------------------------------------------------------------------
@@ -546,11 +583,25 @@
 ;; Session control (called from the start menu)
 ;; ------------------------------------------------------------------------------------------------
 
+(define-extern pc-mp-set-max-players (function int none))
+
+(defun mp-max-players ()
+  "Players a host accepts, itself included: two in co-op (Jak and Daxter)."
+  (if (= (-> *mp-config* mode) 1)
+      2
+      MP_MAX_PLAYERS
+      )
+  )
+
 (defun mp-apply-mode! ()
-  "The game mode of the config (Options > Multiplayer > Game mode) in the server settings."
+  "The game mode of the config (Options > Multiplayer > Game mode) in the server settings, and the
+   players the server accepts (players already in stay)."
   (if (= (-> *mp-config* mode) 1)
       (logior! *mp-world* (mp-world-flag coop))
       (logclear! *mp-world* (mp-world-flag coop))
+      )
+  (if (= *mp-mode* (mp-mode host))
+      (pc-mp-set-max-players (mp-max-players))
       )
   (none)
   )
@@ -561,7 +612,7 @@
   (when (= *mp-mode* (mp-mode offline))
     (mp-config-save!)
     (mp-apply-mode!)
-    (pc-mp-host *mp-address* MP_MAX_PLAYERS)
+    (pc-mp-host *mp-address* (mp-max-players))
     (pc-mp-message *mp-status*)
     (mp-show-message *mp-status*)
     )
@@ -666,6 +717,9 @@
     (if (and (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag coop)))
         (logior! (-> st flags) (mp-flag coop))
         )
+    (set! (-> st lobby-mode) (the-as uint (-> *mp-config* mode)))
+    (set! (-> st lobby-start) (the-as uint (-> *mp-session* coop-start)))
+    (set! (-> st lobby-mission) (-> *mp-session* coop-mission))
     (set! (-> st seg-mask) (the-as uint 0))
     (cond
       ;; joining: still at the title screen or loading the host's world
@@ -1318,6 +1372,21 @@
   (none)
   )
 
+(defbehavior mp-puppet-outline mp-puppet ()
+  "Seen through walls in its player's color: the renderer draws the model again wherever something
+   hides it (*pc-merc-outlines*, engine/gfx/foreground/foreground.gc; Merc2 outline pass). Every
+   remote player's puppet; not our own model riding as a passenger."
+  (when (not (-> self local?))
+    (let ((st (mp-remote-state (-> self slot))))
+      (set! (-> *pc-merc-outlines* dc (-> self slot)) (-> self draw))
+      (if st
+          (set! (-> *pc-merc-outlines* color (-> self slot)) (mp-color-rgba (-> st color)))
+          )
+      )
+    )
+  (none)
+  )
+
 (defstate mp-puppet-idle (mp-puppet)
   :event (behavior ((proc process) (argc int) (message symbol) (block event-message-block))
     (case message
@@ -1336,6 +1405,10 @@
     )
   :exit (behavior ()
     (mp-puppet-kill-ghost)
+    ;; no outline left pointing at our draw-control once we are gone
+    (if (and (not (-> self local?)) (= (-> *pc-merc-outlines* dc (-> self slot)) (-> self draw)))
+        (set! (-> *pc-merc-outlines* dc (-> self slot)) (the-as draw-control #f))
+        )
     (when (-> self minimap)
       (kill-callback (-> *minimap* engine) (-> self minimap))
       (set! (-> self minimap) #f)
@@ -1351,6 +1424,7 @@
     (if (not (-> self local?))
         (mp-play-emitters self (mp-puppet-pose-id (-> self slot)) (-> self fx-group) (-> self fx-tracker))
         )
+    (mp-puppet-outline)
     (ja-post)
     )
   )
@@ -1805,17 +1879,34 @@
   auto-save-command
   )
 
+(define-extern mp-save-campaign (function symbol)) ;; "Game modes", below
+
 (defun auto-save-command ((arg0 symbol) (arg1 int) (arg2 int) (arg3 process-tree) (arg4 symbol))
   "Stock behavior (multiplayer mod): no save is written while the player plays in another player's
    world, its own save stays as it was; the menu that asked is told it failed. Back at the title
-   screen, or loading its own save, the player is in its own world again."
+   screen, or loading its own save, the player is in its own world again. A host's free roam saves
+   nothing either; its co-op campaign saves into the multiplayer campaign, not a card slot."
   (when (and (-> *mp-join* foreign?)
              (or (= arg0 'restore) (= (level-status? *level* 'title #f) 'active))
              )
     (set! (-> *mp-join* foreign?) #f)
     )
+  (if (= arg0 'restore)
+      (set! (-> *mp-session* kind) #f)
+      )
   (cond
-    ((and (-> *mp-join* foreign?)
+    ((and (= (-> *mp-session* kind) 'campaign) (or (= arg0 'save) (= arg0 'save-last) (= arg0 'auto-save)))
+     (let ((ok? (mp-save-campaign)))
+       (if (and arg3 (type? arg3 process))
+           (if ok?
+               (send-event (the-as process arg3) 'notify 'done (mc-status-code ok) *auto-save-info*)
+               (send-event (the-as process arg3) 'notify 'error (mc-status-code no-process))
+               )
+           )
+       )
+     (the-as (pointer auto-save) #f)
+     )
+    ((and (or (-> *mp-join* foreign?) (= (-> *mp-session* kind) 'free))
           (or (= arg0 'save) (= arg0 'save-last) (= arg0 'auto-save) (= arg0 'create-file) (= arg0 'format-card) (= arg0 'unformat-card))
           )
      (+! (-> *mp-join* blocked) 1)
@@ -1827,6 +1918,189 @@
      )
     (else
       (*mp-stock-auto-save-command* arg0 arg1 arg2 arg3 arg4)
+      )
+    )
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Game modes: what the host starts from the lobby (multiplayer-menu.gc)
+;; ------------------------------------------------------------------------------------------------
+
+;; The lobby lists eight modes; free roam and co-op can be played (config `mode` 0 and 1), the
+;; others are shown, grayed out, for later.
+;;   - Free roam: the end of the game. A new game at Spargus, then once in game every story step
+;;     closed (with its rewards) and everything unlocked (mp-unlock-everything); a guest loads that
+;;     world, so every player has everything. Nothing is saved.
+;;   - Co-op (two players): a new campaign (the intro), the campaign continued, or a mission chosen
+;;     in the story's list. The host saves it into its multiplayer campaign (pc-mp-campaign-write: a
+;;     file of its own next to the memory card saves, stamped as multiplayer), never into a card
+;;     slot; the guest saves nothing (another player's world).
+
+;; Every story step done gives most of it; this adds the rest: the gun and its mods with their
+;; upgrades, the hoverboard and its tricks, Dark and Light Jak's powers, the armor, the eco.
+(defconstant MP_FREE_FEATURES
+  (logior MP_ALL_GUN_FEATURES
+          (game-feature board board-launch board-trail board-zap
+                        darkjak darkjak-smack darkjak-bomb0 darkjak-bomb1 darkjak-tracking darkjak-invinc
+                        lightjak lightjak-regen lightjak-swoop lightjak-freeze lightjak-shield
+                        artifact-invis armor0 armor1 armor2 armor3 jakc lighteco darkeco sidekick
+                        )
+          )
+  )
+
+;; The secrets shop's upgrades unlocked in free roam (not its cheats).
+(defconstant MP_FREE_SECRETS
+  (game-secrets gun-upgrade-red-1 gun-upgrade-red-2 gun-upgrade-red-3
+                gun-upgrade-yellow-1 gun-upgrade-yellow-2 gun-upgrade-yellow-3
+                gun-upgrade-blue-1 gun-upgrade-blue-2 gun-upgrade-blue-3
+                gun-upgrade-dark-1 gun-upgrade-dark-2 gun-upgrade-dark-3
+                gun-upgrade-ammo-red gun-upgrade-ammo-yellow gun-upgrade-ammo-blue gun-upgrade-ammo-dark
+                darkjak-tracking vehicle-fox vehicle-mirage vehicle-x-ride
+                )
+  )
+
+(define-extern pc-mp-campaign-write (function pointer int symbol))
+(define-extern pc-mp-campaign-read (function pointer int int))
+
+(defun mp-mission-ok? ((info game-task-info))
+  "#t for a story mission the lobby offers: one the stock mission list can start (a continue point,
+   a name)."
+  (and info (-> info play-continue) (lookup-text! *common-text* (-> info text-name) #t))
+  )
+
+(defun mp-mission-count ()
+  "Missions the lobby offers."
+  (let ((n 0))
+    (dotimes (i (-> *game-info* play-list length))
+      (if (mp-mission-ok? (-> *game-info* play-list i))
+          (+! n 1)
+          )
+      )
+    n
+    )
+  )
+
+(defun mp-mission-task ((n int))
+  "The game-task (play-list index) of the n-th mission offered, -1 when there is none."
+  (dotimes (i (-> *game-info* play-list length))
+    (when (mp-mission-ok? (-> *game-info* play-list i))
+      (if (zero? n)
+          (return i)
+          )
+      (+! n -1)
+      )
+    )
+  -1
+  )
+
+(defun mp-mission-name ((task int))
+  "A mission's name, for the lobby."
+  (if (and (>= task 0) (< task (-> *game-info* play-list length)) (mp-mission-ok? (-> *game-info* play-list task)))
+      (lookup-text! *common-text* (-> *game-info* play-list task text-name) #f)
+      "--"
+      )
+  )
+
+(defun mp-campaign-percent ()
+  "The multiplayer campaign's completion (percent), -1 when there is none. Reads the campaign into
+   the world save buffer (free while the host waits in the lobby)."
+  (let* ((save (mp-world-save-buffer))
+         (n (pc-mp-campaign-read (the-as pointer (&-> save type)) (the-as int (+ (-> save type size) #x1e000))))
+         )
+    (set! (-> save type) game-save)
+    (if (and (> n (the-as int (-> save type size))) (= (-> save version) 4))
+        (-> save completion-percentage)
+        -1.0
+        )
+    )
+  )
+
+(defun mp-start-game ()
+  "Host, X in the lobby: the game of the mode chosen (see above). #t when it starts."
+  (let ((session *mp-session*))
+    (set! (-> *game-info* mode) 'play)
+    (set! (-> session since) (mp-now))
+    (cond
+      ((zero? (-> *mp-config* mode))
+       ;; free roam: a new game at Spargus, unlocked once in game (mp-update-session)
+       (set! (-> session kind) 'free)
+       (set! (-> session unlock-pending) #t)
+       (initialize! *game-info* 'game (the-as game-save #f) "wascitya-start" (the-as resetter-spec #f))
+       )
+      ((= (-> session coop-start) 1)
+       ;; the campaign continued: its save loaded as the stock Load Game does
+       (let ((save (mp-world-save-buffer)))
+         (when (< (mp-campaign-percent) 0.0)
+           (format 0 "[multiplayer] no multiplayer campaign to continue~%")
+           (return #f)
+           )
+         (set! (-> session kind) 'campaign)
+         (initialize! *game-info* 'game save (the-as string #f) (the-as resetter-spec #f))
+         )
+       )
+      ((and (= (-> session coop-start) 2) (>= (-> session coop-mission) 0))
+       ;; a mission: the game at its start, every story step before it done (as the stock mission
+       ;; list starts one, play-task: its node opened, which closes the nodes it needs)
+       (let ((info (-> *game-info* play-list (-> session coop-mission)))
+             (spec *mp-mission-spec*)
+             )
+         (set! (-> spec continue) (-> info play-continue))
+         (set! (-> spec node) (-> info play-node))
+         (set! (-> spec reset-mode) 'life)
+         (set! (-> spec execute) #f)
+         (set! (-> session kind) 'campaign)
+         (initialize! *game-info* 'game (the-as game-save #f) (-> info play-continue) spec)
+         )
+       )
+      (else
+        ;; a new campaign, from the intro (as the stock New Game, progress-intro-start)
+        (set! (-> session kind) 'campaign)
+        (initialize! *game-info* 'game (the-as game-save #f) "intro-start" (the-as resetter-spec #f))
+        )
+      )
+    (format 0 "[multiplayer] game started: ~A (co-op start ~D, mission ~D)~%" (-> session kind) (-> session coop-start)
+            (-> session coop-mission)
+            )
+    (set-master-mode 'game)
+    #t
+    )
+  )
+
+(defun mp-unlock-everything ()
+  "Free roam, once in game: every story step closed with its rewards (the last node closes the ones
+   it needs: the whole story), everything else unlocked, ammo and eco full. The closures are not
+   sent to the others: a guest loads this world."
+  (let ((replaying *mp-progress-replaying*))
+    (set! *mp-progress-replaying* #t)
+    (task-node-close! (game-task-node city-win-resolution) 'event)
+    (set! *mp-progress-replaying* replaying)
+    )
+  (logior! (-> *game-info* features) MP_FREE_FEATURES)
+  (set! (-> *game-info* vehicles) (game-vehicles v-turtle v-snake v-scorpion v-toad v-fox v-rhino v-mirage v-x-ride))
+  (logior! (-> *game-info* secrets) MP_FREE_SECRETS)
+  (logior! (-> *game-info* purchase-secrets) MP_FREE_SECRETS)
+  (if (or (< (the-as int (-> *game-info* gun-type)) 26) (> (the-as int (-> *game-info* gun-type)) 37))
+      (set! (-> *game-info* gun-type) (pickup-type gun-yellow-1))
+      )
+  (set! (-> *game-info* gun-ammo 0) (get-max-ammo-for-gun *game-info* (pickup-type ammo-yellow)))
+  (set! (-> *game-info* gun-ammo 1) (get-max-ammo-for-gun *game-info* (pickup-type ammo-red)))
+  (set! (-> *game-info* gun-ammo 2) (get-max-ammo-for-gun *game-info* (pickup-type ammo-blue)))
+  (set! (-> *game-info* gun-ammo 3) (get-max-ammo-for-gun *game-info* (pickup-type ammo-dark)))
+  (set! (-> *game-info* eco-pill-dark) (-> *FACT-bank* eco-pill-dark-max-default))
+  (set! (-> *game-info* eco-pill-light) (-> *FACT-bank* eco-pill-light-max-default))
+  (format 0 "[multiplayer] free roam: story closed, everything unlocked (features #x~X)~%" (-> *game-info* features))
+  (none)
+  )
+
+(defun mp-save-campaign ()
+  "Host in co-op: the game into its multiplayer campaign (instead of a memory card slot). #t when
+   written."
+  (let ((save (mp-world-save-buffer)))
+    (save-game *game-info* save "multiplayer")
+    (when (pc-mp-campaign-write (the-as pointer (&-> save type)) (the-as int (+ (-> save type size) (-> save length))))
+      (+! (-> *mp-session* saves) 1)
+      (format 0 "[multiplayer] campaign saved (~D, continue ~S)~%" (-> *mp-session* saves) (-> *game-info* current-continue name))
+      #t
       )
     )
   )
@@ -1882,6 +2156,8 @@
 (define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
 (define-extern mp-replay-projectile (function mp-event none))
 (define-extern mp-replay-weapon (function mp-event none)) ;; multiplayer-world.gc
+(define-extern mp-daxter-guns (function none)) ;; multiplayer-guns.gc
+(define-extern mp-draw-daxter-gun (function dma-buffer none))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -2173,6 +2449,10 @@
 
 (defun mp-send-world ()
   "Host: server settings, time of day and game clocks to everyone."
+  (if (= (-> *mp-session* kind) 'free)
+      (logior! *mp-world* (mp-world-flag free))
+      (logclear! *mp-world* (mp-world-flag free))
+      )
   (let ((ev (new 'stack 'mp-event)))
     (set! (-> ev kind) (mp-event-kind world))
     (set! (-> ev to) -1)
@@ -2283,7 +2563,7 @@
         (((mp-event-kind world-request))
          ;; a host at the title screen or loading has no world to give yet: the guest asks again
          ;; every 10 s
-         (if (and (= *mp-mode* (mp-mode host)) (mp-in-game?))
+         (if (and (= *mp-mode* (mp-mode host)) (mp-in-game?) (not (-> *mp-session* unlock-pending)))
              (mp-send-world-save (-> ev from))
              )
          )
@@ -2737,6 +3017,57 @@
 
 ;; Co-op roles and Daxter on Jak's shoulder (see "Co-op mode")
 
+(defun mp-other-plays-daxter? ()
+  "#t when another player of the session plays Daxter."
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((st (mp-remote-state i)))
+      (if (and st (mp-state-daxter? st))
+          (return #t)
+          )
+      )
+    )
+  #f
+  )
+
+(defbehavior mp-update-session mp-manager ()
+  "Every frame in game: free roam unlocked once the host is in game; in co-op, our Daxter is taken
+   off our shoulder while the other player plays Daxter (a features setting held by the manager,
+   as the game does when Daxter is away: the game's own features, which are saved, stay as they
+   are)."
+  (when (and (-> *mp-session* unlock-pending) (mp-in-game?))
+    (set! (-> *mp-session* unlock-pending) #f)
+    (mp-unlock-everything)
+    )
+  ;; a guest in the host's free roam has everything too (its save loaded leaves a few out, and a
+  ;; respawn restores that save's)
+  (if (and (-> *mp-join* foreign?) (logtest? *mp-world* (mp-world-flag free)))
+      (logior! (-> *game-info* features) MP_FREE_FEATURES)
+      )
+  (let ((hide? (and (mp-coop?) (!= (-> *mp-config* character) 1) (not (focus-test? *target* indax)) (mp-other-plays-daxter?))))
+    (when (!= hide? (-> *mp-session* sidekick-hidden?))
+      (set! (-> *mp-session* sidekick-hidden?) hide?)
+      (if hide?
+          (set-setting! 'features 'clear 0 #x100000) ;; (game-feature sidekick)
+          (remove-setting! 'features)
+          )
+      )
+    )
+  (none)
+  )
+
+(defun mp-update-session-title ()
+  "Back at the title screen (10 s after a game started from the lobby, so its loading screen does
+   not count): no free roam or campaign running any more."
+  (when (and (-> *mp-session* kind)
+             (= (level-status? *level* 'title #f) 'active)
+             (>= (- (mp-now) (-> *mp-session* since)) (seconds 10))
+             )
+    (set! (-> *mp-session* kind) #f)
+    (set! (-> *mp-session* unlock-pending) #f)
+    )
+  (none)
+  )
+
 (defbehavior mp-update-coop-roles mp-manager ()
   "Co-op, once per session: a guest playing the same character as the host is offered the other one
    (the duo); it can change it back (Options > Multiplayer)."
@@ -2765,7 +3096,8 @@
   )
 
 (defbehavior mp-stop-perch mp-manager ()
-  "Daxter jumps off Jak's shoulder: out of the held state, drawn again, falling next to Jak."
+  "Daxter jumps off Jak's shoulder: out of the held state, drawn again, falling next to Jak (in
+   co-op he was drawn all along)."
   (if (= (mp-target-state-name) 'target-indax-grab)
       (send-event *target* 'end-mode 'grab)
       )
@@ -2775,9 +3107,11 @@
   )
 
 (defbehavior mp-update-perch mp-manager ()
-  "Daxter on Jak's shoulder: held in his mode (target-indax-grab) and hidden, he follows the shoulder
-   of Jak's puppet, where Jak's own Daxter is drawn on every machine (ours hidden, theirs showing
-   him: no double). X, Jak gone, dead or hidden, or the held state ended put him down."
+  "Daxter on Jak's shoulder: held in his mode (target-indax-grab), he follows the shoulder of Jak's
+   puppet. In free roam he is hidden: Jak's own Daxter is drawn there on every machine (no double).
+   In co-op Jak has no Daxter of his own while we play Daxter (mp-update-session): we stay drawn,
+   sitting on his left shoulder. X, Jak gone, dead or hidden, or the held state ended put him
+   down."
   (cond
     ((>= *mp-perch-slot* 0)
      (let ((st (mp-remote-state *mp-perch-slot*))
@@ -2795,6 +3129,11 @@
          (else
            (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> puppet root trans))))
              (+! (-> pos y) (meters 1.2))
+             (when (mp-coop?)
+               ;; on his left shoulder (the puppet's x axis), as his own Daxter sits
+               (+! (-> pos y) (meters 0.05))
+               (vector+float*! pos pos (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> puppet root quat)) (meters 0.22))
+               )
              (move-to-point! (-> *target* control) pos)
              )
            (quaternion-copy! (-> *target* control quat) (-> puppet root quat))
@@ -2827,7 +3166,10 @@
           (set! *mp-perch-candidate* -1)
           (+! *mp-perch-count* 1)
           (send-event *target* 'change-mode 'grab #t)
-          (send-event *target* 'draw #f)
+          ;; in co-op Jak has no Daxter of his own: we stay drawn on his shoulder
+          (if (not (mp-coop?))
+              (send-event *target* 'draw #f)
+              )
           )
         )
       )
@@ -2856,6 +3198,8 @@
       (mp-update-coop-roles)
       (mp-update-vehicle-interaction)
       (mp-update-pending-teleport)
+      (mp-daxter-guns)
+      (mp-update-session)
       )
     (else
       (set! *mp-ride-slot* -1)
@@ -2878,6 +3222,7 @@
         (logclear! (-> *target* target-flags) (target-flags tf4))
         )
     (set! *mp-invulnerable-applied* #f)
+    (set! (-> *mp-session* sidekick-hidden?) #f)
     (set! *mp-ride-slot* -1)
     (set! *mp-prompt-slot* -1)
     (mp-world-client-stop)
@@ -2931,6 +3276,15 @@
 
 (define *mp-marker-stats* (new 'global 'mp-marker-stats))
 
+(defun mp-health-color ((ratio float))
+  "Health bar color: green, yellow under half, red under a quarter."
+  (cond
+    ((< ratio 0.26) (new 'static 'rgba :r #x80 :g #x18 :b #x10 :a #x80))
+    ((< ratio 0.51) (new 'static 'rgba :r #x80 :g #x70 :b #x10 :a #x80))
+    (else (new 'static 'rgba :r #x20 :g #x80 :b #x20 :a #x80))
+    )
+  )
+
 (defun mp-draw-nameplate ((buf dma-buffer) (slot int))
   "Name and health bar over a remote player standing in a level loaded here."
   (let ((st (-> *mp-players* state slot))
@@ -2957,11 +3311,7 @@
               y
               (the int (* 40.0 ratio))
               4
-              (cond
-                ((< ratio 0.26) (new 'static 'rgba :r #x80 :g #x18 :b #x10 :a #x80))
-                ((< ratio 0.51) (new 'static 'rgba :r #x80 :g #x70 :b #x10 :a #x80))
-                (else (new 'static 'rgba :r #x20 :g #x80 :b #x20 :a #x80))
-                )
+              (mp-health-color ratio)
               #x3fffff
               )
             )
@@ -3019,38 +3369,54 @@
   (none)
   )
 
-(defun mp-draw-player-row ((buf dma-buffer) (y int) (name string) (color int) (ping int))
-  "One row of the player list: the color square and the name, then the ping (`name` may be
-   *mp-temp-string*: it is drawn before the ping is written there)."
-  (let ((width (mp-draw-text buf name 206 y 0.5)))
-    (draw-sprite2d-xy buf (- 206 (+ (/ width 2) 10)) (+ y 2) 7 7 (new 'static 'rgba :a #x80) #x3fffff)
-    (draw-sprite2d-xy buf (- 206 (+ (/ width 2) 9)) (+ y 3) 5 5 (mp-color-rgba color) #x3fffff)
+;; Columns of the player list (x of each column's center, 512-wide screen).
+(defconstant MP_LIST_NAME_X 176)
+(defconstant MP_LIST_HEALTH_X 296)
+(defconstant MP_LIST_PING_X 380)
+
+(defun mp-draw-player-row ((buf dma-buffer) (y int) (name string) (color int) (health float) (health-max float) (ping int))
+  "One row of the player list: the color square and the name, the health (a bar and its value, as
+   over the player's head), then the ping (`name` may be *mp-temp-string*: it is drawn before the
+   health and the ping are written there)."
+  (let ((width (mp-draw-text buf name MP_LIST_NAME_X y 0.5)))
+    (draw-sprite2d-xy buf (- MP_LIST_NAME_X (+ (/ width 2) 10)) (+ y 2) 7 7 (new 'static 'rgba :a #x80) #x3fffff)
+    (draw-sprite2d-xy buf (- MP_LIST_NAME_X (+ (/ width 2) 9)) (+ y 3) 5 5 (mp-color-rgba color) #x3fffff)
     )
+  (let ((ratio (fmax 0.0 (fmin 1.0 (/ health (fmax 1.0 health-max))))))
+    (draw-sprite2d-xy buf (+ MP_LIST_HEALTH_X -45) (+ y 3) 42 7 (new 'static 'rgba :a #x80) #x3fffff)
+    (draw-sprite2d-xy buf (+ MP_LIST_HEALTH_X -44) (+ y 4) (the int (* 40.0 ratio)) 5 (mp-health-color ratio) #x3fffff)
+    )
+  (format (clear *mp-temp-string*) "~D/~D" (the int (+ 0.5 health)) (the int (+ 0.5 health-max)))
+  (mp-draw-text buf *mp-temp-string* (+ MP_LIST_HEALTH_X 22) y 0.45)
   (if (< ping 0)
       (format (clear *mp-temp-string*) "--")
       (format (clear *mp-temp-string*) "~D ms" ping)
       )
-  (mp-draw-text buf *mp-temp-string* 346 y 0.5)
+  (mp-draw-text buf *mp-temp-string* MP_LIST_PING_X y 0.5)
   (none)
   )
 
 (defun mp-draw-player-list ((buf dma-buffer))
-  "Every player of the session, us first, with its round trip to the host (pc-mp-player-ping)."
+  "Every player of the session, us first, with its health and its round trip to the host
+   (pc-mp-player-ping)."
   (let* ((top 64)
          (rows (+ 1 (mp-player-count)))
          (y (+ top 44))
          )
-    (draw-sprite2d-xy buf 126 top 260 (+ 52 (* 18 rows)) (new 'static 'rgba :a #x40) #x3fffff)
+    (draw-sprite2d-xy buf 96 top 320 (+ 52 (* 18 rows)) (new 'static 'rgba :a #x40) #x3fffff)
     (mp-draw-text-id buf (text-id progress-mp-players) 256 (+ top 6) 0.65)
-    (mp-draw-text-id buf (text-id progress-mp-col-name) 206 (+ top 26) 0.45)
-    (mp-draw-text-id buf (text-id progress-mp-col-ping) 346 (+ top 26) 0.45)
-    (mp-draw-player-row buf y *mp-name* (-> *mp-config* color) (pc-mp-player-ping *mp-local-slot*))
+    (mp-draw-text-id buf (text-id progress-mp-col-name) MP_LIST_NAME_X (+ top 26) 0.45)
+    (mp-draw-text-id buf (text-id progress-mp-col-health) MP_LIST_HEALTH_X (+ top 26) 0.45)
+    (mp-draw-text-id buf (text-id progress-mp-col-ping) MP_LIST_PING_X (+ top 26) 0.45)
+    (mp-draw-player-row buf y *mp-name* (-> *mp-config* color) (-> *mp-local* health) (-> *mp-local* health-max)
+                        (pc-mp-player-ping *mp-local-slot*)
+                        )
     (dotimes (i MP_MAX_PLAYERS)
       (let ((st (mp-remote-state i)))
         (when st
           (+! y 18)
           (string<-charp *mp-temp-string* (-> st name))
-          (mp-draw-player-row buf y *mp-temp-string* (-> st color) (pc-mp-player-ping i))
+          (mp-draw-player-row buf y *mp-temp-string* (-> st color) (-> st health) (-> st health-max) (pc-mp-player-ping i))
           )
         )
       )
@@ -3096,6 +3462,7 @@
       (if (mp-player-list-shown?)
           (mp-draw-player-list buf)
           )
+      (mp-draw-daxter-gun buf)
       )
     ;; prompts with their button icon, as the game draws its own (outside the bucket above: they
     ;; fill their own DMA)
@@ -3171,6 +3538,7 @@
        )
      (mp-read-remote-states)
      (mp-update-join-request)
+     (mp-update-session-title)
      ;; when the process pool is full, retry once a second instead of every frame
      (when (and (not (handle->process (-> *mp-globals* manager)))
                 (>= (- (mp-now) (-> *mp-globals* manager-retry)) (seconds 1))

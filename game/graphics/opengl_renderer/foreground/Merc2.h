@@ -48,6 +48,11 @@ class Merc2 {
               ScopedProfilerNode& prof,
               MercDebugStats* stats);
   static constexpr int kMaxBlerc = 40;
+  // MOD multiplayer: draw the outlined models of this frame (pc-merc-bits outline) where something
+  // hides them, in their color, then forget them. Called once the 3D scene is drawn.
+  void draw_outlines(SharedRenderState* render_state, ScopedProfilerNode& prof);
+  // Outlined models drawn last frame (multiplayer test log, pc-mp-outline-count).
+  int outlines_drawn() const { return m_outlines_drawn; }
 
  private:
   const std::vector<GLuint>* m_anim_slot_array;
@@ -236,6 +241,37 @@ class Merc2 {
                 ScopedProfilerNode& prof,
                 bool set_fade,
                 SharedRenderState* render_state);
+
+  // MOD multiplayer: models seen through walls (other players), recorded during the merc buckets
+  // with their bones and camera, drawn at the end of the frame (draw_outlines).
+  struct OutlineDraw {
+    u32 first_index;
+    u32 index_count;
+    bool no_strip;
+  };
+  struct OutlineModel {
+    const LevelData* lev;
+    u32 first_bone, bone_count;  // in m_outline_bones
+    u32 first_draw, draw_count;  // in m_outline_draws
+    math::Vector4f hvdf_offset, fog;
+    math::Vector4f perspective[4];
+    math::Vector4f color;
+  };
+  static constexpr int kMaxOutlines = 16;
+  std::vector<OutlineModel> m_outline_models;
+  std::vector<OutlineDraw> m_outline_draws;
+  std::vector<ShaderMercMat> m_outline_bones;
+  int m_outlines_drawn = 0;
+  GLuint m_outline_query = 0;
+  struct OutlineUniforms {
+    GLuint hvdf_offset, fog, perspective_matrix, color, screen_offset;
+  } m_outline_uniforms;
+  void record_outline(const tfrag3::MercModel* model,
+                      const LevelData* lev,
+                      const ShaderMercMat* bones,
+                      int bone_count,
+                      u64 enabled_effects,
+                      u32 rgba);
 
   static constexpr int MAX_LIGHTS = 1024;
   VuLights m_lights_buffer[MAX_LIGHTS];

@@ -64,6 +64,8 @@ def prepare_instance(folder: Path, index: int) -> None:
     settings.mkdir(parents=True, exist_ok=True)
     for stale in ("multiplayer.cfg",):
         (settings / stale).unlink(missing_ok=True)
+    # each test starts without a multiplayer campaign of the user's
+    (jak3 / "saves" / "multiplayer-campaign.bin").unlink(missing_ok=True)
     pc = settings / "pc-settings.gc"
     if pc.exists():
         text = pc.read_text(encoding="utf-8")

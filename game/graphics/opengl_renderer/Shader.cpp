@@ -136,6 +136,7 @@ ShaderLibrary::ShaderLibrary(GameVersion version) {
   at(ShaderId::SLOW_TIME) = {"slow_time", version};
   at(ShaderId::OCEAN_ENVMAP) = {"ocean_envmap", version};
   at(ShaderId::OCEAN_ENVMAP_HAZE) = {"ocean_envmap_haze", version};
+  at(ShaderId::MERC2_OUTLINE) = {"merc2_outline", version};
 
   for (auto& shader : m_shaders) {
     ASSERT_MSG(shader.okay(), "error compiling shader");

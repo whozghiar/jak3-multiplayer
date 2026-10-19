@@ -579,32 +579,29 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(title) and title[0][0] == "7" and "-1" not in title[0][1:], f"{title[:1]}")
         hm = [m for (m,) in grab(host, r"\] lobby menu (\S+) title")]
         gm = [m for (m,) in grab(client, r"\] lobby menu (\S+) title")]
-        c.check(scenario, "Host Game > Load Game and Join Game > Connect open the lobby",
-                "mp-host-game" in hm and "mp-lobby-load" in hm and "mp-join-game" in gm and "mp-lobby-join" in gm,
-                f"host {hm}, guest {gm}")
-        back = [m for i, m in enumerate(hm) if i > 0 and hm[i - 1] == "multiplayer"]
-        c.check(scenario, "circle opens the multiplayer options, triangle comes back to the lobby",
-                back[:1] == ["mp-lobby-load"], f"{hm}")
-        ready = [r for (r,) in grab(host, r"\] lobby mode \d+ players \d+ coop \S+ all-ready (\S+)")]
-        blocks = list(zip(hm, ready))
-        first_start = next((i for i, (m, _) in enumerate(blocks) if m == "select-load"), None)
-        c.check(scenario, "the host's X is refused until every guest is ready, then opens the save menu",
-                first_start is not None and blocks[first_start][1] == "#t"
-                and any(m == "mp-lobby-load" and r == "#f" for m, r in blocks[:first_start])
-                and blocks[first_start - 1][0] == "mp-lobby-load",
-                f"{blocks}")
-        guest = grab(host, r"\] lobby row \d+ slot \d+ name \"?Guest\"? character (\d+) status (\d+)")
-        c.check(scenario, "the host sees the guest switch to Daxter, then ready",
-                ("1", "5440") in guest and ("1", "5439") in guest, f"{sorted(set(guest))}")
-        coop = [x for (x,) in grab(client, r"\] lobby mode \d+ players \d+ coop (\S+)")]
-        c.check(scenario, "square switches the game mode to co-op, shown to the guest", "#t" in coop, f"{coop}")
-        stage = grab(client, r"join stage (\d+) foreign")
-        dist = [float(d) for (d,) in grab(client, r"join distance to the host " + NUM)]
-        co = grab(client, r"\] coop (\S+) authority \S+ character (\d+) perch -?\d+ perched \d+ state (\S+)")
-        c.check(scenario, "the guest follows into the host's world, next to it, as Daxter in co-op",
-                bool(stage) and stage[-1][0] == "4" and bool(dist) and dist[-1] < 10.0
-                and bool(co) and co[-1][0] == "#t" and co[-1][1] == "1" and co[-1][2].startswith("target-indax"),
-                f"stage {stage[-1:]}, distance {dist[-1:]}, {co[-1:]}")
+        c.check(scenario, "Host Game opens the lobby at once, Join Game > Connect opens it too",
+                "mp-lobby-host" in hm and "mp-join-game" in gm and "mp-lobby-join" in gm, f"host {hm}, guest {gm}")
+        players = [int(n) for (n,) in grab(host, r"\] lobby mode 3 players (\d+)")]
+        c.check(scenario, "the guest joins the host's lobby before any game is started",
+                bool(players) and max(players) == 2, f"players in the host's lobby {players}")
+        names = [n for (n,) in grab(host, r"\] name (\S+) keyboard")]
+        c.check(scenario, "the on-screen keyboard types the new name (Host -> Jak3) and keeps it",
+                names[:1] == ["Host"] and names[-1] == "Jak3", f"{names}")
+        c.check(scenario, "square opens the game mode list", "mp-mode" in hm, f"{hm}")
+        ready = [r for (r,) in grab(host, r"\] lobby mode 3 players \d+ coop \S+ all-ready (\S+)")]
+        started = grab(host, r"game started: (\S+)")
+        c.check(scenario, "X waits for the guest to be ready, then starts free roam",
+                "#f" in ready and started[:1] == [("free",)], f"all-ready {ready}, started {started}")
+        sess = grab(host, r"session kind (\S+) unlock-pending (\S+) saves \d+ campaign \S+ closed (\d+)")
+        win = grab(host, r"session sidekick-hidden \S+ sidekick \S+ character \d+ indax \S+ city-win (\S+)")
+        c.check(scenario, "free roam is the end of the game: the story closed, everything unlocked (host)",
+                bool(sess) and sess[-1][0] == "free" and int(sess[-1][2]) > 200 and win[-1:] == [("#t",)],
+                f"{sess[-1:]}, city-win {win[-1:]}")
+        gs = grab(client, r"session kind \S+ unlock-pending \S+ saves \d+ campaign \S+ closed (\d+) foreign (\S+)")
+        gv = grab(client, r"session features (\S+) vehicles (\S+)")
+        c.check(scenario, "the guest follows into it with everything unlocked too",
+                bool(gs) and int(gs[-1][0]) > 200 and gs[-1][1] == "#t" and gv[-1:] and gv[-1][1] == "#xff",
+                f"{gs[-1:]}, {gv[-1:]}")
 
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
@@ -613,6 +610,57 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the guest knows its ping to the host", any(int(v) > 0 for v, _, _ in own), f"{[v for v, _, _ in own]}")
         seen = [int(v) for (v,) in grab(host, r"\] ping player 1 (-?\d+)")]
         c.check(scenario, "the host measures the guest's ping", bool(seen) and seen[-1] > 0, f"{seen}")
+        health = grab(client, r"\] ping player 0 -?\d+ health " + NUM + "/" + NUM)
+        c.check(scenario, "the list gives each player's health", bool(health) and float(health[-1][1]) > 0, f"{health[-1:]}")
+
+    elif scenario == "daxter-fire":
+        crashes = grab(host + client, r"\[multiplayer\] crash: (.*)")
+        c.check(scenario, "no crash", not crashes, f"{crashes[:2]}")
+        feats = [int(f, 16) for (f,) in grab(client, r"daxter-gun at \S+ from Daxter, features #x([0-9a-f]+)")]
+        guns = 0x3ffc0  # the gun's twelve mods (bits 6-17)
+        c.check(scenario, "the weapons cheat gives every gun mod", bool(feats) and all(f & guns == guns for f in feats),
+                f"features {[hex(f) for f in feats[:1]]}")
+        shots = [(int(m), int(n)) for m, n in grab(client, r"daxter-gun out \S+ mod (\d+) shots (\d+)")]
+        fired = sorted({m for i, (m, n) in enumerate(shots) if i > 0 and n > shots[i - 1][1]})
+        c.check(scenario, "Daxter fires each of the 12 mods", fired == list(range(26, 38)), f"mods that fired {fired}")
+        kinds = sorted({k for (k,) in grab(client, r"\[multiplayer\] pvp blow to player 0 by (\S+)")})
+        taken = grab(host, r"\[multiplayer\] pvp hit by player 1")
+        c.check(scenario, "his shots hurt the other player", len(kinds) >= 6 and len(taken) >= 6,
+                f"{len(taken)} hits taken, by {kinds}")
+
+    elif scenario == "outline":
+        px = [int(v) for (v,) in grab(client, r"outlines drawn \d+ hidden pixels (\d+)")]
+        table = grab(client, r"outline player 0 color (\S+)")
+        c.check(scenario, "the other player is outlined in its color", table[-1:] == [("#x80181880",)], f"{table[-1:]}")
+        c.check(scenario, "in the open: no outline drawn (a few pixels of feet in the ground)",
+                len(px) >= 2 and max(px[:2]) < 400, f"hidden pixels {px[:2]}")
+        c.check(scenario, "behind the buggy: its outline drawn through it", bool(px) and max(px[-3:]) > 600,
+                f"hidden pixels {px[-3:]}")
+
+    elif scenario == "coop-campaign":
+        third = s.get("third", (None, []))[1]
+        hm = [m for (m,) in grab(host, r"\] lobby menu (\S+) title")]
+        c.check(scenario, "co-op from the mode list, then the co-op page and the mission list",
+                "mp-coop-start" in hm and "mp-mission" in hm, f"{hm}")
+        lines = [l for (l,) in grab(host, r"\] lobby character \d+ config-mode \d+ (coop-start \d+ mission -?\d+ max \d+)")]
+        c.check(scenario, "co-op chosen: two players at most, a mission chosen in the list",
+                any(l.startswith("coop-start 2 mission 10") and l.endswith("max 2") for l in lines), f"{sorted(set(lines))}")
+        full = grab(third, r"session status (The server is full)")
+        c.check(scenario, "a third player is refused", bool(full), f"{full[:1]}")
+        started = [t for (t,) in grab(host, r"game started: campaign \(co-op start (\d+)")]
+        c.check(scenario, "X starts the mission, then later continues the campaign", started[:1] == ["2"] and "1" in started,
+                f"co-op starts {started}")
+        sess = [(int(sv), int(cl)) for sv, cl in grab(host, r"session kind campaign unlock-pending \S+ saves (\d+) campaign \S+ closed (\d+)")]
+        saved = grab(host, r"campaign saved \((\d+), continue (\S+)\)")
+        c.check(scenario, "the host's save goes into the multiplayer campaign", bool(saved), f"{saved[:1]}")
+        refused = grab(client, r"no save in another player's world")
+        c.check(scenario, "the guest saves nothing", bool(refused), f"{len(refused)} refused")
+        hidden = grab(host, r"session sidekick-hidden (\S+) sidekick (\S+) character 0")
+        c.check(scenario, "Jak has no Daxter on his shoulder while the guest plays Daxter, and has him back after",
+                ("#t", "#f") in hidden and hidden[-1] == ("#f", "#t"), f"{hidden}")
+        c.check(scenario, "continuing restores the campaign saved (story steps closed after it open again)",
+                len(sess) >= 3 and sess[-1][1] < max(cl for _, cl in sess) and sess[-1][1] == sess[1][1],
+                f"closed {[cl for _, cl in sess]}")
 
     elif scenario == "powers":
         shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")

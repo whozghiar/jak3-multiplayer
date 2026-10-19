@@ -1,0 +1,33 @@
+# Co-op campaign, guest side: Join Game > Connect opens the host's lobby (co-op chosen there), R1 for
+# Daxter, X ready; follows into the mission the host starts, as Daxter; looks at the host (no Daxter on
+# Jak's shoulder: Daxter is this player); saves nothing there; leaves before the host continues.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+41 log-lobby
+43 press r1 100
+56 log-lobby
+57 press x 100
+58 log-lobby
+58.5 screenshot lobby-guest
+62 wait-joined
+75 log-join
+75.5 log-session
+76 log-coop
+80 look-player 0
+81 screenshot host-without-daxter
+82 try-save
+83 log-session
+118 log-session
+120 leave

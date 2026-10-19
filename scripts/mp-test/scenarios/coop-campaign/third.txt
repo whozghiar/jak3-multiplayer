@@ -1,0 +1,6 @@
+# Co-op campaign, a third player: tries to join the host's co-op lobby (two players at most): refused.
+1 enable
+1 name Third
+1 color 3
+50 join 127.0.0.1:7777
+56 log-session

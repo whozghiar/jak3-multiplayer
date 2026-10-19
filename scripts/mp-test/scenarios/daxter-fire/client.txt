@@ -1,0 +1,79 @@
+# Daxter fires every weapon, guest side: plays Daxter, takes every weapon from the Mods menu's cheat,
+# then fires each of the 12 gun mods (26 red 1 ... 37 dark 3, chosen as with the D-pad) at the host:
+# R1 held 1.2 s (the charge weapons charge, then go off on release), from 7 m, 4 m for the red mods
+# and the gyro burster, which a second press sends at its target.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 cheat weapons
+52.2 cheat invuln
+52.5 log-daxter-gun
+54 goto-player 0 4
+54.5 look-player 0
+54.8 daxter-mod 26
+55 press r1 1200
+57.5 log-daxter-gun
+59 goto-player 0 4
+59.5 look-player 0
+59.8 daxter-mod 27
+60 press r1 1200
+62.5 log-daxter-gun
+64 goto-player 0 4
+64.5 look-player 0
+64.8 daxter-mod 28
+65 press r1 1200
+67.5 log-daxter-gun
+69 goto-player 0 7
+69.5 look-player 0
+69.8 daxter-mod 29
+70 press r1 1200
+70.6 screenshot fire-29
+72.5 log-daxter-gun
+74 goto-player 0 7
+74.5 look-player 0
+74.8 daxter-mod 30
+75 press r1 1200
+77.5 log-daxter-gun
+79 goto-player 0 4
+79.5 look-player 0
+79.8 daxter-mod 31
+80 press r1 1200
+81.5 press r1 300
+82.5 log-daxter-gun
+84 goto-player 0 7
+84.5 look-player 0
+84.8 daxter-mod 32
+85 press r1 1200
+87.5 log-daxter-gun
+89 goto-player 0 7
+89.5 look-player 0
+89.8 daxter-mod 33
+90 press r1 1200
+90.6 screenshot fire-33
+92.5 log-daxter-gun
+94 goto-player 0 7
+94.5 look-player 0
+94.8 daxter-mod 34
+95 press r1 1200
+97.5 log-daxter-gun
+99 goto-player 0 7
+99.5 look-player 0
+99.8 daxter-mod 35
+100 press r1 1200
+102.5 log-daxter-gun
+104 goto-player 0 7
+104.5 look-player 0
+104.8 daxter-mod 36
+105 press r1 1200
+107.5 log-daxter-gun
+109 goto-player 0 7
+109.5 look-player 0
+109.8 daxter-mod 37
+110 press r1 1200
+110.6 screenshot fire-37
+112.5 log-daxter-gun
+114 log
+115 log-weapons

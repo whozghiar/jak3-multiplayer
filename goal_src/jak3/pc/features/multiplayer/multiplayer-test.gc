@@ -18,10 +18,12 @@
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
 ;;   goto-player <slot> [x z] | face-player <slot>           stand next to / face a remote player
+;;   look-player <slot>                                      face a remote player, camera behind us at once
 ;;   goto-behind <slot> <meters>                             stand behind a remote player, out of its view
 ;;   goto-own <prefix> | kill-own <prefix>                   stand 8 m from one of our NPCs we send; destroy that vehicle
-;;   cheat <ammo|health|dark|light|invuln> | zone <n>        Mods menu actions
+;;   cheat <ammo|health|dark|light|invuln|weapons> | zone <n> Mods menu actions
 ;;   gun [pickup-type] | board | vehicle <type>              every gun mod (26-37 picks one); hoverboard; a vehicle
+;;   daxter-mod <pickup-type> | log-daxter-gun              the mod Daxter fires (as the D-pad); his gun's state
 ;;   screenshot <name> | log                                 evidence: <config>/screenshots, log
 ;;   log-pose [slot] | log-me                                bones of a player's model; own position
 ;;   log-pose-own <player|npc|daxter|gun|vehicle|wheel> [frames] bones of our model or object, each frame
@@ -42,7 +44,10 @@
 ;;   log-weapons                                             other players' non-shot weapons drawn here
 ;;   log-aimable                                             what the area weapons find within 20 m of us
 ;;   log-vehicles                                            every vehicle within 30 m of us, ours and copies
-;;   log-ping                                                players' round trip to the host, list shown, paused
+;;   log-ping                                                players' round trip to the host and health, list shown, paused
+;;   log-name | log-session                                  name and keyboard; game started (free roam, campaign), unlocks
+;;   coop-start <0|1|2> [n]                                  co-op starts a new campaign, continues it, or the n-th mission
+;;   log-outline                                             outlined players drawn through walls (renderer count, table)
 ;;   spawn-vehicle <type>                                    an empty vehicle 3 m in front of us
 ;;   power <dark|light> | log-power                          Dark / Light Jak on; ours and what puppets show
 ;;   run-near-others <0|1>                                   our NPCs near another player run (default 1)
@@ -63,6 +68,8 @@
 (define-extern pc-mp-test-screenshot (function string none))
 (define-extern pc-mp-test-pad (function int int int int int none))
 (define-extern pc-mp-test-pause (function symbol none))
+(define-extern pc-mp-outlines-drawn (function int))
+(define-extern pc-mp-outline-pixels (function int))
 
 ;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
 ;; (mp-test-update).
@@ -1217,7 +1224,10 @@
          (format 0 "[mp-test] lobby mode ~D players ~D coop ~A all-ready ~A ready ~A~%"
                  *mp-mode* (+ 1 (mp-player-count)) (mp-lobby-coop?) (mp-lobby-all-ready?) *mp-lobby-ready*
                  )
-         (format 0 "[mp-test] lobby character ~D start ~A~%" (-> *mp-config* character) *mp-lobby-start*)
+         (format 0 "[mp-test] lobby character ~D config-mode ~D coop-start ~D mission ~D max ~D~%" (-> *mp-config* character)
+                 (-> *mp-config* mode) (-> *mp-session* coop-start) (-> *mp-session* coop-mission) (mp-max-players)
+                 )
+         (format 0 "[mp-test] lobby line ~S~%" (mp-lobby-mode-line *mp-lobby-line*))
          (dotimes (row (+ 1 (mp-player-count)))
            (let* ((slot (mp-lobby-slot row))
                   (st (mp-slot-state slot))
@@ -1229,6 +1239,55 @@
                        )
                )
              )
+           )
+         )
+        ((string= cmd "log-name")
+         ;; log-name: the player name kept, and the on-screen keyboard's text
+         (format 0 "[mp-test] name ~S keyboard ~S~%" *mp-name* (-> *mp-keyboard* edit))
+         )
+        ((string= cmd "log-session")
+         ;; log-session: the game the host started (free roam, campaign), its unlocks and saves, the
+         ;; shoulder Daxter
+         (let ((closed 0))
+           (dotimes (i (-> *game-info* sub-task-list length))
+                 (if (and (nonzero? i) (logtest? (-> *game-info* sub-task-list i flags) (game-task-node-flag closed)))
+                 (+! closed 1)
+                 )
+             )
+           (format 0 "[mp-test] session kind ~A unlock-pending ~A saves ~D campaign ~,,1f closed ~D foreign ~A~%"
+                   (-> *mp-session* kind) (-> *mp-session* unlock-pending) (-> *mp-session* saves) (mp-campaign-percent)
+                   closed (-> *mp-join* foreign?)
+                   )
+           )
+         (format 0 "[mp-test] session features #x~X vehicles #x~X secrets #x~X max ~D~%" (-> *game-info* features)
+                 (-> *game-info* vehicles) (-> *game-info* secrets) (mp-max-players)
+                 )
+         (pc-mp-message *mp-status*)
+         (format 0 "[mp-test] session status ~S mode ~D players ~D continue ~S~%" *mp-status* *mp-mode* (+ 1 (mp-player-count))
+                 (if (-> *game-info* current-continue) (-> *game-info* current-continue name) "none")
+                 )
+         (format 0 "[mp-test] session sidekick-hidden ~A sidekick ~A character ~D indax ~A city-win ~A~%"
+                 (-> *mp-session* sidekick-hidden?) (and *target* (-> *target* sidekick) #t) (-> *mp-config* character)
+                 (and *target* (focus-test? *target* indax))
+                 (task-node-closed? (game-task-node city-win-resolution))
+                 )
+         )
+        ((string= cmd "log-missions")
+         ;; log-missions: the missions the co-op page offers (row, game-task, continue point)
+         (format 0 "[mp-test] missions ~D~%" (mp-mission-count))
+         (dotimes (i (min 12 (mp-mission-count)))
+           (let ((task (mp-mission-task i)))
+             (format 0 "[mp-test] mission ~D task ~D continue ~S~%" i task (-> *game-info* play-list task play-continue))
+             )
+           )
+         )
+        ((string= cmd "coop-start")
+         ;; coop-start <0|1|2> [mission n]: how the co-op campaign starts (new, continue, the n-th mission)
+         (set! (-> *mp-session* coop-start) (mp-test-int))
+         (let ((n (mp-test-int)))
+           (if (= (-> *mp-session* coop-start) 2)
+               (set! (-> *mp-session* coop-mission) (mp-mission-task n))
+               )
            )
          )
         ((string= cmd "leave")
@@ -1464,6 +1523,30 @@
         ((string= cmd "face-player")
          (mp-test-face-player (mp-test-int))
          )
+        ((string= cmd "look-player")
+         ;; look-player <slot>: face that player, the camera put 6 m behind us and 2 m up on the
+         ;; line to that player, 1.5 m to the side, looking at us (a screenshot then shows that player
+         ;; ahead)
+         (let* ((slot (mp-test-int))
+                (st (mp-remote-state slot))
+                )
+           (mp-test-face-player slot)
+           (when (and st *target*)
+             (let ((dir (vector-! (new 'stack-no-clear 'vector) (-> st trans) (-> *target* control trans)))
+                   (pos (new 'stack-no-clear 'vector))
+                   )
+               (set! (-> dir y) 0.0)
+               (vector-normalize! dir 1.0)
+               (vector+float*! pos (-> *target* control trans) dir (meters -6))
+               (+! (-> pos y) (meters 2))
+               ;; 1.5 m to the side: our own model does not cover that player
+               (+! (-> pos x) (* (meters 1.5) (-> dir z)))
+               (+! (-> pos z) (* (meters -1.5) (-> dir x)))
+               (send-event *camera* 'teleport-to-vector-start-string pos)
+               )
+             )
+           )
+         )
         ((string= cmd "cheat")
          (mp-test-word)
          (let ((which (-> *mp-test* word)))
@@ -1473,6 +1556,7 @@
              ((string= which "dark") (mp-cheat-dark-eco))
              ((string= which "light") (mp-cheat-light-eco))
              ((string= which "invuln") (set! *mp-invulnerable* (not *mp-invulnerable*)))
+             ((string= which "weapons") (mp-give-all-weapons))
              )
            )
          )
@@ -1492,6 +1576,30 @@
              (if (and (>= kind 26) (<= kind 37))
                  (send-event *target* 'gun-type kind)
                  )
+             )
+           )
+         )
+        ((string= cmd "daxter-mod")
+         ;; daxter-mod <pickup-type>: the mod Daxter fires, as the D-pad chooses it in his mode
+         (if *target*
+             (set! (-> *target* gun using-gun-type) (the-as pickup-type (mp-test-int)))
+             )
+         )
+        ((string= cmd "log-daxter-gun")
+         ;; log-daxter-gun: Daxter's gun: out, mod, shots fired, ammo of that mod, gun place and aim
+         (let* ((dg *mp-daxter-gun*)
+                (ammo (if (>= (-> dg gun-type) 26) (the-as int (gun->ammo (the-as pickup-type (-> dg gun-type)))) 15))
+                )
+           (format 0 "[mp-test] daxter-gun out ~A mod ~D shots ~D ammo ~,,1f indax ~A~%"
+                   (-> dg out?) (-> dg gun-type) (-> dg shots) (-> *game-info* gun-ammo (+ ammo -15))
+                   (and *target* (focus-test? *target* indax))
+                   )
+           (format 0 "[mp-test] daxter-gun aim ~,,2f ~,,2f ~,,2f~%" (-> dg aim x) (-> dg aim y) (-> dg aim z))
+           (when *target*
+             (format 0 "[mp-test] daxter-gun at ~,,2m from Daxter, features #x~X~%"
+                     (vector-vector-distance (-> *target* gun gun-pos trans) (-> *target* control trans))
+                     (-> *game-info* features)
+                     )
              )
            )
          )
@@ -1899,11 +2007,27 @@
         ((string= cmd "log-ping")
          ;; log-ping: each player's round trip to the host as the player list shows it, the list
          ;; shown, and whether the game is paused (SELECT shows the list, it must not pause)
-         (format 0 "[mp-test] ping own ~D list ~A paused ~A~%" (pc-mp-player-ping *mp-local-slot*) (mp-player-list-shown?) (paused?))
+         (format 0 "[mp-test] ping own ~D list ~A paused ~A health ~,,1f/~,,1f~%" (pc-mp-player-ping *mp-local-slot*)
+                 (mp-player-list-shown?) (paused?) (-> *mp-local* health) (-> *mp-local* health-max)
+                 )
          (dotimes (i MP_MAX_PLAYERS)
-           (if (mp-remote-state i)
-               (format 0 "[mp-test] ping player ~D ~D~%" i (pc-mp-player-ping i))
-               )
+           (let ((st (mp-remote-state i)))
+             (if st
+                 (format 0 "[mp-test] ping player ~D ~D health ~,,1f/~,,1f~%" i (pc-mp-player-ping i) (-> st health) (-> st health-max))
+                 )
+             )
+           )
+         )
+        ((string= cmd "log-outline")
+         ;; log-outline: outlined models the renderer drew since boot (other players through walls),
+         ;; and the players in the outline table with their color
+         (format 0 "[mp-test] outlines drawn ~D hidden pixels ~D~%" (pc-mp-outlines-drawn) (pc-mp-outline-pixels))
+         (dotimes (i MP_MAX_PLAYERS)
+           (let ((dc (-> *pc-merc-outlines* dc i)))
+             (if (and (nonzero? dc) dc)
+                 (format 0 "[mp-test] outline player ~D color #x~X~%" i (-> *pc-merc-outlines* color i))
+                 )
+             )
            )
          )
         ((string= cmd "log-vehicles")

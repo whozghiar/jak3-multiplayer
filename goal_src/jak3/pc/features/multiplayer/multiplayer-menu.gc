@@ -107,89 +107,22 @@
   0
   )
 
-;; A text field, for controllers as well as keyboards: confirm to edit, up / down change the
-;; character under the cursor, left / right move the cursor, square deletes, confirm saves,
-;; triangle cancels.
-(deftype menu-mp-text-option (menu-generic-option)
+;; A text field (player name, server address): its label, then its value. Confirming it opens the
+;; on-screen keyboard page (mp-keyboard, below), which edits the value. A link for the scrolling
+;; page: it opens a page instead of taking the next presses.
+(deftype menu-mp-text-option (menu-generic-link-option)
   ((get-value  (function string)) ;; the string this field edits
-   (charset    string)            ;; characters offered, in order
+   (layout     int32)             ;; keyboard layout: 0 name (letters, digits, - _ . !), 1 address
    (max-length int32)
    (on-confirm (function none))   ;; called after a confirmed edit
-   (edit       string)            ;; working copy while editing
-   (cursor     int32)
-   (last-move  time-frame)
    )
   )
 
+(define-extern mp-keyboard-open (function menu-mp-text-option progress none)) ;; below
+
 (defmethod on-mount! ((this menu-mp-text-option))
-  "Allocate the working copy once."
+  "Nothing to set up."
   (set! (-> this mounted?) #t)
-  (if (zero? (-> this edit))
-      (set! (-> this edit) (new 'global 'string 40 (the-as string #f)))
-      )
-  (none)
-  )
-
-(defun mp-charset-index ((charset string) (c uint))
-  "Position of character `c` in `charset`, or -1."
-  (dotimes (i (length charset))
-    (if (= (-> charset data i) c)
-        (return i)
-        )
-    )
-  -1
-  )
-
-(defun mp-text-cycle! ((this menu-mp-text-option) (dir int))
-  "Change the character under the cursor by `dir` steps in the charset; at the end of the text,
-   add a character."
-  (let* ((edit (-> this edit))
-         (len (length edit))
-         (cur (-> this cursor))
-         (cs (-> this charset))
-         (n (length cs))
-         )
-    (cond
-      ((< cur len)
-       (let ((idx (mp-charset-index cs (-> edit data cur))))
-         (set! (-> edit data cur) (-> cs data (mod (+ idx dir n) n)))
-         )
-       )
-      ((< len (-> this max-length))
-       (set! (-> edit data cur) (-> cs data (if (> dir 0)
-                                                 0
-                                                 (+ n -1)
-                                                 )
-                                     )
-             )
-       (set! (-> edit data (+ cur 1)) (the-as uint 0))
-       )
-      )
-    )
-  (none)
-  )
-
-(defun mp-text-delete! ((this menu-mp-text-option))
-  "Delete the character under the cursor, or the last one when the cursor is at the end."
-  (let* ((edit (-> this edit))
-         (len (length edit))
-         (cur (-> this cursor))
-         )
-    (cond
-      ((< cur len)
-       (let ((i cur))
-         (while (< i len)
-           (set! (-> edit data i) (-> edit data (+ i 1)))
-           (+! i 1)
-           )
-         )
-       )
-      ((> cur 0)
-       (set! (-> edit data (+ cur -1)) (the-as uint 0))
-       (set! (-> this cursor) (+ cur -1))
-       )
-      )
-    )
   (none)
   )
 
@@ -205,59 +138,18 @@
   )
 
 (defmethod respond-progress ((this menu-mp-text-option) (progress progress) (selected? symbol))
-  "Edit the text while the option is selected (see the type's comment for the buttons)."
-  (if (zero? (-> this edit))
-      (on-mount! this)
-      )
-  (let ((edit (-> this edit)))
-    (cond
-      ((not selected?)
-       ;; this confirm selects the option: start from the current value
-       (when (cpad-pressed? 0 confirm)
-         (copy-string<-string edit ((-> this get-value)))
-         (set! (-> this cursor) (length edit))
-         )
-       )
-      ((cpad-pressed? 0 confirm)
-       (mp-text-trim! edit)
-       (copy-string<-string ((-> this get-value)) edit)
-       ((-> this on-confirm))
-       (sound-play "generic-beep")
-       )
-      ((or (cpad-pressed? 0 up l-analog-up)
-           (and (cpad-hold? 0 up l-analog-up) (time-elapsed? (-> this last-move) (seconds 0.15)))
-           )
-       (set-time! (-> this last-move))
-       (mp-text-cycle! this 1)
-       (sound-play "roll-over")
-       )
-      ((or (cpad-pressed? 0 down l-analog-down)
-           (and (cpad-hold? 0 down l-analog-down) (time-elapsed? (-> this last-move) (seconds 0.15)))
-           )
-       (set-time! (-> this last-move))
-       (mp-text-cycle! this -1)
-       (sound-play "roll-over")
-       )
-      ((cpad-pressed? 0 right l-analog-right)
-       (set! (-> this cursor) (min (+ (-> this cursor) 1) (min (length edit) (+ (-> this max-length) -1))))
-       )
-      ((cpad-pressed? 0 left l-analog-left)
-       (set! (-> this cursor) (max 0 (+ (-> this cursor) -1)))
-       )
-      ((cpad-pressed? 0 square)
-       (mp-text-delete! this)
-       (sound-play "generic-beep")
-       )
-      )
+  "Confirm opens the keyboard on this field's value."
+  (when (and selected? (cpad-pressed? 0 confirm))
+    (cpad-clear! 0 confirm)
+    (sound-play "window-expand")
+    (mp-keyboard-open this progress)
+    (set! (-> progress selected-option) #f)
     )
   0
   )
 
-(define *mp-text-before* (new 'global 'string 40 (the-as string #f)))
-(define *mp-text-after* (new 'global 'string 40 (the-as string #f)))
-
 (defmethod draw-option ((this menu-mp-text-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
-  "Label on the first line, value on the second; while editing, the cursor is highlighted."
+  "Label on the first line, value on the second."
   ;; a static object's symbol fields start at 0, not #f (same test as the stock pages)
   (when (or (zero? (-> this mounted?)) (not (-> this mounted?)))
     (on-mount! this)
@@ -272,10 +164,6 @@
                                    )
         )
     (cond
-      (selected?
-        (set-color! font-ctx (font-color font-color-34))
-        (draw-generic-highlight (the int (- (-> font-ctx origin y) 2.0)) HIGHLIGHT_SIZE_LARGE alpha)
-        )
       ((= option-index (-> *progress-pc-generic-store* current-menu-hover-index))
        (set-color! font-ctx (font-color font-color-33))
        (draw-generic-highlight (the int (+ -2.0 (-> font-ctx origin y))) HIGHLIGHT_SIZE alpha)
@@ -287,33 +175,7 @@
     (print-game-text (lookup-text! *common-text* (-> this name) #f) font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
     (+! (-> font-ctx origin y) 18.0)
     (set-scale! font-ctx FONT_SIZE_OPTION_EXTRA)
-    (cond
-      (selected?
-        (let* ((edit (-> this edit))
-               (len (length edit))
-               (cur (min (-> this cursor) len))
-               )
-          (copyn-string<-charp *mp-text-before* (-> edit data) cur)
-          (if (< cur len)
-              (string<-charp *mp-text-after* (&-> edit data (+ cur 1)))
-              (clear *mp-text-after*)
-              )
-          (format
-            (clear *progress-generic-temp-string*)
-            "~1L~S~33L~C~1L~S"
-            *mp-text-before*
-            (if (< cur len)
-                (-> edit data cur)
-                95 ;; "_" marks the end, where up / down add a character
-                )
-            *mp-text-after*
-            )
-          )
-        )
-      (else
-        (format (clear *progress-generic-temp-string*) "~S" ((-> this get-value)))
-        )
-      )
+    (format (clear *progress-generic-temp-string*) "~S" ((-> this get-value)))
     (print-game-text *progress-generic-temp-string* font-ctx #f 44 (bucket-id hud-draw-hud-alpha))
     )
   (none)
@@ -396,7 +258,7 @@
     (new 'static 'menu-mp-text-option
       :name (text-id progress-mp-name)
       :get-value (lambda () *mp-name*)
-      :charset "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_ "
+      :layout 0
       :max-length 15
       :on-confirm (lambda () (mp-config-save!) (none))
       )
@@ -434,7 +296,7 @@
     (new 'static 'menu-mp-text-option
       :name (text-id progress-mp-address)
       :get-value (lambda () *mp-address*)
-      :charset "0123456789.:abcdefghijklmnopqrstuvwxyz-"
+      :layout 1
       :max-length 31
       :on-confirm (lambda () (mp-config-save!) (none))
       )
@@ -575,7 +437,7 @@
 
 ;; Title screen entries, shown while the mod is enabled (mp-update-title).
 (define *mp-title-host*
-  (new 'static 'menu-sub-menu-option :name (text-id progress-mp-host-game) :next-state 'mp-host-game)
+  (new 'static 'menu-sub-menu-option :name (text-id progress-mp-host-game) :next-state 'mp-lobby-host)
   )
 
 (define *mp-title-join*
@@ -643,26 +505,13 @@
   (none)
   )
 
-;; Host Game: a new game or a save, then the lobby (the server starts with it).
-(define *mp-host-game-options*
-  (new 'static 'menu-option-list
-    :y-center #xc6
-    :y-space 15
-    :scale 0.82
-    :options (new 'static 'boxed-array :type menu-option
-      (new 'static 'menu-sub-menu-option :name (text-id progress-title-new-game) :offset-y 0.3 :next-state 'mp-lobby-new)
-      (new 'static 'menu-sub-menu-option :name (text-id progress-load-save) :offset-y 0.45 :next-state 'mp-lobby-load)
-      )
-    )
-  )
-
 ;; Join Game: the host's address, then the lobby.
 (define *mp-join-game-options*
   (progress-new-generic-scrolling-page (text-id progress-mp-join-game)
     (new 'static 'menu-mp-text-option
       :name (text-id progress-mp-address)
       :get-value (lambda () *mp-address*)
-      :charset "0123456789.:abcdefghijklmnopqrstuvwxyz-"
+      :layout 1
       :max-length 31
       :on-confirm (lambda () (mp-config-save!) (none))
       )
@@ -695,11 +544,9 @@
     )
   )
 
-;; Where the host's start goes: the save menu of a new game ('select-save-title) or of a save to
-;; load ('select-load), chosen on the Host Game page.
-(define *mp-lobby-start* 'select-save-title)
-
 (define *mp-lobby-line* (new 'global 'string 128 (the-as string #f)))
+
+(define-extern mp-lobby-mode-line (function string string)) ;; "Game modes", below
 
 (defun mp-lobby-slot ((row int))
   "Slot of the player on lobby row `row`: everyone in slot order (the host first), ourselves
@@ -785,6 +632,18 @@
   (none)
   )
 
+(defun mp-menu-box ((x int) (y int) (w int) (h int) (color rgba))
+  "A filled box in the menu's layer (under its text)."
+  (with-dma-buffer-add-bucket ((buf (-> *display* frames (-> *display* on-screen) global-buf)) (bucket-id hud-draw-hud-alpha))
+    (dma-buffer-add-gs-set-flusha buf
+                                  (alpha-1 (new 'static 'gs-alpha :b #x1 :d #x1))
+                                  (tex1-1 (new 'static 'gs-tex1 :mmag #x1 :mmin #x1))
+                                  )
+    (draw-sprite2d-xy buf x y w h color #x3fffff)
+    )
+  (none)
+  )
+
 (defmethod draw-option ((this menu-mp-lobby-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
   "The lobby: session status and game mode, the players on the left, the selected one on the right,
    a hint and the keys at the bottom."
@@ -815,11 +674,7 @@
     ;; session status and game mode, centered
     (set-flags! font-ctx (font-flags kerning middle large))
     (mp-lobby-print font-ctx (mp-status-text) left top width 0.45 (font-color font-color-32))
-    (format (clear *mp-lobby-line*) "~S: ~S"
-            (lookup-text! *common-text* (text-id progress-mp-mode) #f)
-            (lookup-text! *common-text* (if (mp-lobby-coop?) (text-id progress-mp-mode-coop) (text-id progress-mp-mode-free)) #f)
-            )
-    (mp-lobby-print font-ctx *mp-lobby-line* left (+ top 17.0) width 0.45 (font-color font-color-32))
+    (mp-lobby-print font-ctx (mp-lobby-mode-line *mp-lobby-line*) left (+ top 17.0) width 0.45 (font-color font-color-32))
     ;; the players: color, name and status, the selected one highlighted
     (set-flags! font-ctx (font-flags kerning large))
     (dotimes (row rows)
@@ -875,6 +730,9 @@
       ((and host? (not (mp-lobby-all-ready?)))
        (set! hint (text-id progress-mp-lobby-not-ready))
        )
+      ((not (mp-lobby-coop?))
+       (set! hint (text-id progress-mp-free-hint))
+       )
       )
     (set-flags! font-ctx (font-flags kerning middle large))
     (if (nonzero? hint)
@@ -916,8 +774,9 @@
           )
          ((and (= *mp-mode* (mp-mode host)) (mp-lobby-all-ready?))
           (sound-play "window-expand")
-          (push-state progress)
-          (set-next-state progress *mp-lobby-start* 0)
+          (if (not (mp-start-game))
+              (sound-play "roll-over")
+              )
           )
          (else
            (sound-play "roll-over")
@@ -939,10 +798,9 @@
        )
       ((and host? (cpad-pressed? 0 square))
        (cpad-clear! 0 square)
-       (set! (-> *mp-config* mode) (if (= (-> *mp-config* mode) 1) 0 1))
-       (mp-config-save!)
-       (mp-apply-mode!)
-       (sound-play "generic-beep")
+       (sound-play "window-expand")
+       (push-state progress)
+       (set-next-state progress 'mp-mode 0)
        )
       ((cpad-pressed? 0 circle)
        (cpad-clear! 0 circle)
@@ -956,6 +814,457 @@
       )
     )
   0
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; On-screen keyboard: the page a text field opens (player name, server address). A grid of keys
+;; moved over with the D-pad or the left stick, as the consoles' keyboards: X types the key, square
+;; deletes, L1 switches capitals, START or the OK key keeps the text, triangle cancels.
+;; ------------------------------------------------------------------------------------------------
+
+(deftype mp-keyboard-state (structure)
+  ((field     menu-mp-text-option) ;; the field edited
+   (edit      string)              ;; working copy
+   (row       int32)               ;; key highlighted: rows 0-3 characters, row 4 actions
+   (col       int32)
+   (shift?    symbol)              ;; capitals (name layout)
+   (last-move time-frame)
+   )
+  )
+
+(define *mp-keyboard* (new 'global 'mp-keyboard-state))
+(set! (-> *mp-keyboard* edit) (new 'global 'string 40 (the-as string #f)))
+(set! (-> *mp-keyboard* shift?) #f)
+
+;; Character rows of each layout (10 keys each): the name's, then the address's.
+(define *mp-keyboard-rows*
+  (new 'static 'boxed-array :type string
+    "abcdefghij" "klmnopqrst" "uvwxyz-_.!" "0123456789"
+    "1234567890" ".:abcdefgh" "ijklmnopqr" "stuvwxyz-_"
+    )
+  )
+
+;; The action row: capitals, space, delete, OK.
+(define *mp-keyboard-actions*
+  (new 'static 'boxed-array :type text-id
+    (text-id progress-mp-key-shift)
+    (text-id progress-mp-key-space)
+    (text-id progress-mp-key-delete)
+    (text-id progress-mp-key-ok)
+    )
+  )
+
+(defun mp-keyboard-char ((row int) (col int))
+  "The character of key row, col (rows 0-3), capital when shift is on (name layout)."
+  (let* ((kb *mp-keyboard*)
+         (c (-> *mp-keyboard-rows* (+ row (* 4 (-> kb field layout))) data col))
+         )
+    (if (and (-> kb shift?) (>= c 97) (<= c 122))
+        (+ c -32)
+        c
+        )
+    )
+  )
+
+(defun mp-keyboard-open ((field menu-mp-text-option) (progress progress))
+  "Open the keyboard page on `field`'s current value."
+  (let ((kb *mp-keyboard*))
+    (set! (-> kb field) field)
+    (copy-string<-string (-> kb edit) ((-> field get-value)))
+    (set! (-> kb row) 0)
+    (set! (-> kb col) 0)
+    (set! (-> kb shift?) #f)
+    )
+  (push-state progress)
+  (set-next-state progress 'mp-keyboard 0)
+  (none)
+  )
+
+(defun mp-keyboard-type ((c uint))
+  "Add character `c` at the end of the text, within the field's length."
+  (let* ((edit (-> *mp-keyboard* edit))
+         (n (length edit))
+         )
+    (when (< n (-> *mp-keyboard* field max-length))
+      (set! (-> edit data n) c)
+      (set! (-> edit data (+ n 1)) (the-as uint 0))
+      )
+    )
+  (none)
+  )
+
+(defun mp-keyboard-delete ()
+  "Remove the last character."
+  (let* ((edit (-> *mp-keyboard* edit))
+         (n (length edit))
+         )
+    (if (> n 0)
+        (set! (-> edit data (+ n -1)) (the-as uint 0))
+        )
+    )
+  (none)
+  )
+
+(defun mp-keyboard-done ((progress progress))
+  "Keep the text (trailing spaces removed) and go back to the field's page."
+  (let ((kb *mp-keyboard*))
+    (mp-text-trim! (-> kb edit))
+    (copy-string<-string ((-> kb field get-value)) (-> kb edit))
+    ((-> kb field on-confirm))
+    )
+  (sound-play "generic-beep")
+  (pop-state progress)
+  (none)
+  )
+
+(defun mp-keyboard-move ((drow int) (dcol int))
+  "Move the highlight; between the character rows (10 keys) and the action row (4), the column
+   follows the key's place."
+  (let* ((kb *mp-keyboard*)
+         (row (-> kb row))
+         (to (mod (+ row drow 5) 5))
+         (col (-> kb col))
+         )
+    (cond
+      ((and (< row 4) (= to 4))
+       (set! col (/ (* col 4) 10))
+       )
+      ((and (= row 4) (< to 4))
+       (set! col (min 9 (+ 1 (/ (* col 10) 4))))
+       )
+      )
+    (set! (-> kb row) to)
+    (set! (-> kb col) (mod (+ col dcol (if (= to 4) 4 10)) (if (= to 4) 4 10)))
+    )
+  (sound-play "roll-over")
+  (none)
+  )
+
+(deftype menu-mp-keyboard-option (menu-option)
+  ()
+  )
+
+(define *mp-keyboard-options*
+  (new 'static 'menu-option-list
+    :y-center #xc6
+    :y-space 15
+    :scale 0.82
+    :options (new 'static 'boxed-array :type menu-option
+      (new 'static 'menu-mp-keyboard-option :name (text-id progress-mp-name))
+      )
+    )
+  )
+
+(define *mp-keyboard-char* (new 'global 'string 4 (the-as string #f)))
+
+(defmethod draw-option ((this menu-mp-keyboard-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "The field's name, the text with a cursor, the keys (the highlighted one in a box), the hints."
+  (let* ((kb *mp-keyboard*)
+         (alpha (fmax 0.0 (* 2.0 (- 0.5 (-> progress menu-transition)))))
+         (wide? (= (get-aspect-ratio) 'aspect16x9))
+         (vis? (-> *pc-settings* use-vis?))
+         (x0 (if wide? 79.0 70.0))
+         (x1 (if wide? 435.0 445.0))
+         (left (+ 8.0 (if vis? x0 (the float (adjust-game-x x0)))))
+         (width (- (if vis? x1 (the float (adjust-game-x x1))) left 8.0))
+         (top (if wide? 86.0 112.0))
+         (bottom (if wide? 362.0 329.0))
+         (grid-left (+ left (* 0.06 width)))
+         (key-w (/ (* 0.88 width) 10.0))
+         (key-h (if wide? 26.0 21.0))
+         (grid-top (+ top 50.0))
+         )
+    (when (-> kb field)
+      (set! (-> font-ctx alpha) alpha)
+      (draw-page-header font-ctx (-> kb field name) alpha)
+      ;; the text and its cursor
+      (set-flags! font-ctx (font-flags kerning middle large))
+      (format (clear *mp-lobby-line*) "~S_" (-> kb edit))
+      (mp-lobby-print font-ctx *mp-lobby-line* left (+ top 12.0) width 0.6 (font-color font-color-33))
+      ;; the keys
+      (dotimes (row 5)
+        (let ((n (if (= row 4) 4 10)))
+          (dotimes (col n)
+            (let* ((w (if (= row 4) (* 2.5 key-w) key-w))
+                   (x (+ grid-left (* w (the float col))))
+                   (y (+ grid-top (* key-h (the float row))))
+                   (on? (and (= row (-> kb row)) (= col (-> kb col))))
+                   )
+              (if on?
+                  (mp-menu-box (the int (+ x 1.0)) (the int (+ y -2.0)) (the int (+ w -2.0)) (the int (+ key-h -2.0))
+                               (new 'static 'rgba :r #x80 :g #x80 :b #x40 :a #x40)
+                               )
+                  )
+              (cond
+                ((< row 4)
+                 (set! (-> *mp-keyboard-char* data 0) (mp-keyboard-char row col))
+                 (set! (-> *mp-keyboard-char* data 1) (the-as uint 0))
+                 (mp-lobby-print font-ctx *mp-keyboard-char* x y w 0.6 (if on? (font-color font-color-33) (font-color font-color-32)))
+                 )
+                (else
+                  (mp-lobby-print font-ctx (lookup-text! *common-text* (-> *mp-keyboard-actions* col) #f) x (+ y 2.0) w 0.45
+                                  (if (or on? (and (zero? col) (-> kb shift?)))
+                                      (font-color font-color-33)
+                                      (font-color font-color-32)
+                                      )
+                                  )
+                  )
+                )
+              )
+            )
+          )
+        )
+      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-keyboard-keys) #f) left (- bottom 46.0) width 0.4 (font-color font-color-32))
+      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-keyboard-keys-2) #f) left (- bottom 28.0) width 0.4 (font-color font-color-32))
+      )
+    )
+  (none)
+  )
+
+(defmethod respond-progress ((this menu-mp-keyboard-option) (progress progress) (selected? symbol))
+  "The keyboard's keys (see above); triangle is left to the stock, which goes back a page."
+  (let ((kb *mp-keyboard*)
+        (repeat? (time-elapsed? (-> *mp-keyboard* last-move) (seconds 0.15)))
+        )
+    (when (-> kb field)
+      (cond
+        ((or (cpad-pressed? 0 up l-analog-up) (and repeat? (cpad-hold? 0 up l-analog-up)))
+         (cpad-clear! 0 up l-analog-up)
+         (set-time! (-> kb last-move))
+         (mp-keyboard-move -1 0)
+         )
+        ((or (cpad-pressed? 0 down l-analog-down) (and repeat? (cpad-hold? 0 down l-analog-down)))
+         (cpad-clear! 0 down l-analog-down)
+         (set-time! (-> kb last-move))
+         (mp-keyboard-move 1 0)
+         )
+        ((or (cpad-pressed? 0 left l-analog-left) (and repeat? (cpad-hold? 0 left l-analog-left)))
+         (set-time! (-> kb last-move))
+         (mp-keyboard-move 0 -1)
+         )
+        ((or (cpad-pressed? 0 right l-analog-right) (and repeat? (cpad-hold? 0 right l-analog-right)))
+         (set-time! (-> kb last-move))
+         (mp-keyboard-move 0 1)
+         )
+        ((cpad-pressed? 0 confirm)
+         (cpad-clear! 0 confirm)
+         (cond
+           ((< (-> kb row) 4)
+            (mp-keyboard-type (mp-keyboard-char (-> kb row) (-> kb col)))
+            (sound-play "generic-beep")
+            )
+           ((zero? (-> kb col))
+            (set! (-> kb shift?) (not (-> kb shift?)))
+            (sound-play "generic-beep")
+            )
+           ((= (-> kb col) 1)
+            (if (zero? (-> kb field layout))
+                (mp-keyboard-type (the-as uint 32))
+                )
+            (sound-play "generic-beep")
+            )
+           ((= (-> kb col) 2)
+            (mp-keyboard-delete)
+            (sound-play "generic-beep")
+            )
+           (else
+             (mp-keyboard-done progress)
+             )
+           )
+         )
+        ((cpad-pressed? 0 square)
+         (cpad-clear! 0 square)
+         (mp-keyboard-delete)
+         (sound-play "generic-beep")
+         )
+        ((cpad-pressed? 0 l1)
+         (cpad-clear! 0 l1)
+         (set! (-> kb shift?) (not (-> kb shift?)))
+         (sound-play "generic-beep")
+         )
+        ((cpad-pressed? 0 start)
+         (cpad-clear! 0 start)
+         (mp-keyboard-done progress)
+         )
+        )
+      )
+    )
+  0
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Game modes (square in the lobby, host): the eight modes, those not playable yet grayed out; co-op
+;; then asks how the campaign starts, and a mission when one is chosen. See "Game modes" in
+;; multiplayer.gc for what each starts.
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-mode-available? ((mode int))
+  "#t for the modes that can be played: free roam (6) and co-op (7), two players at most."
+  (case mode
+    ((6) #t)
+    ((7) (<= (mp-player-count) 1))
+    (else #f)
+    )
+  )
+
+(defun mp-choose-mode ((mode int) (progress progress))
+  "The host chose mode `mode` of the list: free roam goes back to the lobby, co-op goes on to how
+   the campaign starts."
+  (set! (-> *mp-config* mode) (if (= mode 7) 1 0))
+  (mp-config-save!)
+  (mp-apply-mode!)
+  (if (= mode 7)
+      (set-next-state progress 'mp-coop-start 0)
+      (pop-state progress)
+      )
+  (none)
+  )
+
+;; One entry of the mode list: the mode's name, "coming soon" (or "2 players at most" for co-op with
+;; more players) after it while it cannot be chosen.
+(deftype menu-mp-mode-option (menu-generic-button-option)
+  ((mode int32) ;; place in the list: 0 parkour ... 6 free roam, 7 co-op
+   )
+  )
+
+(define *mp-mode-label* (new 'global 'string 96 (the-as string #f)))
+
+(defmethod draw-option ((this menu-mp-mode-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "The mode's name, grayed with the reason while it cannot be chosen."
+  (when (or (zero? (-> this mounted?)) (not (-> this mounted?)))
+    (on-mount! this)
+    )
+  (if (mp-mode-available? (-> this mode))
+      (format (clear *mp-mode-label*) "~S" (lookup-text! *common-text* (-> this name) #f))
+      (format (clear *mp-mode-label*) "~S  (~S)" (lookup-text! *common-text* (-> this name) #f)
+              (lookup-text! *common-text* (if (= (-> this mode) 7) (text-id progress-mp-coop-max) (text-id progress-mp-coming-soon)) #f)
+              )
+      )
+  (draw-generic-simple-string-option this progress font-ctx option-index *mp-mode-label*)
+  (none)
+  )
+
+(define *mp-mode-options*
+  (progress-new-generic-scrolling-page (text-id progress-mp-mode)
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-parkour) :mode 0
+         :should-disable? (lambda () #t) :on-confirm (lambda ((p progress)) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-egg-hunt) :mode 1
+         :should-disable? (lambda () #t) :on-confirm (lambda ((p progress)) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-pvp) :mode 2
+         :should-disable? (lambda () #t) :on-confirm (lambda ((p progress)) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-battlefront) :mode 3
+         :should-disable? (lambda () #t) :on-confirm (lambda ((p progress)) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-hide-seek) :mode 4
+         :should-disable? (lambda () #t) :on-confirm (lambda ((p progress)) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-races) :mode 5
+         :should-disable? (lambda () #t) :on-confirm (lambda ((p progress)) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-free) :mode 6
+         :should-disable? (lambda () (not (mp-mode-available? 6)))
+         :on-confirm (lambda ((p progress)) (mp-choose-mode 6 p) (none)))
+    (new 'static 'menu-mp-mode-option :name (text-id progress-mp-mode-coop) :mode 7
+         :should-disable? (lambda () (not (mp-mode-available? 7)))
+         :on-confirm (lambda ((p progress)) (mp-choose-mode 7 p) (none)))
+    )
+  )
+
+;; The multiplayer campaign's completion, read when the co-op page opens (-1: none).
+(define *mp-campaign-percent* -1.0)
+
+(defun mp-campaign-label ()
+  "The co-op page's first line: the multiplayer campaign and how far it went, or that there is none."
+  (if (< *mp-campaign-percent* 0.0)
+      (format (clear *mp-menu-label*) "~S" (lookup-text! *common-text* (text-id progress-mp-no-campaign) #f))
+      (format (clear *mp-menu-label*) "~S: ~D%" (lookup-text! *common-text* (text-id progress-mp-campaign) #f)
+              (the int *mp-campaign-percent*)
+              )
+      )
+  *mp-menu-label*
+  )
+
+(defun mp-choose-coop-start ((start int) (progress progress))
+  "The host chose how the campaign starts (0 new, 1 continue, 2 a mission); back to the lobby."
+  (set! (-> *mp-session* coop-start) start)
+  (pop-state progress)
+  (none)
+  )
+
+(define *mp-coop-options*
+  (progress-new-generic-scrolling-page (text-id progress-mp-coop-start)
+    (new 'static 'menu-mp-label-option
+      :name (text-id progress-mp-campaign)
+      :should-disable? (lambda () #t)
+      :get-label (lambda () (mp-campaign-label))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-coop-new)
+      :on-confirm (lambda ((p progress)) (mp-choose-coop-start 0 p) (none))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-coop-continue)
+      :should-disable? (lambda () (< *mp-campaign-percent* 0.0))
+      :on-confirm (lambda ((p progress)) (mp-choose-coop-start 1 p) (none))
+      )
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-mp-coop-mission)
+      :on-confirm (lambda ((p progress)) (set-next-state p 'mp-mission 0) (none))
+      )
+    )
+  )
+
+(defun mp-mission-row ((task int))
+  "Place of mission `task` in the list offered, 0 when it is not there."
+  (dotimes (i (mp-mission-count))
+    (if (= (mp-mission-task i) task)
+        (return i)
+        )
+    )
+  0
+  )
+
+(define *mp-mission-options*
+  (progress-new-generic-scrolling-page (text-id progress-mp-mission)
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-mp-mission)
+      :get-max-size-fn (lambda () (mp-mission-count))
+      :get-item-label-fn (lambda ((index int)) (mp-mission-name (mp-mission-task index)))
+      :get-item-index-fn (lambda () (mp-mission-row (-> *mp-session* coop-mission)))
+      :on-confirm (lambda ((index int) (the-progress progress))
+                    (set! (-> *mp-session* coop-mission) (mp-mission-task index))
+                    (mp-choose-coop-start 2 the-progress)
+                    (none)
+                    )
+      )
+    )
+  )
+
+(defun mp-lobby-mode-line ((dst string))
+  "The lobby's game mode line: the mode, and for co-op how it starts (the host's choice; a guest
+   reads it in the host's state)."
+  (let* ((host (mp-remote-state 0))
+         (client? (= *mp-mode* (mp-mode client)))
+         (coop? (mp-lobby-coop?))
+         (start (if (and client? host) (the-as int (-> host lobby-start)) (-> *mp-session* coop-start)))
+         (mission (if (and client? host) (the-as int (-> host lobby-mission)) (-> *mp-session* coop-mission)))
+         )
+    (format (clear dst) "~S: ~S"
+            (lookup-text! *common-text* (text-id progress-mp-mode) #f)
+            (lookup-text! *common-text* (if coop? (text-id progress-mp-mode-coop) (text-id progress-mp-mode-free)) #f)
+            )
+    (when coop?
+      (case start
+        ((1)
+         (format dst " - ~S" (lookup-text! *common-text* (text-id progress-mp-coop-continue) #f))
+         )
+        ((2)
+         (format dst " - ~S: ~S" (lookup-text! *common-text* (text-id progress-mp-mission) #f) (mp-mission-name mission))
+         )
+        (else
+          (format dst " - ~S" (lookup-text! *common-text* (text-id progress-mp-coop-new) #f))
+          )
+        )
+      )
+    )
+  dst
   )
 
 ;; MOD multiplayer -- route the multiplayer pages (START > Options > Multiplayer, the title screen's
@@ -973,8 +1282,33 @@
      (set! (-> this current-options) *mp-menu-options*)
      0
      )
-    (('mp-host-game)
-     (set! (-> this current-options) *mp-host-game-options*)
+    (('mp-mode)
+     (set! (-> (the-as menu-generic-scrolling-page (-> *mp-mode-options* options 0)) selected-option-index) -1)
+     (set! (-> *progress-pc-generic-store* current-menu-hover-index) (if (= (-> *mp-config* mode) 1) 7 6))
+     ;; the list scrolled so the mode chosen shows at the bottom (five lines shown)
+     (set! (-> *progress-pc-generic-store* current-menu-scroll-index)
+           (the float (+ (-> *progress-pc-generic-store* current-menu-hover-index) -4))
+           )
+     (set! (-> this current-options) *mp-mode-options*)
+     0
+     )
+    (('mp-coop-start)
+     (set! *mp-campaign-percent* (mp-campaign-percent))
+     (set! (-> (the-as menu-generic-scrolling-page (-> *mp-coop-options* options 0)) selected-option-index) -1)
+     (set! (-> *progress-pc-generic-store* current-menu-hover-index) (+ 1 (-> *mp-session* coop-start)))
+     (set! (-> *progress-pc-generic-store* current-menu-scroll-index) 0.0)
+     (set! (-> this current-options) *mp-coop-options*)
+     0
+     )
+    (('mp-mission)
+     (set! (-> (the-as menu-generic-scrolling-page (-> *mp-mission-options* options 0)) selected-option-index) -1)
+     (set! (-> *progress-pc-generic-store* current-menu-hover-index) 0)
+     (set! (-> *progress-pc-generic-store* current-menu-scroll-index) 0.0)
+     (set! (-> this current-options) *mp-mission-options*)
+     0
+     )
+    (('mp-keyboard)
+     (set! (-> this current-options) *mp-keyboard-options*)
      0
      )
     (('mp-join-game)
@@ -984,10 +1318,15 @@
      (set! (-> this current-options) *mp-join-game-options*)
      0
      )
-    (('mp-lobby-new 'mp-lobby-load 'mp-lobby-join)
-     ;; a host's server starts with its lobby (mp-host! does nothing once hosting)
-     (when (!= arg0 'mp-lobby-join)
-       (set! *mp-lobby-start* (if (= arg0 'mp-lobby-new) 'select-save-title 'select-load))
+    (('mp-lobby-host 'mp-lobby-join)
+     ;; a host's server starts with its lobby (mp-host! does nothing once hosting): guests can join
+     ;; it at once, before the host starts the game
+     (when (= arg0 'mp-lobby-host)
+       ;; as the server starts (not on coming back from the mode pages): co-op continues the
+       ;; campaign when there is one, else starts a new one (the host can choose otherwise)
+       (if (= *mp-mode* (mp-mode offline))
+           (set! (-> *mp-session* coop-start) (if (>= (mp-campaign-percent) 0.0) 1 0))
+           )
        (mp-host!)
        )
      (set! (-> this current-options) *mp-lobby-options*)
@@ -1155,6 +1494,10 @@
       (new 'static 'popup-menu-button :label "Restore light eco"
            :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
            :on-confirm (lambda () (mp-cheat-light-eco) (none))
+           )
+      (new 'static 'popup-menu-button :label "Give every weapon (Jak and Daxter)"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
+           :on-confirm (lambda () (when (mp-cheats-allowed?) (mp-give-all-weapons) (mp-show-message "Every weapon given")) (none))
            )
       (new 'static 'popup-menu-flag :label "Invincible"
            :entry-disabled? (lambda () (not (mp-cheats-allowed?)))

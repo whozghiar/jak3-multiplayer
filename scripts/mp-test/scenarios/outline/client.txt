@@ -1,0 +1,24 @@
+# Outlines through walls, guest side, in Spargus: 9 m from the host in the open, facing it (nothing
+# hides it: no hidden pixels), then a Rhino buggy spawned between them hides the host's legs: its
+# outline, in its color (red), is drawn through the buggy (pixels counted by the renderer).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 goto-player 0 9 0
+52.5 look-player 0
+53.5 log-outline
+54 screenshot open
+54.5 log-outline
+54.7 goto-player 0 3 0
+54.9 look-player 0
+55.5 log-outline
+55.7 screenshot near
+55.9 log-outline
+56 spawn-vehicle 17
+57 look-player 0
+58 log-outline
+58.5 screenshot hidden
+59 log-outline
+59.5 log-outline

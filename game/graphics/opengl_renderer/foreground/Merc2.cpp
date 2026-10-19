@@ -1,5 +1,7 @@
 #include "Merc2.h"
 
+#include "game/kernel/jak3/kmultiplayer.h"
+
 #include "common/global_profiler/GlobalProfiler.h"
 #include "common/util/fnv.h"
 #include "common/util/simd_util.h"
@@ -100,6 +102,13 @@ Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
   init_shader_common(shaders[ShaderId::MERC2], &m_merc_uniforms, true);
   init_shader_common(shaders[ShaderId::EMERC], &m_emerc_uniforms, false);
   m_emerc_uniforms.fade = glGetUniformLocation(shaders[ShaderId::EMERC].id(), "fade");
+
+  auto outline_id = shaders[ShaderId::MERC2_OUTLINE].id();
+  m_outline_uniforms.hvdf_offset = glGetUniformLocation(outline_id, "hvdf_offset");
+  m_outline_uniforms.fog = glGetUniformLocation(outline_id, "fog_constants");
+  m_outline_uniforms.perspective_matrix = glGetUniformLocation(outline_id, "perspective_matrix");
+  m_outline_uniforms.color = glGetUniformLocation(outline_id, "outline_color");
+  m_outline_uniforms.screen_offset = glGetUniformLocation(outline_id, "screen_offset");
 }
 
 Merc2::~Merc2() {
@@ -540,6 +549,9 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   bool model_uses_pc_blerc = flags->bitflags & 4;
   bool model_disables_envmap = flags->bitflags & 8;
   bool model_no_texture = flags->bitflags & 16;
+  bool model_outline = flags->bitflags & 32;  // MOD multiplayer, its color at byte 20
+  u32 outline_rgba;
+  memcpy(&outline_rgba, (const u8*)flags + 20, 4);
   input_data += 32;
 
   float blerc_weights[kMaxBlerc];
@@ -630,6 +642,11 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.lights = lights;
   args.first_bone = first_bone;
   args.no_texture = render_state->version == GameVersion::Jak3 && model_no_texture;
+
+  if (model_outline) {
+    record_outline(model, lev, skel_matrix_buffer, bone_count, current_effect_enable_bits,
+                   outline_rgba);
+  }
 
   // loop over effects, creating draws for each
   for (size_t ei = 0; ei < model->effects.size(); ei++) {
@@ -1357,4 +1374,189 @@ void Merc2::do_draws(const Draw* draw_array,
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lev->merc_indices);
     glBindBuffer(GL_ARRAY_BUFFER, lev->merc_vertices);
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// MOD multiplayer: other players seen through walls. GOAL flags their models (pc-merc-bits outline,
+// pc-merc-draw-request); each is kept with its bones and camera, and drawn again once the 3D scene
+// is done, when the depth buffer holds every wall: its silhouette marked in the stencil, a faint
+// fill where something hides it, then eight copies shifted a few pixels around, outside the
+// silhouette and only where hidden: an outline in the player's color.
+// ---------------------------------------------------------------------------------------------
+
+void Merc2::record_outline(const tfrag3::MercModel* model,
+                           const LevelData* lev,
+                           const ShaderMercMat* bones,
+                           int bone_count,
+                           u64 enabled_effects,
+                           u32 rgba) {
+  if (m_outline_models.size() >= kMaxOutlines) {
+    return;
+  }
+  auto& m = m_outline_models.emplace_back();
+  m.lev = lev;
+  m.first_bone = (u32)m_outline_bones.size();
+  m.bone_count = (u32)bone_count;
+  m_outline_bones.insert(m_outline_bones.end(), bones, bones + bone_count);
+  m.first_draw = (u32)m_outline_draws.size();
+  for (size_t ei = 0; ei < model->effects.size(); ei++) {
+    if (enabled_effects & (1ull << ei)) {
+      for (const auto& d : model->effects[ei].all_draws) {
+        m_outline_draws.push_back({d.first_index, d.index_count, d.no_strip != 0});
+      }
+    }
+  }
+  m.draw_count = (u32)m_outline_draws.size() - m.first_draw;
+  m.hvdf_offset = m_low_memory.hvdf_offset;
+  m.fog = m_low_memory.fog;
+  for (int i = 0; i < 4; i++) {
+    m.perspective[i] = m_low_memory.perspective[i];
+  }
+  // GS colors: #x80 is full intensity
+  for (int i = 0; i < 4; i++) {
+    m.color[i] = std::min(1.f, ((rgba >> (8 * i)) & 0xff) / 128.f);
+  }
+}
+
+void Merc2::draw_outlines(SharedRenderState* render_state, ScopedProfilerNode& prof) {
+  m_outlines_drawn = (int)m_outline_models.size();
+  if (m_outline_models.empty()) {
+    mp::outline_pixels() = 0;  // no outlined player on screen this frame
+    return;
+  }
+  mp::outlines_drawn() += m_outlines_drawn;
+  // every model's bones, each starting where glBindBufferRange allows
+  std::vector<math::Vector4f> vecs;
+  std::vector<size_t> starts;
+  for (const auto& m : m_outline_models) {
+    while (vecs.size() % m_opengl_buffer_alignment) {
+      vecs.emplace_back(0, 0, 0, 0);
+    }
+    starts.push_back(vecs.size());
+    for (u32 b = 0; b < m.bone_count; b++) {
+      const auto* v = (const math::Vector4f*)&m_outline_bones[m.first_bone + b];
+      vecs.insert(vecs.end(), v, v + sizeof(ShaderMercMat) / sizeof(math::Vector4f));
+    }
+  }
+  glBindBuffer(GL_UNIFORM_BUFFER, m_bones_buffer);
+  glBufferSubData(GL_UNIFORM_BUFFER, 0, vecs.size() * sizeof(math::Vector4f), vecs.data());
+  glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+  // the pixels of hidden fill and outline drawn, counted for the test log (a query of a frame is
+  // read the next one)
+  if (!m_outline_query) {
+    glGenQueries(1, &m_outline_query);
+  } else {
+    GLuint ready = 0;
+    glGetQueryObjectuiv(m_outline_query, GL_QUERY_RESULT_AVAILABLE, &ready);
+    if (ready) {
+      GLuint pixels = 0;
+      glGetQueryObjectuiv(m_outline_query, GL_QUERY_RESULT, &pixels);
+      mp::outline_pixels() = (int)pixels;
+    }
+  }
+
+  render_state->shaders[ShaderId::MERC2_OUTLINE].activate();
+  glBindVertexArray(m_vao);
+  glEnable(GL_STENCIL_TEST);
+  glStencilMask(0xff);
+  glClearStencil(0);
+  glClear(GL_STENCIL_BUFFER_BIT);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glBlendEquation(GL_FUNC_ADD);
+
+  // test only: MP_OUTLINE_ALWAYS=1 draws the outline whatever hides it
+  static const bool always_draw = std::getenv("MP_OUTLINE_ALWAYS") != nullptr;
+  const GLenum hidden_test = always_draw ? GL_ALWAYS : GL_LESS;
+
+  // outline width in pixels, a little wider on large screens
+  float px = std::max(2.f, render_state->draw_region_h / 360.f);
+  float ox = 2.f * px / (float)std::max(1, render_state->draw_region_w);
+  float oy = 2.f * px / (float)std::max(1, render_state->draw_region_h);
+  const float dirs[8][2] = {{1, 0},       {-1, 0},      {0, 1},        {0, -1},
+                            {0.7f, 0.7f}, {-0.7f, 0.7f}, {0.7f, -0.7f}, {-0.7f, -0.7f}};
+
+  // one model's buffers, camera and bones, and a call drawing all of it
+  auto bind_model = [&](size_t i) {
+    const auto& m = m_outline_models[i];
+    glBindBuffer(GL_ARRAY_BUFFER, m.lev->merc_vertices);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m.lev->merc_indices);
+    setup_merc_vao();
+    glDepthMask(GL_FALSE);
+    glUniform4f(m_outline_uniforms.hvdf_offset, m.hvdf_offset.x(), m.hvdf_offset.y(),
+                m.hvdf_offset.z(), m.hvdf_offset.w());
+    glUniform4f(m_outline_uniforms.fog, m.fog.x(), m.fog.y(), m.fog.z(), m.fog.w());
+    glUniformMatrix4fv(m_outline_uniforms.perspective_matrix, 1, GL_FALSE, &m.perspective[0].x());
+    glBindBufferRange(GL_UNIFORM_BUFFER, 1, m_bones_buffer, sizeof(math::Vector4f) * starts[i],
+                      MAX_SKEL_BONES * sizeof(ShaderMercMat));
+  };
+  auto draw_all = [&](size_t i) {
+    const auto& m = m_outline_models[i];
+    for (u32 d = 0; d < m.draw_count; d++) {
+      const auto& od = m_outline_draws[m.first_draw + d];
+      glDrawElements(od.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, od.index_count,
+                     GL_UNSIGNED_INT, (void*)(sizeof(u32) * od.first_index));
+      prof.add_draw_call();
+    }
+  };
+
+  // 1: every silhouette in the stencil (1), then where the model itself is what the depth buffer
+  // shows (2): its own parts in view, not those hidden by the model itself. Pulled a little toward
+  // the camera: drawn again, a model comes out a hair behind its first drawing.
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+  glUniform2f(m_outline_uniforms.screen_offset, 0, 0);
+  for (size_t i = 0; i < m_outline_models.size(); i++) {
+    bind_model(i);
+    glDepthFunc(GL_ALWAYS);
+    glStencilFunc(GL_ALWAYS, 1, 0xff);
+    draw_all(i);
+  }
+  glEnable(GL_POLYGON_OFFSET_FILL);
+  glPolygonOffset(2.f, 512.f);
+  for (size_t i = 0; i < m_outline_models.size(); i++) {
+    bind_model(i);
+    glDepthFunc(GL_GEQUAL);
+    glStencilFunc(GL_ALWAYS, 2, 0xff);
+    draw_all(i);
+  }
+
+  glBeginQuery(GL_SAMPLES_PASSED, m_outline_query);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  for (size_t i = 0; i < m_outline_models.size(); i++) {
+    const auto& m = m_outline_models[i];
+    bind_model(i);
+    // 2: a faint fill over the silhouette where something else hides the model (1 left in the
+    // stencil), each pixel once
+    glDepthFunc(GL_ALWAYS);
+    glStencilFunc(GL_EQUAL, 1, 0xff);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    glUniform2f(m_outline_uniforms.screen_offset, 0, 0);
+    glUniform4f(m_outline_uniforms.color, m.color[0], m.color[1], m.color[2], 0.18f);
+    draw_all(i);
+    // 3: the outline, outside the silhouettes and where hidden (depth is reversed here: GEQUAL is
+    // in front, LESS behind what is drawn), each pixel once
+    glDepthFunc(hidden_test);
+    glStencilFunc(GL_EQUAL, 0, 0xff);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    glUniform4f(m_outline_uniforms.color, m.color[0], m.color[1], m.color[2], 0.9f);
+    for (const auto& d : dirs) {
+      glUniform2f(m_outline_uniforms.screen_offset, d[0] * ox, d[1] * oy);
+      draw_all(i);
+    }
+  }
+
+  glEndQuery(GL_SAMPLES_PASSED);
+  glDisable(GL_STENCIL_TEST);
+  glDisable(GL_POLYGON_OFFSET_FILL);
+  glPolygonOffset(0.f, 0.f);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_GEQUAL);
+  glDisable(GL_BLEND);
+  m_outline_models.clear();
+  m_outline_draws.clear();
+  m_outline_bones.clear();
 }

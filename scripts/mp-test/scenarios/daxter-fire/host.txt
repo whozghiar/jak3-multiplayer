@@ -1,0 +1,21 @@
+# Daxter fires every weapon, host side: plays Jak and stands still while the guest, as Daxter, fires
+# each gun mod at it (health topped up before each); logs the blows taken and the shots drawn.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 cheat health
+59 cheat health
+64 cheat health
+69 cheat health
+74 cheat health
+79 cheat health
+84 cheat health
+89 cheat health
+94 cheat health
+99 cheat health
+104 cheat health
+109 cheat health
+114 log
+115 log-weapons

@@ -1635,6 +1635,7 @@
   (pc-blerc 2)
   (disable-envmap 3)
   (no-textures 4)
+  (outline 5) ;; MOD multiplayer: drawn again where hidden, in outline-color (Merc2 outline pass)
   )
 
 (deftype pc-merc-flags (structure)
@@ -1642,8 +1643,20 @@
    (ignore-alpha-mask uint64)
    (effect-count uint8)
    (bit-flags pc-merc-bits)
+   (outline-color rgba :offset 20) ;; MOD multiplayer
    )
   )
+
+;; MOD multiplayer -- models seen through walls: up to 8 draw-controls (one per player slot of the
+;; multiplayer mod, goal_src/jak3/pc/features/multiplayer/multiplayer.gc) drawn again by the PC
+;; renderer, in their color, wherever something hides them. Empty unless the mod fills it.
+(deftype pc-merc-outline-table (structure)
+  ((dc    draw-control 8)
+   (color rgba 8)
+   )
+  )
+
+(define *pc-merc-outlines* (new 'global 'pc-merc-outline-table))
 
 (defun pc-merc-draw-request ((dc draw-control) (dma-buf pointer) (matrix-buf pointer) (tex-idx int) (update-verts symbol) (blercs (pointer float)))
   "Send a request to PC Merc2 to draw the given object.
@@ -1754,6 +1767,13 @@
               )
             (when (logtest? (-> dc global-effect) (draw-control-global-effect no-textures))
               (logior! (-> flags bit-flags) (pc-merc-bits no-textures))
+              )
+            ;; MOD multiplayer: an outlined model (another player)
+            (dotimes (i 8)
+              (when (= (-> *pc-merc-outlines* dc i) dc)
+                (logior! (-> flags bit-flags) (pc-merc-bits outline))
+                (set! (-> flags outline-color) (-> *pc-merc-outlines* color i))
+                )
               )
             (set! (-> flags enable-mask) enable-mask)
             (set! (-> flags ignore-alpha-mask) ignore-alpha-mask)

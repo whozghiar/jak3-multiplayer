@@ -1,0 +1,590 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; name: multiplayer-guns.gc
+;; dgos: GAME
+;;
+;; Jak 3 multiplayer mod -- every weapon, for Jak and for Daxter.
+;;   - "Give every weapon" (Mods menu > multiplayer): the gun, its twelve mods and their ammo
+;;     upgrades, full ammo (mp-give-all-weapons).
+;;   - Daxter's guns. The stock playable Daxter (indax mode) cannot use the gun: his surfaces carry
+;;     gun-off, and the gun's own `use` state runs target-gun-check, which pushes Jak's gun
+;;     animations onto the player's skeleton. So the stock gun stays put away, and this file fires
+;;     for Daxter: R1 fires the mod chosen with the D-pad (the stock marking menu sets
+;;     using-gun-type in his mode too), from the gun held before him and aimed at the nearest
+;;     target ahead, through the stock fire functions of each mod (target-gun-fire-yellow ...). The
+;;     wave concussor and the peace maker charge in processes whose stock code gives up at once in
+;;     Daxter's mode: Daxter fires subtypes of them without that check.
+
+;; ------------------------------------------------------------------------------------------------
+;; Every weapon
+;; ------------------------------------------------------------------------------------------------
+
+;; The gun, its twelve mods and the ammo upgrades: MP_ALL_GUN_FEATURES (multiplayer.gc).
+
+(defun mp-fill-ammo ()
+  "Every ammo type to its current maximum."
+  (set! (-> *game-info* gun-ammo 0) (get-max-ammo-for-gun *game-info* (pickup-type ammo-yellow)))
+  (set! (-> *game-info* gun-ammo 1) (get-max-ammo-for-gun *game-info* (pickup-type ammo-red)))
+  (set! (-> *game-info* gun-ammo 2) (get-max-ammo-for-gun *game-info* (pickup-type ammo-blue)))
+  (set! (-> *game-info* gun-ammo 3) (get-max-ammo-for-gun *game-info* (pickup-type ammo-dark)))
+  (none)
+  )
+
+;; #t once every weapon was given: kept through a respawn, which restores the features of the game
+;; loaded (in another player's world, that player's save), until the title screen.
+(define *mp-all-weapons?* #f)
+
+(defun mp-give-all-weapons ()
+  "The gun with its twelve mods and ammo upgrades, full ammo, the blaster chosen when none was.
+   Jak takes them out with R1 and the D-pad as usual; Daxter fires them too (below)."
+  (logior! (-> *game-info* features) MP_ALL_GUN_FEATURES)
+  (if (or (< (the-as int (-> *game-info* gun-type)) 26) (> (the-as int (-> *game-info* gun-type)) 37))
+      (set! (-> *game-info* gun-type) (pickup-type gun-yellow-1))
+      )
+  (mp-fill-ammo)
+  (set! *mp-all-weapons?* #t)
+  (none)
+  )
+
+(defun mp-keep-all-weapons ()
+  "Every frame: the weapons given stay given (a respawn took them back), until the title screen."
+  (cond
+    ((= (level-status? *level* 'title #f) 'active)
+     (set! *mp-all-weapons?* #f)
+     )
+    ((and *mp-all-weapons?* (!= (logand (-> *game-info* features) MP_ALL_GUN_FEATURES) MP_ALL_GUN_FEATURES))
+     (logior! (-> *game-info* features) MP_ALL_GUN_FEATURES)
+     (mp-fill-ammo)
+     )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Daxter's guns
+;; ------------------------------------------------------------------------------------------------
+
+(deftype mp-daxter-gun-state (structure)
+  ((out?      symbol)     ;; the gun is held before Daxter (target-gun-compute-pos places it)
+   (out-time  time-frame) ;; last time R1 was held (the gun is put away 2 s after)
+   (fire-time time-frame) ;; last shot
+   (gun-type  int32)      ;; mod in hand (pickup-type 26-37)
+   (charge    handle)     ;; wave concussor or peace maker charging
+   (arc?      symbol)     ;; arc wielder firing: its tracker reads using-gun-type and active?
+   (shots     int32)      ;; shots fired (test log)
+   (aim       vector :inline) ;; direction fired
+   (pose      matrix :inline) ;; where the gun is drawn
+   )
+  )
+
+(define *mp-daxter-gun* (new 'global 'mp-daxter-gun-state))
+(set! (-> *mp-daxter-gun* out?) #f)
+(set! (-> *mp-daxter-gun* arc?) #f)
+(set! (-> *mp-daxter-gun* charge) (the-as handle #f))
+
+(defun mp-gun-mod-owned? ((type int))
+  "#t when `type` is a gun mod (pickup-type 26-37) the player has: its feature bit is type - 20."
+  (and (>= type 26) (<= type 37) (logtest? (-> *game-info* features) (the-as game-feature (ash 1 (+ type -20)))))
+  )
+
+(defun mp-daxter-gun-type ((tgt target))
+  "The mod Daxter fires: the one chosen with the D-pad (using-gun-type), else the gun's mod, else the
+   first one owned; 0 when none."
+  (let ((type (the-as int (-> tgt gun using-gun-type))))
+    (if (not (mp-gun-mod-owned? type))
+        (set! type (the-as int (-> tgt game gun-type)))
+        )
+    (when (not (mp-gun-mod-owned? type))
+      (set! type 0)
+      (let ((i 26))
+        (while (and (zero? type) (<= i 37))
+          (if (mp-gun-mod-owned? i)
+              (set! type i)
+              )
+          (+! i 1)
+          )
+        )
+      )
+    type
+    )
+  )
+
+(defun mp-daxter-gun-allowed? ((tgt target))
+  "#t while Daxter, on his feet in his mode, may fire: he has the gun, the game allows it here."
+  (let ((state (mp-target-state-name)))
+    (and (focus-test? tgt indax)
+         (not (focus-test? tgt dead grabbed hit teleporting pilot))
+         (logtest? (game-feature gun) (-> tgt game features))
+         (-> *setting-control* user-current gun)
+         (not (paused?))
+         (or (= state 'target-indax-stance)
+             (= state 'target-indax-walk)
+             (= state 'target-indax-jump)
+             (= state 'target-indax-double-jump)
+             (= state 'target-indax-falling)
+             (= state 'target-indax-hit-ground)
+             )
+         )
+    )
+  )
+
+;; MOD multiplayer -- where the gun is drawn (engine/target/target-gun.gc; the gun's post calls it
+;; every frame): held before Daxter, along his aim, while he fires; the stock place otherwise.
+(define-perm *mp-stock-target-gun-compute-pos* (function matrix :behavior target) target-gun-compute-pos)
+
+(defbehavior target-gun-compute-pos target ()
+  "Stock, except for Daxter firing (multiplayer mod): the gun 0.6 m up, 0.35 m ahead along his aim."
+  (cond
+    ((and (-> *mp-daxter-gun* out?) (= self *target*) (focus-test? self indax))
+     (let ((gun (-> self gun))
+           (aim (-> *mp-daxter-gun* aim))
+           )
+       (vector+float*! (-> gun gun-pos trans) (-> self control trans) *up-vector* (meters 0.6))
+       (vector+float*! (-> gun gun-pos trans) (-> gun gun-pos trans) aim (meters 0.35))
+       (quaternion-look-at! (-> gun gun-pos quat) aim *up-vector*)
+       (vector-copy! (-> gun gun-pos scale) (-> self control scale))
+       (quaternion->matrix (-> *mp-daxter-gun* pose) (-> gun gun-pos quat))
+       (vector-copy! (-> *mp-daxter-gun* pose trans) (-> gun gun-pos trans))
+       (-> *mp-daxter-gun* pose)
+       )
+     )
+    (else
+      (*mp-stock-target-gun-compute-pos*)
+      )
+    )
+  )
+
+(defbehavior mp-daxter-gun-aim target ()
+  "Fire point and direction: from Daxter's chest, toward the nearest enemy, guard, civilian or
+   crate within 40 m in a 60-degree cone ahead (as the guns' auto-aim picks), else straight ahead.
+   The target found is the gun's tracked target, which homing shots follow."
+  (let ((gun (-> self gun))
+        (dir (vector-z-quaternion! (new 'stack-no-clear 'vector) (-> self control quat)))
+        (eye (vector+float*! (new 'stack-no-clear 'vector) (-> self control trans) *up-vector* (meters 0.6)))
+        (center (new 'stack-no-clear 'vector))
+        )
+    (set! (-> dir y) 0.0)
+    (vector-normalize! dir 1.0)
+    (vector+float*! center eye dir (meters 20))
+    (set! (-> center w) (meters 22))
+    (let ((search (-> self focus-search)))
+      (set! (-> search length) (fill-actor-list-for-box *actor-hash* center (-> search data) (-> search allocated-length)))
+      (let ((best (find-nearest-focusable
+                    search
+                    (-> self control trans)
+                    (meters 40)
+                    (search-info-flag crate attackable enemy cull-angle probe prefer-center)
+                    (the-as search-info-flag 26)
+                    dir
+                    eye
+                    5461.3335
+                    )
+                  )
+            )
+        (cond
+          (best
+            (vector-copy! (-> gun track-trans) (get-trans best 3))
+            (vector-! dir (-> gun track-trans) eye)
+            (vector-normalize! dir 1.0)
+            (focus-on! (-> gun track-target 0) best)
+            )
+          (else
+            (clear-focused (-> gun track-target 0))
+            )
+          )
+        )
+      )
+    (vector-copy! (-> *mp-daxter-gun* aim) dir)
+    (vector+float*! (-> gun fire-point) eye dir (meters 0.6))
+    (vector-copy! (-> gun fire-dir) dir)
+    (vector-copy! (-> gun fire-dir-out) dir)
+    (vector-copy! (-> gun laser-point) (-> gun fire-point))
+    (vector-copy! (-> gun laser-dir) dir)
+    )
+  (none)
+  )
+
+;; The wave concussor fired by Daxter: the stock charging state goes off after 0.1 s in his mode
+;; (and takes its origin from the gun's joints); this one charges from the fire point while R1 is
+;; held, as the stock one does for Jak, and goes off on release.
+(deftype mp-daxter-shockwave (gun-red-2-shockwave)
+  ()
+  )
+
+(defstate charging (mp-daxter-shockwave)
+  :virtual #t
+  :trans (behavior ()
+    (if *target*
+        (vector-copy! (-> self origin) (-> *target* gun fire-point))
+        )
+    (sound-play "red2-charge" :id (-> self snd-charge) :position (-> self origin))
+    (if (< 0.0 (get-remaining-player-ammo (pickup-type ammo-red)))
+        (set! (-> self strength)
+              (fmin 1.0 (/ (the float (- (current-time) (-> self state-time))) (the float (-> self total-charge-time))))
+              )
+        )
+    ;; the ammo a full charge costs, drained as it charges (as the stock state does)
+    (let ((f30-0 (* 5.0 (-> self strength))))
+      (when (< (-> self ammo-drained) f30-0)
+        (adjust-player-ammo (- (- f30-0 (-> self ammo-drained))) (pickup-type ammo-red))
+        (set! (-> self ammo-drained) f30-0)
+        )
+      )
+    (if (and (time-elapsed? (-> self state-time) (seconds 0.1))
+             (or (not (cpad-hold? 0 r1))
+                 (not *target*)
+                 (focus-test? *target* dead grabbed teleporting)
+                 (not (focus-test? *target* indax))
+                 (not (-> *setting-control* user-current gun))
+                 )
+             )
+        (go-virtual explode)
+        )
+    )
+  )
+
+;; The peace maker fired by Daxter: the stock shot fizzles at once in his mode; this one charges
+;; at the fire point while R1 is held, then flies along Daxter's aim.
+(deftype mp-daxter-dark-shot (gun-dark-shot)
+  ()
+  )
+
+(defstate startup (mp-daxter-dark-shot)
+  :virtual #t
+  :code (behavior ()
+    (set-time! (-> self state-time))
+    (until #f
+      (cond
+        ((or (not *target*) (focus-test? *target* dead grabbed teleporting) (not (focus-test? *target* indax)))
+         (adjust-player-ammo 1.0 (pickup-type ammo-dark))
+         (go-virtual dissipate)
+         )
+        ((or (not (time-elapsed? (-> self state-time) (seconds 0.3))) (cpad-hold? 0 r1))
+         (set! (-> self size-t) (fmin 1.0 (* 0.016666668 (the float (- (current-time) (-> self state-time))))))
+         (vector-copy! (-> self root trans) (-> *target* gun fire-point))
+         )
+        (else
+          (go-virtual moving)
+          )
+        )
+      (suspend)
+      )
+    #f
+    )
+  )
+
+(defstate moving (mp-daxter-dark-shot)
+  :virtual #t
+  :enter (behavior ()
+    (call-parent-state-handler enter)
+    ;; the stock shot flies along the gun's barrel joint: along Daxter's aim instead
+    (vector-normalize-copy! (-> self core-velocity) (-> *mp-daxter-gun* aim) (vector-length (-> self core-velocity)))
+    )
+  )
+
+(defbehavior mp-daxter-fire-dark-1 target ()
+  "The peace maker's shot, as gun-fire-dark-1 (engine/target/gun/gun-dark-shot.gc), of the subtype
+   above."
+  (set-last-fire-time 35)
+  (let ((gun (-> self gun))
+        (params (new 'stack-no-clear 'projectile-init-by-other-params))
+        )
+    (set! (-> params ent) (-> self entity))
+    (set! (-> params charge) 1.0)
+    (set! (-> params options) (projectile-options))
+    (logclear! (-> params options) (projectile-options po14 po15 po16))
+    (vector-copy! (-> params pos) (-> gun fire-point))
+    (vector-copy! (-> params vel) (-> gun fire-dir-out))
+    (set! (-> params notify-handle) (the-as handle #f))
+    (set! (-> params owner-handle) (the-as handle #f))
+    (set! (-> params target-handle) (the-as handle #f))
+    (set! (-> params target-pos quad) (the-as uint128 0))
+    (set! (-> params ignore-handle) (process->handle (send-event self 'get-vehicle)))
+    (let ((info *game-info*))
+      (+! (-> info attack-id) 1)
+      (set! (-> params attack-id) (-> info attack-id))
+      )
+    (set! (-> params timeout) (seconds 4))
+    (let ((shot (spawn-projectile mp-daxter-dark-shot params (ppointer->process (-> gun gun)) *default-dead-pool*)))
+      (if shot
+          (set! (-> *mp-daxter-gun* charge) (ppointer->handle shot))
+          )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-daxter-fire-red-2 target ()
+  "The wave concussor's charge, as gun-fire-red-2 (engine/target/gun/gun-red-shot.gc), of the
+   subtype above."
+  (let ((gun (-> self gun))
+        (params (new 'stack-no-clear 'gun-red-2-shockwave-init-params))
+        )
+    (set! (-> *last-player-pos* x) (-> gun fire-point x))
+    (set! (-> *last-player-pos* y) (+ 6553.6 (-> self control trans y)))
+    (set! (-> *last-player-pos* z) (-> gun fire-point z))
+    (vector-copy! (-> params pos) (-> gun fire-point))
+    (let ((proc (process-spawn
+                  mp-daxter-shockwave
+                  :init gun-red-2-shockwave-init-by-other
+                  params
+                  :name "gun-red-2-shockwave"
+                  :to (ppointer->process (-> gun gun))
+                  :stack *kernel-dram-stack*
+                  )
+                )
+          )
+      (if proc
+          (set! (-> *mp-daxter-gun* charge) (ppointer->handle proc))
+          )
+      )
+    )
+  (none)
+  )
+
+(defun mp-daxter-gun-setup ((gun gun-info) (type int))
+  "The ranges each mod's shots and auto-aim use, as target-gun-type-set! sets them for Jak (the
+   scatter gun's shot reaches as far as fire-range, homing shots look as far as track-find-range)."
+  (set! (-> gun laser-active?) #f)
+  (case type
+    ((32 33 34)
+     (set! (-> gun fire-range) 327680.0)
+     (set! (-> gun track-find-range) 327680.0)
+     (set! (-> gun track-turn-range) 327680.0)
+     (set! (-> gun track-turn-max) 910.2222)
+     (set! (-> gun track-tilt-range) 327680.0)
+     (set! (-> gun track-angle-mult) 1.75)
+     (set! (-> gun track-require) (the-as uint 26))
+     (set! (-> gun track-beam-size) 2457.6)
+     )
+    ((29 30)
+     (set! (-> gun fire-range) 409600.0)
+     (set! (-> gun track-find-range) 286720.0)
+     (set! (-> gun track-tilt-range) 409600.0)
+     (set! (-> gun track-turn-range) 409600.0)
+     (set! (-> gun track-angle-mult) 1.75)
+     (set! (-> gun track-require) (the-as uint 26))
+     (set! (-> gun track-beam-size) 819.2)
+     )
+    ((26 28)
+     (set! (-> gun fire-range) 61440.0)
+     (set! (-> gun track-find-range) 81920.0)
+     (set! (-> gun track-tilt-range) 61440.0)
+     (set! (-> gun track-turn-range) 61440.0)
+     (set! (-> gun track-turn-max) 910.2222)
+     (set! (-> gun track-angle-mult) 0.0)
+     (set! (-> gun track-require) (the-as uint 26))
+     (set! (-> gun track-beam-size) 1228.8)
+     )
+    ((35 36 37)
+     (set! (-> gun fire-range) 1638400.0)
+     (set! (-> gun track-tilt-range) 1638400.0)
+     (set! (-> gun track-turn-range) 1638400.0)
+     (set! (-> gun track-find-range) 1638400.0)
+     (set! (-> gun track-angle-mult) 1.75)
+     (set! (-> gun track-beam-size) 1228.8)
+     (set! (-> gun track-require) (the-as uint 24))
+     )
+    (else
+      (set! (-> gun fire-range) 0.0)
+      (set! (-> gun track-find-range) 0.0)
+      (set! (-> gun track-tilt-range) 0.0)
+      (set! (-> gun track-turn-range) 0.0)
+      (set! (-> gun track-turn-max) 0.0)
+      (set! (-> gun track-angle-mult) 0.0)
+      (set! (-> gun track-require) (the-as uint 0))
+      )
+    )
+  (none)
+  )
+
+(defun mp-gun-ammo-required ((type int))
+  "Ammo one shot of mod `type` costs, as target-gun-type-set! sets it."
+  (case type
+    ((28) (if (logtest? (game-secrets gun-upgrade-red-3) (-> *game-info* secrets)) 8.0 10.0))
+    ((37) (if (logtest? (game-secrets gun-upgrade-dark-3) (-> *game-info* secrets)) 8.0 10.0))
+    ((31) 10.0)
+    (else 1.0)
+    )
+  )
+
+(defun mp-gun-fire-delay ((type int))
+  "Time between two shots of mod `type`, as target-gun-type-set! sets it (the vulcan fury's when
+   spun up)."
+  (case type
+    ((32 33 34) (seconds 0.1))
+    ((29 30) (seconds 0.32))
+    ((31) (seconds 0.5))
+    ((26 28) (if (logtest? (game-secrets gun-upgrade-red-1) (-> *game-info* secrets)) (seconds 0.6) (seconds 1.1)))
+    ((27) (seconds 0.8))
+    (else (seconds 0.85))
+    )
+  )
+
+(defbehavior mp-daxter-gun-shoot target ((type int))
+  "Fire one shot of mod `type` (ammo allowing), as target-gun-fire does for Jak but without his
+   animations: the fire functions of each mod; the charge weapons through the subtypes above."
+  (let* ((gun (-> self gun))
+         (ammo (the-as int (gun->ammo (the-as pickup-type type))))
+         (required (mp-gun-ammo-required type))
+         )
+    (when (and (or (>= (-> self game gun-ammo (+ ammo -15)) required)
+                   (logtest? (target-flags tf16) (-> self target-flags))
+                   (logtest? (game-secrets endless-ammo) (-> self game secrets))
+                   )
+               (or (!= type 31) (target-gun-can-fire-yellow? (the-as pickup-type type)))
+               )
+      (set! (-> gun gun-delay-fire) 0.0)
+      (case type
+        ((26 28 29 30 32 35 36 37)
+         (pickup-collectable! (-> self fact) (the-as pickup-type ammo) (- required) (the-as handle #f))
+         )
+        )
+      (case type
+        ((29 30 31) (target-gun-fire-yellow (the-as pickup-type type)))
+        ((26 28) (target-gun-fire-red (the-as pickup-type type)))
+        ((27) (mp-daxter-fire-red-2))
+        ((32 33 34) (target-gun-fire-blue (the-as pickup-type type)))
+        ((35) (mp-daxter-fire-dark-1))
+        ((36 37) (target-gun-fire-dark (the-as pickup-type type)))
+        )
+      (set-time! (-> *mp-daxter-gun* fire-time))
+      (+! (-> *mp-daxter-gun* shots) 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-daxter-charging? ()
+  "#t while the wave concussor or the peace maker Daxter fired still charges (R1 held): no other
+   shot meanwhile; once released, its shot flies on its own."
+  (let ((proc (handle->process (-> *mp-daxter-gun* charge))))
+    (and proc
+         (-> proc next-state)
+         (let ((name (-> proc next-state name)))
+           (or (= name 'charging) (= name 'startup))
+           )
+         )
+    )
+  )
+
+(defbehavior mp-daxter-gun-put-away target ()
+  "The gun back in its stock place, the arc wielder's tracker told to stop."
+  (let ((dg *mp-daxter-gun*))
+    (when (-> dg arc?)
+      (set! (-> self gun active?) #f)
+      (set! (-> dg arc?) #f)
+      )
+    (set! (-> dg out?) #f)
+    ;; the ranges set again when it comes out (Jak's gun may have changed them meanwhile)
+    (set! (-> dg gun-type) 0)
+    )
+  (none)
+  )
+
+(defbehavior mp-daxter-gun-update target ()
+  "Daxter's guns, every frame (run as the player, from the manager): R1 takes the gun out and fires
+   the mod chosen with the D-pad; the gun goes away 2 s after R1 is let go."
+  (let ((dg *mp-daxter-gun*))
+    (cond
+      ((not (mp-daxter-gun-allowed? self))
+       (if (-> dg out?)
+           (mp-daxter-gun-put-away)
+           )
+       )
+      (else
+        (let ((type (mp-daxter-gun-type self))
+              (pressed? (cpad-pressed? 0 r1))
+              (held? (cpad-hold? 0 r1))
+              )
+          (when (nonzero? type)
+            (when held?
+              (set-time! (-> dg out-time))
+              (set! (-> dg out?) #t)
+              )
+            (when (-> dg out?)
+              ;; the mod in hand is the gun's (its model and the HUD follow it), with its ranges
+              (set! (-> self game gun-type) (the-as pickup-type type))
+              (when (!= (-> dg gun-type) type)
+                (mp-daxter-gun-setup (-> self gun) type)
+                (set! (-> dg gun-type) type)
+                )
+              (mp-daxter-gun-aim)
+              (cond
+                ;; the arc wielder: one arc while R1 is held, its tracker reading these two fields
+                ((= type 33)
+                 (cond
+                   (held?
+                     (set! (-> self gun using-gun-type) (pickup-type gun-blue-2))
+                     (set! (-> self gun active?) #t)
+                     (set! (-> dg arc?) #t)
+                     (if (time-elapsed? (-> dg fire-time) (mp-gun-fire-delay type))
+                         (mp-daxter-gun-shoot type)
+                         )
+                     )
+                   ((-> dg arc?)
+                    (set! (-> self gun active?) #f)
+                    (set! (-> dg arc?) #f)
+                    )
+                   )
+                 )
+                ;; the vulcan fury and the needle lazer fire while R1 is held
+                ((and (or (= type 32) (= type 34)) held? (time-elapsed? (-> dg fire-time) (mp-gun-fire-delay type)))
+                 (mp-daxter-gun-shoot type)
+                 )
+                ;; the others fire once per press
+                ((and pressed? (!= type 32) (!= type 34)
+                      (not (mp-daxter-charging?))
+                      (time-elapsed? (-> dg fire-time) (mp-gun-fire-delay type))
+                      )
+                 (mp-daxter-gun-shoot type)
+                 )
+                )
+              (if (and (not held?) (time-elapsed? (-> dg out-time) (seconds 2)))
+                  (mp-daxter-gun-put-away)
+                  )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-daxter-guns ()
+  "Run Daxter's guns for the local player, as that player (the fire functions are its behaviors);
+   keep the weapons given."
+  (mp-keep-all-weapons)
+  (when (and *target* (focus-test? *target* indax))
+    (with-pp
+      (let ((saved pp))
+        (set! pp *target*)
+        (mp-daxter-gun-update)
+        (set! pp saved)
+        )
+      )
+    )
+  (if (and (-> *mp-daxter-gun* out?) (not (and *target* (focus-test? *target* indax))))
+      (set! (-> *mp-daxter-gun* out?) #f)
+      )
+  (none)
+  )
+
+(defun mp-draw-daxter-gun ((buf dma-buffer))
+  "While Daxter holds the gun: its mod and ammo at the bottom of the screen (his mode has no gun
+   HUD)."
+  (let ((dg *mp-daxter-gun*))
+    (when (and (-> dg out?) (>= (-> dg gun-type) 26) (<= (-> dg gun-type) 37))
+      (let ((ammo (the-as int (gun->ammo (the-as pickup-type (-> dg gun-type))))))
+        (format (clear *mp-temp-string*) "~S  ~D"
+                (lookup-text! *common-text* (the-as text-id (+ #x06e0 (+ (-> dg gun-type) -26))) #f)
+                (the int (-> *game-info* gun-ammo (+ ammo -15)))
+                )
+        (mp-draw-text buf *mp-temp-string* 256 330 0.55)
+        )
+      )
+    )
+  (none)
+  )

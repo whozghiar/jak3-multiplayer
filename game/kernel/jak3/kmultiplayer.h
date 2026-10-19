@@ -15,6 +15,7 @@
  */
 
 #include <array>
+#include <atomic>
 #include <deque>
 #include <set>
 #include <string>
@@ -69,8 +70,11 @@ struct PlayerState {
   char level[16];       // 144 name of the level the player stands in
   char cont[32];        // 160 name of the player's current continue point
   u16 ping_ms;          // 192 sender's round trip to the host, 0 for the host, filled by the session
-  u16 pad0;             // 194
-  u32 pad1[3];          // 196
+  u8 lobby_mode;        // 194 host: game mode chosen in the lobby
+  u8 lobby_start;       // 195 host: co-op start (new campaign, continue, mission)
+  s16 lobby_mission;    // 196 host: co-op mission chosen
+  u16 pad2;             // 198
+  u32 pad1[2];          // 200
 };
 static_assert(sizeof(PlayerState) == 208, "PlayerState must match mp-player-state");
 
@@ -265,6 +269,8 @@ class Session {
   bool pop_event(Event* out);
   // Host only: disconnect a player, optionally refusing its address until the server stops.
   void kick(int slot, bool ban);
+  // Host only: players accepted, the host included (those already in stay).
+  void set_max_players(int max_players);
   // Round trip to the host of player `slot` in ms (0 for the host), -1 while unknown.
   int player_ping(int slot) const;
 
@@ -355,6 +361,13 @@ bool parse_address(const std::string& address, std::string* ip, int* port);
 // distant player's objects whose art was loaded alone (pc-mp-render-level). pc_set_levels adds
 // them to the levels the renderer keeps.
 std::vector<std::string>& extra_render_levels();
+
+// Outlined models (other players seen through walls) the renderer drew so far, counted by
+// Merc2::draw_outlines (render thread), read by the test log (pc-mp-outlines-drawn).
+std::atomic<int>& outlines_drawn();
+// Samples of fill and outline drawn last frame where walls hide those players
+// (pc-mp-outline-pixels): 0 while every outlined player is in view.
+std::atomic<int>& outline_pixels();
 
 }  // namespace mp
 

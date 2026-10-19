@@ -1431,6 +1431,13 @@ void OpenGLRenderer::dispatch_buckets_jak3(DmaFollower dma,
       m_collide_renderer.render(&m_render_state, p);
     }
 
+    // MOD multiplayer: other players' outlines through walls, once the 3D scene is drawn and
+    // before the overlay (debug-no-zbuf1)
+    if (bucket_id + 1 == (int)jak3::BucketId::DEBUG_NO_ZBUF1) {
+      auto p = prof.make_scoped_child("merc-outlines");
+      m_merc2->draw_outlines(&m_render_state, p);
+    }
+
     if (bucket_id == (int)jak3::BucketId::TEX_HUD_HUD_ALPHA) {
       auto p = prof.make_scoped_child("color-filter");
       m_blit_displays->apply_color_filter(&m_render_state, p);

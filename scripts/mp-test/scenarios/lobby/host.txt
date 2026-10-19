@@ -1,7 +1,10 @@
-# Lobby, host side (the title menu opens on Load Game): back to the title screen, Host Game >
-# Load Game opens the lobby (the server starts), circle opens the multiplayer options and
-# triangle comes back; X is refused while the guest is not ready; once it is (as Daxter), square
-# switches to co-op and X opens the save menu, X loads slot 1, and the guest follows.
+# Lobby, host side (the title menu opens on Load Game): back to the title screen, Host Game opens the
+# lobby at once (the server starts: the guest joins it before any game is started). Circle opens the
+# multiplayer options: the name field opens the on-screen keyboard, where "Host" becomes "Jak3"
+# (D-pad moves, X types, square deletes, L1 capitals, START keeps it); triangle comes back. Square
+# opens the game mode list (six modes grayed out, coming soon), free roam is chosen; X is refused
+# while the guest is not ready, then starts free roam: the end of the game, everything unlocked, and
+# the guest follows into that world.
 1 enable
 1 name Host
 1 color 1
@@ -13,34 +16,77 @@
 27 screenshot title
 28 press down 100
 29 press x 100
-30 wait-menu mp-host-game
+30 wait-menu mp-lobby-host
 31 log-lobby
-31 screenshot host-game
-31.5 press down 100
-32 press x 100
-33 wait-menu mp-lobby-load
-34 log-lobby
-34.5 screenshot lobby-alone
-36 press circle 100
-37 wait-menu multiplayer
-38 log-lobby
-38 screenshot mp-options
-38.5 press triangle 100
-39 wait-menu mp-lobby-load
-40 log-lobby
-48 log-lobby
-49 press x 100
-50 log-lobby
-58 log-lobby
-58.5 screenshot lobby-ready
-59 press square 100
-60 log-lobby
-66 press x 100
-67 wait-menu select-load
-68 log-lobby
-68 screenshot save-menu
-69 press x 100
-71 log-lobby
-150 log-coop
-150 screenshot host-joined
-151 log
+31.5 screenshot lobby-alone
+33 press circle 100
+34 wait-menu multiplayer
+35 press down 100
+35.5 press x 100
+36.5 wait-menu mp-keyboard
+37 log-name
+37.2 screenshot keyboard
+37.5 press square 100
+37.85 press square 100
+38.2 press square 100
+38.55 press square 100
+38.9 press l1 100
+39.25 press right 100
+39.6 press right 100
+39.95 press right 100
+40.3 press right 100
+40.65 press right 100
+41 press right 100
+41.35 press right 100
+41.7 press right 100
+42.05 press right 100
+42.4 press x 100
+42.75 press l1 100
+43.1 press left 100
+43.45 press left 100
+43.8 press left 100
+44.15 press left 100
+44.5 press left 100
+44.85 press left 100
+45.2 press left 100
+45.55 press left 100
+45.9 press left 100
+46.25 press x 100
+46.6 press down 100
+46.95 press x 100
+47.3 press down 100
+47.65 press down 100
+48 press right 100
+48.35 press right 100
+48.7 press right 100
+49.05 press x 100
+49.4 log-name
+49.6 screenshot keyboard-typed
+50.4 press start 100
+51.4 wait-menu multiplayer
+51.9 log-name
+52.4 press triangle 100
+53.4 wait-menu mp-lobby-host
+53.9 log-lobby
+70 log-lobby
+70.5 screenshot lobby-guest-joined
+71 press x 100
+72 log-lobby
+73 press square 100
+74 wait-menu mp-mode
+74.5 log-lobby
+75 screenshot modes
+76 press up 100
+76.5 press x 100
+77 log-lobby
+78 press down 100
+78.5 press x 100
+79.5 wait-menu mp-lobby-host
+80 log-lobby
+80.5 screenshot lobby-free
+88 log-lobby
+89 press x 100
+91 log-lobby
+130 log-session
+131 screenshot free-roam
+132 log

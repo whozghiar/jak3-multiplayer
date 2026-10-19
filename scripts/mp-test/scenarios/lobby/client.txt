@@ -1,6 +1,7 @@
-# Lobby, guest side: back to the title screen, Join Game > Connect opens the lobby; R1 switches to
-# Daxter, X says ready, the host's co-op choice shows; once the host loads its save, the guest
-# follows into its world, as Daxter.
+# Lobby, guest side: back to the title screen, Join Game > Connect opens the lobby of the host, who
+# has not started any game yet (both wait there); the guest sees the host's choices (free roam), says
+# it is ready (X), and follows into the host's free roam once it starts: the end of the game, everything
+# unlocked for the guest too.
 1 enable
 1 name Guest
 1 color 2
@@ -13,21 +14,17 @@
 29 press x 100
 30 wait-menu mp-join-game
 31 log-lobby
-31 screenshot join-game
 37 press down 100
 37.5 press x 100
 38.5 wait-menu mp-lobby-join
 41 log-lobby
 41.5 screenshot lobby-guest
-43 press r1 100
-44 log-lobby
-56 press x 100
-57 log-lobby
-57.5 screenshot lobby-guest-ready
-67 log-lobby
-67.5 screenshot lobby-guest-coop
-70 wait-joined
-77 log-join
-77 log-coop
-77 screenshot joined
-79 log
+82 log-lobby
+84 press x 100
+85 log-lobby
+85.5 screenshot lobby-guest-ready
+90 wait-joined
+97 log-join
+97.5 log-session
+98 screenshot joined
+99 log

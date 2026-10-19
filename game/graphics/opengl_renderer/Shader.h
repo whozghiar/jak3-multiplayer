@@ -69,6 +69,7 @@ enum class ShaderId {
   SLOW_TIME = 42,
   OCEAN_ENVMAP = 43,
   OCEAN_ENVMAP_HAZE = 44,
+  MERC2_OUTLINE = 45,  // MOD multiplayer: other players seen through walls
   MAX_SHADERS
 };
 

@@ -1,0 +1,13 @@
+# Outlines through walls, host side: stands still while the guest looks at it in the open, then
+# through the buggy the guest spawns between them; turns to the guest at the end: the guest's outline
+# (blue) shows through the buggy on the host's screen too.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 log-outline
+60 look-player 1
+61 log-outline
+61.5 screenshot host-view
+62 log-outline
