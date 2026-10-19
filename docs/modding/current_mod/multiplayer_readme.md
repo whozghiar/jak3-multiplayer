@@ -13,6 +13,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 |---|---|---|
 | Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | UDP session (host or client), reliable channel, relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
 | Renderer (C++) | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `shaders/merc2_outline.*` | Other players seen through walls: their models drawn again, at the end of the 3D scene, as an outline in their color where something hides them (4.9). |
+| Renderer (C++) | `TextureAnimator.cpp`, `.h`, `foreground/Merc2.cpp`, `shaders/merc2.vert`, `.frag` | Another player's Dark Jak skin at its own level (4.11); each player's outfit colors (4.12). |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
 | GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
@@ -44,15 +45,17 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   - `BYE` (sent three times, nothing answers it): the host stopped (with its reason) or a client
     left; the other side drops the connection at once instead of waiting for the timeout.
 
-  Message types: `HELLO` (protocol version, now 7), `WELCOME` (slot), `REJECT` (reason, then
+  Message types: `HELLO` (protocol version, now 8), `WELCOME` (slot), `REJECT` (reason, then
   close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
   offset][bytes]`, 15000 bytes a message, relayed by the host: the host's world for a guest that
   joins, 1.7), `PING`, `PONG`. A client sees "Connection refused" when the host's machine answers
   that nothing listens there (Windows), else "Connection timed out" after 8 s.
-- **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
+- **Player state:** `mp-player-state` (224 bytes: position, orientation, velocity, animation,
   health, flags, character and outfit, body segments, driven vehicle, passenger seat, name, color,
-  level, continue point) every frame (60 Hz): a driver's puppet blended between states 33 ms
-  apart drifted on its vehicle, which moves every frame.
+  level, continue point; Dark and Light Jak in `powers`, the lobby's countdown, the time before a
+  paused game resumes, and a driver's seats 2 and 3 in `seat-offset`) every frame (60 Hz): a
+  driver's puppet blended between states 33 ms apart drifted on its vehicle, which moves every
+  frame.
 - **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
   player: `[u8 source][u32 source time][u16 count][states]`; the states of what a player owns
   (props, the vehicle driven and its wheels, its shots) go again every frame between batches.
@@ -76,7 +79,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   hook even while paused, so a paused player does not time out.
 - **Config:** `<settings>/multiplayer.cfg` (`%APPDATA%/OpenGOAL/jak3/settings/` on Windows):
   name, address, character, color, enabled, mode (the game mode when hosting: 0 free roam, 1
-  co-op, 1.7).
+  co-op, 1.7), skin (the outfit's 16 tints in hex, 4.12).
 - **The host's lobby choices** travel in its state (`lobby-mode`, `lobby-start`, `lobby-mission`,
   in what was padding): a guest's lobby shows them before any game starts.
 
@@ -388,8 +391,8 @@ The way into a session follows himstan's Jak and Daxter II Multiplayer
   `menu-mp-mode-option` buttons grayed out by `should-disable?` with the reason after the name),
   `mp-coop-start` (the campaign's completion, New campaign, Continue the campaign (grayed out
   without a campaign), Choose a mission), `mp-mission` (a carousel of the story's missions: the
-  `play-list` entries with a `play-continue` and a name, as the stock mission list) and
-  `mp-keyboard`. The mode page is reached with `push-state` from the lobby; the co-op and
+  `play-list` entries with a `play-continue` and a name, as the stock mission list),
+  `mp-keyboard` and `mp-skin` (the Appearance page, 4.12). The mode page is reached with `push-state` from the lobby; the co-op and
   mission pages replace it (`set-next-state`), so their choice goes back to the lobby with one
   `pop-state`. Each page resets its selection and scroll when it opens (the generic store keeps
   them across pages).
@@ -405,15 +408,19 @@ The way into a session follows himstan's Jak and Daxter II Multiplayer
   ready) on the left; the one chosen with up / down on the right (character, ping, status); a
   hint and the keys at the bottom. The mode line reads "Game mode: Co-op - Mission: <name>" (or
   the campaign's start), the hint for free roam says what it is. X: a guest says it is ready
-  (`*mp-lobby-ready*`, sent as `mp-flag ready`); the host starts once every guest is
-  (`mp-start-game`, 1.7). L1 / R1: the character (a guest only while not ready). Square: the game
+  (`*mp-lobby-ready*`, sent as `mp-flag ready`); once every guest is, the host's X starts a 10 s
+  countdown (`mp-lobby-update-countdown`), "The game starts in N" on every player's lobby (the
+  host's state carries the time left, `countdown`), then the game (`mp-start-game`, 1.7). The
+  host's X again cancels it, and so do a guest no longer ready and the host opening another page;
+  guests then read "The host cancelled the start". While it runs, guests can change neither their
+  ready state nor their character. L1 / R1: the character (a guest only while not ready). Square: the game
   mode list (host). Circle: the multiplayer options page. Triangle: `mp-leave!`, then the stock
   goes back a page. The page's frame is computed with `adjust-game-x`: this page is handed the
   unadjusted x (70) and width (375), where the frame is drawn squeezed to the screen's ratio.
 - **Differences with himstan's lobby:** square opens the game mode list (his copies an invite),
-  the host starts at once (no countdown), guests join by address (no room code, no LAN scan), and
-  the multiplayer options keep this mod's settings (no skin editor, nametag or map marker
-  options).
+  guests join by address (no room code, no LAN scan), and the multiplayer options keep this mod's
+  settings plus the Appearance page (4.12; no nametag or map marker options). The countdown
+  follows his (X to cancel).
 
 ### 1.9 Finding a crash
 
@@ -457,6 +464,15 @@ report added (`gun [type]`, `board`, `stick-r`), then the same scripts run on th
 | Game entities focus any player | Puppets are `process-focusable` in the player collide list with `collide-spec jak`, which `enemy::find-best-focus` considers. |
 | Players on the minimap in real time | Each puppet has a minimap icon in its player's color. |
 | Administration page when hosting | Options > Multiplayer > **Server administration**: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other, share story progress, share time of day, stop the server. |
+| A 10-second countdown in the lobby, the host can cancel it | 1.8. |
+| The host's SELECT pauses everyone, the game resumes 3 s after the host asks | 4.10. |
+| START no longer pauses the world for anyone | 4.10. |
+| Passengers placed as in himstan's mod | Any free seat of the vehicle, the back of a one-seat vehicle (4.3). |
+| Every player sees another player's Dark Jak | Its own Dark Jak skin, at its own level (4.11). |
+| A character customization menu as himstan's | The Appearance page (4.12), himstan credited in the commit and the code. |
+| Co-op: skip a cutscene once every player asked | 4.13. |
+| Co-op: a vehicle for every player in a race, which starts once every player is aboard (driving, riding, on a Jak's shoulder) | 4.15. |
+| Co-op: a waypoint (yellow beam) needs every player on it, "Players here: 1/x" | 4.14. |
 
 ## 3. Vanilla touch points
 
@@ -471,8 +487,10 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e` and `#x1550`-`#x155f` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard and the co-op pages. |
-| `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls and colors) and `pc-merc-bits outline`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags (4.9). |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x157f` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page and the co-op lines. |
+| `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
+| `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12). |
+| `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
 | `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`). |
@@ -484,7 +502,10 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 |---|---|---|
 | `enemy` `mark-as-dead` | `engine/common-obs/enemy-states.gc` | Share enemy deaths. |
 | `progress` `set-menu-options` | `pc/progress/progress-pc.gc` | The `'multiplayer` page, the title screen's Host Game and Join Game pages, the lobby (1.8). |
-| `determine-pause-mode` | `engine/draw/drawable.gc` | SELECT alone shows the player list while online instead of pausing (4.7). |
+| `determine-pause-mode` | `engine/draw/drawable.gc` | Online, SELECT is the host's pause for everyone (a tap) and the player list (held); a guest's SELECT and START do nothing while the host paused (4.7, 4.10). |
+| `blit-displays-work` `set-menu-mode` | `engine/gfx/blit-displays-h.gc` | No still copy of the screen while the world runs under the START menu (4.10). |
+| `progress` `draw-bg-box-alpha-1` | `pc/progress/progress-draw-pc.gc` | The Appearance page's background leaves its right part open for the preview (4.12). |
+| `target-pos` | `engine/target/target-util.gc` | A co-op waypoint's owner sees us away from it until every player is there (4.14). |
 | `part-tracker-init-base` | `engine/common-obs/generic-obs.gc` | Every one-shot effect starts there. |
 | `projectile-init-by-other` | `engine/common-obs/projectile.gc` | Every projectile starts there (the stock one never returns, so the shot is sent first). |
 | `process-entity-status!` | `engine/entity/entity.gc` | Broken crates and taken pickups mark their entity dead there. |
@@ -545,13 +566,13 @@ gives its sphere's center as its aim point (`get-trans`: the stock method reads 
 which the hurtbox has not). A blow sent by a mass inverter's spinner (a child of what it lifts)
 counts as the player its attack-info names; a blow doing no damage (the lift itself) is no hit.
 
-Dark Jak and Light Jak: the player's state carries, in free bits of its flags, the Dark Jak and
-Light Jak blends (`darkjak-interp`, `lightjak-interp`), the light look (no textures, rim lights),
-the invisible fade, the scarf and the goggles (`mp-pack-powers`). The puppet applies them as
-`target-draw-process` does: blend-shape overrides for the face and claws, the global effects, the
-fade. It tints its model purple for Dark Jak, since the game's dark texture swap is one palette
-for every model of Jak, and draws the auras on its own body: dark sparks and lightning, Light
-Jak's glow (`mp-puppet-apply-powers`). The override array lives in the puppet's heap and
+Dark Jak and Light Jak: the player's state carries, in its `powers` field, the Dark Jak skin's
+level (bits 0-7), the Dark Jak and Light Jak blends (`darkjak-interp`, `lightjak-interp`), the
+light look (no textures, rim lights), the invisible fade, the scarf and the goggles
+(`mp-pack-powers`). The puppet applies them as `target-draw-process` does: blend-shape overrides
+for the face and claws, the global effects, the fade, Dark Jak's skin at its player's level
+(4.11), and draws the auras on its own body: dark sparks and lightning, Light Jak's glow
+(`mp-puppet-apply-powers`). The override array lives in the puppet's heap and
 `mp-puppet` relocates it itself, because joint-control's relocate leaves `override` out. Left
 behind after a heap compaction, the puppet's writes landed in other processes and crashed the
 game when an arc wielder fired, its large heap forcing a compaction.
@@ -580,11 +601,18 @@ from the old place to the new one, across the world.
   standing (`take-id`, `board-veh` in the manager); next to a vehicle of his own world he gets in
   with triangle too. Getting off, he goes back to his mode. Others draw the vehicle with Daxter
   driving, from his state (`mp-playing-daxter?`).
-- **Ride (L1 + triangle, himstan's binding):** with a second seat no other player uses, from the
-  ground (standing or crouched). An invisible `mp-seat` follows the driver's seat 1 and the player
-  rides it with the stock `target-grab-ride` state, or Daxter with `target-indax-grab`. Each
-  machine draws the passenger in the driver's seat as it sees that vehicle, facing its way (Jak's
-  `grab-ride` keeps the facing he got in with), our own model too (the others get its pose).
+- **Ride (L1 + triangle, himstan's binding):** from the ground (standing or crouched), in the
+  lowest seat of the vehicle no other player rides (`mp-free-seat`): seats 1 to 3 (a city hover
+  car carries three passengers), or, on a one-seat vehicle (the turtle, the toad...), its back,
+  0.45 m above and 0.8 m behind the driver's seat. Seats are reserved as in himstan's
+  `mp-vehicle-seat-reservation.gc`: a passenger's state carries its seat (flags bits 11-12), and
+  when two players take the same one at once, the lowest slot keeps it and the other moves to the
+  next free seat, or gets off when there is none. The driver's state carries seat 1 in
+  `seat-trans` and seats 2 and 3 relative to the vehicle in `seat-offset` (cm, its frame;
+  `mp-seat-pos`). An invisible `mp-seat` follows that seat and the player rides it with the stock
+  `target-grab-ride` state, or Daxter with `target-indax-grab`. Each machine draws the passenger
+  in its seat as it sees that vehicle, facing its way (Jak's `grab-ride` keeps the facing he got
+  in with), our own model too (the others get its pose).
 - **Seated passengers** (`mp-seated-index`): the passenger's model plays the clips a driver of that
   vehicle sits in (`target-pilot-stance`), steering straight (their middle frame), leaning neither
   forward nor back (the forward clip and the back clip at the next index, half each): Jak's by
@@ -649,8 +677,9 @@ Holding SELECT while online shows every player, ourselves first, with its color,
 bar colored as over its head, and the value: `8/8`) and round trip to the host
 (`mp-draw-player-list`). The binding and the layout (a title, NAME and PING
 columns) follow himstan's `mp-player-list.gc`. The stock pauses on SELECT
-(`determine-pause-mode`): the wrapper clears SELECT alone while online, so START still pauses and
-L3 + SELECT still opens the Mods menu.
+(`determine-pause-mode`): the wrapper clears SELECT alone while online; the list shows once
+SELECT is held 0.25 s, and a tap is the host's pause for everyone (4.10). L3 + SELECT still opens
+the Mods menu.
 
 The runtime measures the ping (protocol version 6): each side sends `MSG_PING` every second and
 answers `MSG_PONG`; the round trip is smoothed (0.7 old, 0.3 new). A client puts its own round
@@ -728,7 +757,106 @@ projection, one color, an optional screen offset):
 An occlusion query counts the pixels of steps 3 and 4 (`pc-mp-outline-pixels`, the last frame's).
 Measured (`outline`): about 100 pixels for a player in the open 9 m away (its feet in the ground),
 900 to 1850 for the same player behind a buggy, whose outline shows through it (screenshot).
-`MP_OUTLINE_ALWAYS=1` draws them whatever the depth (a test of the drawing alone).
+`MP_OUTLINE_ALWAYS=1` draws them whatever the depth (a test of the drawing alone). Outlines are
+not drawn while a menu is open (`*pc-merc-outlines*` `off?`).
+
+### 4.10 Pause for everyone, START over a running world
+
+Online, nobody stops the shared world alone (multiplayer.gc, "Pause for everyone"):
+
+- **START** opens the menu while the game goes on behind it, for the player and for the others.
+  The menu stops every process masked `progress` (its `process-mask` setting,
+  `progress-init-by-other`); a setting of ours in `*setting-control*` `engine-hi`, applied after
+  it, clears that bit again. Its sounds go on, and the screen behind it is the live game: the
+  `set-menu-mode` wrapper leaves the still copy of `blit-displays` off. The world must not read
+  the pad meanwhile: the `mp-input` process runs first every frame (its pool, `*mp-input-pool*`,
+  is the newest child of `*active-pool*`, which the kernel runs first) and hides pad 0 from
+  everything after it (the player, the camera, the NPCs); the hook gives it back before the menu
+  reads it (the display process runs the hook, reads the pads, then runs the menu, its child).
+- **The host's SELECT** (a tap; held 0.25 s, the player list) pauses every player's game: the
+  stock pause (`'pause` master mode), "The host paused the game" on a guest's screen, "SELECT:
+  resume the game for everyone" on the host's; START and SELECT do nothing there for a guest.
+  SELECT again resumes it 3 s later, "The game resumes in 3, 2, 1" on every screen. The host's
+  state carries both (flag `paused-all`, field `resume`).
+
+### 4.11 Another player's Dark Jak
+
+Dark Jak's grey skin is a texture morph of the `darkjak` group (`jakc-arm`, `-eyebrow`, `-face`,
+`-finger`, `-hair`) that every model of Jak shares: the local player's
+(`set-darkjak-texture-morph!`). The renderer builds that skin at 17 morph levels per texture, as
+the group's blenders do (`TextureAnimator::setup_darkjak_variants`), and Merc2 draws a model
+flagged `dark-skin` with its own level instead of the shared slot (`pc-merc-bits dark-skin`, the
+level at byte 18 of the flags). Each remote puppet is flagged through `*pc-merc-outlines*` (its
+`dark` field), its level taken from its player's state (`powers` bits 0-7: the morph the game
+sets, 1 under the dark eco powerup). The face, claws, horns and arms follow from the blend shapes
+and the pose (4.2). The local player's Dark Jak no longer darkens the other players' models.
+
+### 4.12 Appearance page
+
+Inspired by the skin editor of himstan's Jak and Daxter II Multiplayer
+(`goal_src/jak2/multiplayer/ui/mp-lobby-skin-editor.gc` and its `merc2.frag` tint, ISC),
+written anew for Jak 3 (`multiplayer-menu.gc`, page `'mp-skin`):
+
+- **Page:** Options > Multiplayer > **Appearance**, also from the lobby's multiplayer options. L2 /
+  R2 pick the part (Jak: shirt, armor, pants, boots, scarf, straps and belts, gloves and wraps,
+  hair, goggles; Daxter: fur, light fur, belt), circle switches between Jak and Daxter; up / down
+  pick a slider (red, green, blue, tint strength, 0-255, "stock" at 0), left / right move it (held:
+  repeats after 0.25 s), L1 / R1 by large steps. A swatch shows the color. X keeps the outfit,
+  triangle puts back the one the page opened with.
+- **Preview:** the character turns in the 3D scene, 2.6 m before the camera (a `manipy` of Jak's
+  or Daxter's model under `*mp-input-pool*`, which runs under the menu; the title screen's light;
+  no cloth; spawned with `:stack-size #x20000`, the room a puppet has: with `#x10000` Jak's model
+  fails to set up). HUD models go through the generic renderer, which has
+  no tint, so the page's background (`draw-bg-box-alpha-1`, wrapped) covers only its left 60 %:
+  it writes depth and would hide the preview.
+- **Renderer:** a part is a group of textures (`Merc2.cpp` `mp_skin_group_of`, by texture name;
+  groups 1-9 Jak, 10-12 Daxter). A model listed in `*pc-merc-skins*` gets its 16 tints (rgb, the
+  strength in the top byte) after its flags (`pc-merc-bits skin`), and `merc2.frag` draws each
+  texture of a tinted group with himstan's grayscale-detail tint (`merc2.vert` passes the vertex
+  color and the light apart).
+- **Network:** the outfit is saved in `multiplayer.cfg` (`skin=`) and sent to every player who
+  joins and on each change (`skin` event). Every frame our model and our Daxter, the puppets and
+  the Daxter copies of the other players wear their player's outfit (`mp-update-skins`).
+
+### 4.13 Co-op: skipping a cutscene together
+
+Cutscenes are shared within a region (1.6). While another player watches the same one, triangle
+no longer skips it at once as the stock does (`scene.gc`, `scf1`): it asks to skip it ("Skip the
+cutscene (1/2)" at the bottom, then "Skip: waiting for the others (1/2)"), and once every player
+watching it asked, each machine skips its own (the scene-player's `'abort`). Each player's state
+says it watches a cutscene that can be skipped (flag `in-scene`) and whether it asked
+(`skip-vote`). The triangle press is taken from pad 0 by `mp-input` before the scene-player reads
+it. Alone, triangle skips at once.
+
+### 4.14 Co-op: waypoints reached together
+
+A mission marks where to go with a yellow beam (`task-arrow`). The beam only draws; the process
+that spawned it (a task manager, an object of the mission) checks the arrival itself, almost
+always with `(target-pos 0)` and a radius of 3 to 40 m. In co-op, until every player stands
+within 6 m of the beam (xz), the `target-pos` wrapper answers that process alone with our
+position pushed away from the beam, as far as the farthest player, 45 m at most: above every
+arrival radius, below the distances that fail a mission for going too far. The mission goes on
+once everyone is there. The beams are listed every frame from the process tree (shown ones: not
+`taf4`). "Players here: 1/2" shows at the bottom within 30 m of a beam.
+
+### 4.15 Co-op: races
+
+Every player races with a vehicle of its own, or rides with another; the start waits until every
+player is aboard (multiplayer.gc, "Races"):
+
+- **A vehicle each.** A race continue point (`continue-flags race`) gives its vehicle where the
+  player stands at the end of `target-continue`: each machine running the race gives its own
+  player one. A guest's player is moved aside first (4.5 m per slot, right then left), so the
+  vehicles do not appear in each other. A Jak on foot within 60 m of a player whose race start
+  waits gets a vehicle of that player's type beside it (once a minute at most, not when he drove
+  in the last 30 s: he left his vehicle to ride with another).
+- **The start waits.** The race's task manager (`course-race.gc`: Kleiver's race, the beast
+  hunters' time trial and rally; `artifact-race.gc`: Damas's races) loops on `mp-race-hold?` before
+  the start: #t while, online, a player is not aboard, i.e. driving, riding a seat of another
+  player's vehicle (L1 + triangle), or Daxter on a driving Jak's shoulder (triangle, flag
+  `perched`). Meanwhile the players may leave their vehicle (a `pilot-exit #t` setting in
+  `engine-hi` over the race's), and "Waiting for every player aboard: 1/2" shows at the bottom
+  (flag `race-wait`). Offline or alone, the stock start.
 
 ## 5. Testing in game
 
@@ -841,7 +969,14 @@ A script line is `<seconds> <command>`:
 | `log-laser <frames>` | The gun's laser sight every frame, where it starts and ends: the owner's as its game computes it (`laser-point`, `laser-hit-point`), the copy's as drawn, stamped with the owner's clock (`compare_poses.py laser_report`). |
 | `log-weapons` | Other players' area weapons drawn here (wave concussors, mass inverters, arc frames, needle trails), and each arc received: its points, its tracker, its bolts. |
 | `log-aimable` | What the area weapons find within 20 m of us: each focusable of the actor hash, its process mask, focus, collision action and sphere. |
-| `power <dark\|light>`, `log-power` | Turn into Dark Jak or Light Jak (unlocked, with its eco); our state and what each puppet shows (blend, dark, global effects, fade). |
+| `power <dark\|light>`, `log-power` | Turn into Dark Jak or Light Jak (unlocked, with its eco); our state and what each puppet shows (blend, dark, global effects, fade), and the models the renderer drew with their own Dark Jak skin (`pc-mp-dark-skin-draws`). |
+| `wait-countdown` | The script's clock stops until the lobby's start countdown runs. |
+| `log-pause`, `wait-pause <0\|1>`, `wait-resume` | The host's pause for everyone and the START menu over the world (process masks, menu mode, the pad hidden from the world, clocks); the script waits until the game is paused by the host (1) or not (0), or until its resume countdown runs. |
+| `skin <group> <rrggbb> <percent>`, `skin-page`, `log-skin` | Our outfit's part `group` (1-12) tinted that color at that strength (saved, sent); open the Appearance page; each outfit sent and received, the models wearing one (`pc-mp-skin-draws`), the page's state and its preview. |
+| `wait-driving <slot>` | The script waits until that player drives a vehicle (for 2 s). `log-seat` also prints the seat we ride. |
+| `wait-scene`, `log-skip` | The script waits until a cutscene that can be skipped plays here; the vote to skip it (voted, votes, viewers, skips). |
+| `beam-at-host <dx> <dz>`, `goto-beam`, `log-beams` | A test waypoint dx, dz meters from the host, whose process checks the arrival with `(target-pos 0)` within 3 m as missions do; stand at the nearest beam; the beams, the count, how far their owner sees us, the calls held. |
+| `race-gate`, `log-race` | A race start of a test: a process sets the race's `pilot-exit #f` and waits on `mp-race-hold?` as the races' task managers do, then logs "race gate open"; the race state (waiting, aboard, starts, vehicles given, exit allowed) and ours (driving, riding, perched). |
 | `log-stretch`, `hide-puppets <0\|1>`, `hide-copies <0\|1>` | Each puppet's bone farthest from its root, and the copies with a bone over 5 m away (a stretched scarf); hide the puppets or the copies (counter-tests). |
 | `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
 
@@ -936,6 +1071,28 @@ Round of 2026-10-19, afternoon (seated passengers, Daxter's firing animations; 2
 | `ride-seat-daxter` | Daxter as a passenger, guest then host | The same with Daxters: each passenger in `target-indax-grab`, in Daxter's driving clips (`daxter-pidax-missile-turn-*`) at the seat point; its upper body (bone 3) 0.58 m above the seat, the Daxter driver's 0.51 m above his. Before: standing, 0.4 m behind the seat, hidden by its back. |
 | `daxter-fire-anim` | Daxter's clips holding the gun | Daxter fires a red, a yellow, a blue (held) and a dark mod 7 m from the host, the camera turned around him: his clips `daxter-pilot-gun-red-fire` (frame 5.2 after the shot), `-red-idle`, `-yellow-idle`, `-blue-fire` (looping), `-dark-fire`, then none once put away; upper body only (`interp-select` `#xf0000ffffff8`), `gun-daxter` 1, the gun at his gun joint and its model 0.16 to 0.26 m from his right hand, drawn (before: `no-draw`), opened to each mod's shape (`gun-idle-red` ...); the host draws his clip on his puppet; screenshots at 2560x1440 from behind, the side and the front. |
 
+Round of 2026-10-19, evening (the user's lobby, pause, Dark Jak, Appearance, seats and co-op
+request): each feature checked by its scenario as it was made, then a sweep of 27 scenarios,
+`check_results.py`: 226 checks passed, 0 failed, no crash (`smoke`, `lobby`, `pause`,
+`player-list`, `powers`, `skin`, `outline`, `ride`, `daxter-ride`, `ride-seat`,
+`ride-seat-daxter`, `ride-back`, `ride-multi`, `scene`, `scene-skip`, `beam`, `race-board`,
+`race-continue`, `coop`, `coop-campaign`, `join-world`, `join-title`, `pvp`, `vehicle`,
+`steal-dup`, `daxter-drive`, `daxter-fire`); `skin` again after the Appearance page's layout
+fix, 10 of 10. The scenarios new or extended in this round:
+
+| Scenario | Checks | Result |
+|---|---|---|
+| `lobby` (extended) | The start countdown | Once the guest is ready, the host's X starts the countdown, shown in both lobbies; X again cancels it, the guest sees it cancelled and its X no longer unreadies it meanwhile; X once more starts it, and the game starts when it ends; 15 checks. |
+| `pause` | Pause for everyone, START | The host's START opens the menu over the running world (no progress mask, no still copy, clocks on), the stick pushed meanwhile does not move its player, the guest is not paused and sees the host's NPCs move; the host's SELECT pauses the guest (stock pause, its clocks stopped, START refused); SELECT again: the 3 s countdown on both, then both play on; SELECT held shows the list without pausing; the guest's own START menu runs over its world and does not pause the host; 11 checks. |
+| `powers` (3 m apart) | Another player's Dark Jak | The host shows the guest's Dark Jak (blend shapes), then its Light Jak; the host draws the guest's Dark Jak skin, no tint, while its own model stays normal; the guest's own Dark Jak does not darken the host's model there; 8 checks (screenshot). |
+| `skin` | Outfits | The guest's outfit is saved in its config, the host receives it (shirt, pants, scarf, hair) and draws the guest's puppet with it; the host's Appearance page edits a draft with a turning preview of Jak, then of Daxter; X keeps it (shirt and Daxter's fur saved, the preview gone) and the guest receives it; 10 checks. |
+| `ride-back` | A passenger on a one-seat vehicle | The guest rides the host's turtle: seat 1 of 1, on its back (0.5 to 2 m from the driver's seat), its model at the seat point. |
+| `ride-multi` | Three passengers' seats | Two passengers in the host's three-seat car: seats 1 and 2, each drawn in its own. |
+| `scene-skip` | Skipping a cutscene together | Both watch the host's cutscene (2 viewers); the host's triangle asks (1/2) and it goes on; the guest sees the vote, asks, and the cutscene is skipped on both machines; 8 checks. |
+| `beam` | A waypoint reached together | The host at a test beam is held (1/2, its owner sees it 45 m away) while the guest is away; the guest sees the count, comes, and the mission goes on for both; 6 checks. |
+| `race-board` | A race start waiting for every player | The guest on foot gets a turtle of its own beside the host and the start goes; riding on the back of the host's turtle counts as aboard; Daxter on foot holds the start (1/2, the host may leave its vehicle), then sits on the driving host's shoulder and it goes; 8 checks (screenshot). |
+| `race-continue` | Both players at a race continue point | `desertb-race-start`: each machine gives its own player a turtle, the guest's 4.5 m aside; each player drives its own; 6 checks. |
+
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
 passed, 0 failed, no crash):
@@ -967,8 +1124,14 @@ passed, 0 failed, no crash):
 | ![Co-op: Jak without Daxter on his shoulder, Daxter played by the other player](multiplayer-screenshots/coop-no-shoulder-daxter.jpg) | |
 | ![Two Jaks in a buggy: the host drives, the guest sits as a passenger](multiplayer-screenshots/passenger-seated-jak.jpg) | ![Two Daxters in a buggy: the host drives, the guest sits as a passenger](multiplayer-screenshots/passenger-seated-daxter.jpg) |
 | ![Daxter holding the scatter gun, from the side](multiplayer-screenshots/daxter-gun-aim.jpg) | ![Daxter firing the vulcan fury, from the front](multiplayer-screenshots/daxter-gun-fire.jpg) |
+| ![The lobby's start countdown, on the guest](multiplayer-screenshots/lobby-countdown.jpg) | ![The guest's game paused by the host](multiplayer-screenshots/pause-for-everyone.jpg) |
+| ![The START menu over the running world](multiplayer-screenshots/start-menu-live.jpg) | ![The Appearance page and its preview](multiplayer-screenshots/appearance-page.jpg) |
+| ![The host in its outfit, as the guest sees it](multiplayer-screenshots/outfit-remote.jpg) | ![The guest's Dark Jak skin on the host's screen](multiplayer-screenshots/dark-jak-remote-skin.jpg) |
+| ![The vote to skip a cutscene](multiplayer-screenshots/scene-skip-vote.jpg) | ![Players at a waypoint](multiplayer-screenshots/beam-players-here.jpg) |
+| ![A race start waiting for Daxter](multiplayer-screenshots/race-wait.jpg) | ![Two passengers in the host's car, seats 1 and 2](multiplayer-screenshots/ride-multi-seats.jpg) |
 
-The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the seated
+The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the evening
+round of 2026-10-19 for the last five rows; the seated
 passengers and Daxter holding the gun from the afternoon round of 2026-10-19 (`--shot-size
 2560x1440`, cropped); the outline, Daxter's arc wielder, the lobby, the keyboard, the player list
 and the co-op one from the round of 2026-10-19; `vehicle-prompt`, `remote-laser`, `remote-shot` and `join-*` from 2026-10-15; the others
@@ -986,11 +1149,12 @@ public IP.
 - A guest joining loads the host's world through a loading screen: the session goes on meanwhile,
   its puppet is hidden until it is in game. Leaving the session, it stays in the host's world
   without saving until it loads its own save or goes back to the title screen.
-- The lobby's host starts at once (no countdown). Guests waiting there follow within 10 s of the
-  host being in game (they ask again every 10 s), plus their loading screen. A guest that leaves
-  the lobby with triangle disconnects; the scenarios do not press triangle in the lobby itself
-  (they do on the multiplayer options page reached from it).
-- While online, SELECT alone shows the player list and no longer pauses; START pauses.
+- After the lobby's countdown, guests waiting there follow within 10 s of the host being in game
+  (they ask again every 10 s), plus their loading screen. A guest that leaves the lobby with
+  triangle disconnects; the scenarios do not press triangle in the lobby itself (they do on the
+  multiplayer options page reached from it).
+- While online, only the host's SELECT pauses (for everyone); START opens the menu over a running
+  world, so a player in its menu can be hit there.
 - Vehicle guns do not lock onto other players (the hurtbox answers no target search, 4.2): a
   buggy's shells hit a player only where they come down (26 m ahead in `vehicle-guns`).
 - The laser sight's far end can still differ from the owner's when they meet different things
@@ -1022,8 +1186,15 @@ public IP.
 - Free roam starts at Spargus; a guest's progress is the host's (it joins the host's world).
 - Co-op: one multiplayer campaign per host (a new campaign or a mission replaces it at its first
   save).
-- Another player's Dark Jak has no dark texture swap (a purple tint instead) and keeps its eyes;
-  Light Jak's wings and shield are not drawn (their art is loaded only with our own Light Jak).
+- Another player's Dark Jak keeps its eyes (only the `darkjak` texture group has a skin per
+  player); Light Jak's wings and shield are not drawn (their art is loaded only with our own Light
+  Jak).
+- The Appearance page's preview has no cloth (scarf, flaps).
+- Co-op waypoints only wait for missions whose arrival check calls `target-pos` from the process
+  that spawned the beam; those checking the vehicle or a cutscene region go on with one player.
+- Races: a vehicle left at a race start rolls down its slope while the start waits (no hand brake,
+  as in the stock game; 30 m in 20 s at `desertb-race-start`). The race's opponents are simulated
+  by the authority (1.4): in a race run on a guest's machine they sleep there.
 - The wave concussor's charge glow is not drawn on its copy (its particles follow our own gun);
   its explosion darkens the screen of every player near it, as the shooter's.
 - The arc wielder and the needle lazer lock onto enemies, civilians and vehicles, not onto
@@ -1033,6 +1204,27 @@ public IP.
   stock pause rule is extended to other players as a safeguard (4.6).
 
 ## 7. Change log
+
+- **2026-10-19 (evening):** the user's lobby, pause, Dark Jak, Appearance, seats and co-op
+  request. The parts that follow himstan's Jak and Daxter II Multiplayer (ISC) are credited in the
+  commits and the code.
+  - *Lobby countdown.* Once every guest is ready, the host's X starts a 10 s countdown every player
+    in the lobby sees; X again cancels it (1.8). Protocol 8: the player state grows to 224 bytes,
+    and Dark and Light Jak move to their own field (packed from flag bit 8, they overlapped the
+    lobby's ready and co-op flags).
+  - *Pause.* The host's SELECT pauses every player's game, SELECT again resumes it after a 3 s
+    countdown; START opens the menu over a running world, which no longer pauses anyone (4.10).
+  - *Dark Jak.* Every player sees another player's Dark Jak skin at its own level, not a purple
+    tint; the local player's Dark Jak no longer darkens the others (4.11).
+  - *Appearance page,* after himstan's skin editor: a color for each part of Jak's and Daxter's
+    clothes, a turning preview, saved and sent to every player (4.12).
+  - *Seats,* after himstan's seat reservation: any free seat of the vehicle (three passengers in a
+    city car), the back of a one-seat vehicle (4.3).
+  - *Co-op.* Cutscenes skipped once every player watching asked (4.13); waypoints wait for every
+    player, "Players here: 1/2" (4.14); races give every player a vehicle and start once every
+    player is aboard (4.15).
+  - *Tests.* Scenarios `pause`, `skin`, `ride-back`, `ride-multi`, `scene-skip`, `beam`,
+    `race-board`, `race-continue`; `lobby` and `powers` extended; commands in 5.3.
 
 - **2026-10-19 (afternoon):** passengers seated, Daxter's firing animations.
   - *Seated passengers.* A passenger, Jak or Daxter, host or guest, plays the clips a driver of

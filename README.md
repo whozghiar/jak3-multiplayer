@@ -21,8 +21,8 @@ Daxter co-op duo with its own multiplayer save.
 ## Key Features
 - **Host Game and Join Game on the title screen:** the host's lobby opens at once and the others
   join it by typing the host's address (`ip:port`) before anything starts. In the lobby, choose
-  Jak or Daxter and say you are ready; the host chooses the game mode and starts once everyone is
-  ready. Hosting and joining from the pause menu (Options > Multiplayer) work too. Up to 8
+  Jak or Daxter and say you are ready; the host chooses the game mode and, once everyone is
+  ready, starts a 10-second countdown that every player sees and the host can cancel. Hosting and joining from the pause menu (Options > Multiplayer) work too. Up to 8
   players (2 in co-op).
 - **Game modes, chosen by the host in the lobby:** Parkour, Egg hunt, PvP, Battlefront, Hide and
   seek and Races are listed for later (grayed out, coming soon); two can be played now:
@@ -35,7 +35,10 @@ Daxter co-op duo with its own multiplayer save.
     the host's computer as a multiplayer save of its own, apart from the memory card's save
     slots. A guest who picks the host's character is offered the other one. When the other
     player plays Daxter, Jak has no Daxter on his shoulder: Daxter can jump on a crouching Jak's
-    shoulder (triangle) and ride along until he jumps off (X).
+    shoulder (triangle) and ride along until he jumps off (X). A cutscene is skipped once both
+    players asked (triangle). A waypoint (the yellow beam) waits for both players to stand on it
+    ("Players here: 1/2"). A race gives each player a vehicle and starts once both are aboard:
+    each in their own, riding with the other, or Daxter on Jak's shoulder.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
@@ -48,14 +51,19 @@ Daxter co-op duo with its own multiplayer save.
   ammo, for Jak and for Daxter alike.
 - **See each other through walls:** a player hidden by a wall, a vehicle or anything else shows
   as an outline in their color.
-- **Player list:** hold SELECT to see every player with their health and their ping. While online,
-  SELECT no longer pauses the game (START does).
+- **Player list:** hold SELECT to see every player with their health and their ping.
+- **Pause:** the host's SELECT pauses the game for everyone; SELECT again resumes it after a
+  3-second countdown. START opens your menu while the game goes on, for you and for the others.
+- **Appearance:** Options > Multiplayer > Appearance colors each part of Jak's and Daxter's
+  clothes (shirt, armor, pants, boots, scarf, hair, fur...), with a turning preview. Every player
+  sees your outfit.
 - **Your color:** ten colors, shown as a small square before your name and as your dot on the
   minimap.
 - **See each other:** every player appears with their name and health bar over their head, as a
   dot on the minimap, with Daxter on their shoulder, their gun and its laser sight, their shots,
   their hoverboard and the vehicle they drive, in their own outfit, moving exactly as they move
-  on their own screen, with their effects and sounds. Their Dark Jak and Light Jak show too, and
+  on their own screen, with their effects and sounds. Their Dark Jak (with its grey skin) and
+  Light Jak show too, and
   so do their wave concussor, mass inverter, arc wielder and needle lazer.
 - **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone,
   with their movements, effects and sounds, and they react to every player's shots. A player who
@@ -64,8 +72,8 @@ Daxter co-op duo with its own multiplayer save.
   When players meet or part, the people and vehicles in front of you do not vanish at once: they
   leave when you look away, or fade out. Enemies killed, crates broken and pickups taken disappear for everybody.
 - **Share vehicles:** next to another player's vehicle, press triangle to steal it, or L1 +
-  triangle to ride next to them when it has two seats, seated like the driver (Daxter rides as
-  Daxter). Guests can also
+  triangle to ride with them in a free seat, seated like the driver (Daxter rides as Daxter): up
+  to three passengers in a city car, one on the back of a one-seat buggy. Guests can also
   take the host's traffic vehicles. The prompt shows the buttons, like the game's own. The
   shells and shots of vehicle guns show and hurt on every screen.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
@@ -94,8 +102,8 @@ Daxter co-op duo with its own multiplayer save.
    cancels.
 3. In the lobby, everyone picks Jak or Daxter (L1 / R1) and the guests say they are ready (X).
    The host opens the game modes with square: **Free roam**, or **Co-op**, which then asks for a
-   new campaign, the campaign continued, or a mission of the story. The host starts (X) once
-   everyone is ready, and the guests follow into its world. Circle opens the multiplayer options
+   new campaign, the campaign continued, or a mission of the story. The host starts the
+   countdown (X) once everyone is ready, and the guests follow into its world when it ends. Circle opens the multiplayer options
    (name, color, address), triangle leaves the lobby.
 4. In game, START > **Options > Multiplayer** holds the same settings, the server administration
    for the host, and hosting or joining without going back to the title screen.
@@ -108,6 +116,8 @@ Daxter co-op duo with its own multiplayer save.
 | Daxter: fire / choose the gun mod | R1 / D-pad |
 | Lobby: multiplayer options / leave | Circle / Triangle |
 | Player list | Hold SELECT |
+| Host: pause / resume for everyone | SELECT |
+| Co-op: ask to skip a cutscene | Triangle |
 | Steal a player's vehicle | Triangle next to it |
 | Ride as passenger | L1 + Triangle next to it |
 | Get off as passenger | Triangle |
@@ -209,8 +219,9 @@ For the complete technical breakdown, architecture, developer notes and change l
 - [`docs/modding/current_mod/multiplayer_readme.md`](docs/modding/current_mod/multiplayer_readme.md)
 
 ## Credits
-The title screen's Host Game and Join Game, the lobby, the SELECT player list, the passenger's
-seat and binding (L1 + triangle) and the Jak and Daxter co-op duo follow himstan's
+The title screen's Host Game and Join Game, the lobby and its countdown, the SELECT player list,
+the passengers' seats and binding (L1 + triangle), the Appearance page and the Jak and Daxter
+co-op duo follow himstan's
 [Jak and Daxter II Multiplayer](https://github.com/himstan/Jak-And-Daxter-2-Multiplayer)
 (ISC license), rewritten for Jak 3.
 
