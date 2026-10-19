@@ -1723,6 +1723,7 @@
   (progress-mp-skip-ask #x157c)
   (progress-mp-skip-wait #x157d)
   (progress-mp-beam-here #x157e)
+  (progress-mp-race-wait #x157f)
   )
 ;; ---text-id
 

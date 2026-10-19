@@ -12,6 +12,9 @@
    )
   )
 
+;; MOD multiplayer: the start waits for every player aboard (pc/features/multiplayer/multiplayer.gc)
+(define-extern mp-race-hold? (function symbol))
+
 ;; DECOMP BEGINS
 
 (define *v-snake-racer-constants* (new 'static 'rigid-body-vehicle-constants))
@@ -249,6 +252,11 @@
         )
     (send-event (handle->process (-> self player-vehicle)) 'set-control-hook-ai)
     (send-event (handle->process (-> self player-vehicle)) 'ai-set-target-speed 0)
+    ;; MOD multiplayer: online, the start waits until every player is aboard (its own vehicle, a
+    ;; seat of another player's, or Daxter on a driving Jak's shoulder)
+    (while (mp-race-hold?)
+      (suspend)
+      )
     (while (not (-> *setting-control* user-current speech-control))
       (suspend)
       )

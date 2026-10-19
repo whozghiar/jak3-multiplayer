@@ -55,6 +55,8 @@
   (seat-b 12)
   (in-scene 13)    ;; watches a cutscene that can be skipped ("Skipping a cutscene")
   (skip-vote 14)   ;; ... and asks to skip it
+  (perched 15)     ;; Daxter on a Jak's shoulder (ride-slot: that Jak)
+  (race-wait 16)   ;; its machine holds a race start until every player is aboard ("Races")
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -267,6 +269,26 @@
 (define *mp-skins* (new 'global 'mp-skin-table))
 (set! (-> *mp-skins* editing?) #f)
 (set! (-> *mp-skins* preview) (the-as handle #f))
+
+;; Races ("Races", below). In a structure: time-frames are 64 bits, a global symbol holds 32.
+(deftype mp-race-state (structure)
+  ((hold-time time-frame) ;; last frame a race's task manager waited for the players (mp-race-hold?)
+   (holding?  symbol)
+   (aboard    int32)      ;; players aboard, and players, as last counted
+   (players   int32)
+   (exit?     symbol)     ;; our setting lets the player leave its vehicle while the start waits
+   (given     time-frame) ;; when we got a vehicle for another player's race start, 0 never
+   (drove     time-frame) ;; last time we drove (a player who left its vehicle gets none)
+   (aside?    symbol)     ;; our vehicle of a race start moved aside
+   (starts    int32)      ;; starts after every player boarded, vehicles got (test log)
+   (gifts     int32)
+   )
+  )
+
+(define *mp-race* (new 'global 'mp-race-state))
+(set! (-> *mp-race* holding?) #f)
+(set! (-> *mp-race* exit?) #f)
+(set! (-> *mp-race* aside?) #f)
 
 ;; Skipping a cutscene together ("Skipping a cutscene", below). In a structure: a global symbol
 ;; holds 32 bits.
@@ -949,6 +971,14 @@
         )
     (if (and (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag coop)))
         (logior! (-> st flags) (mp-flag coop))
+        )
+    ;; Daxter on a Jak's shoulder, and our race start waiting for the players
+    (when (>= *mp-perch-slot* 0)
+      (logior! (-> st flags) (mp-flag perched))
+      (set! (-> st ride-slot) *mp-perch-slot*)
+      )
+    (if (< (- (mp-now) (-> *mp-race* hold-time)) (seconds 0.3))
+        (logior! (-> st flags) (mp-flag race-wait))
         )
     ;; a cutscene we watch, and our vote to skip it
     (when (mp-skippable-scene)
@@ -2486,6 +2516,13 @@
        )
   )
 
+(defun mp-jak-driving? ((st mp-player-state))
+  "#t when the player of `st` plays Jak and drives a vehicle (Daxter can sit on his shoulder)."
+  (and (logtest? (-> st flags) (mp-flag driving))
+       (not (logtest? (-> st flags) (mp-flag indax hidden dead)))
+       )
+  )
+
 (defun mp-draw-perch-prompt ()
   "Daxter's prompts: jump on the crouching Jak next to him, or off the shoulder he rides."
   (cond
@@ -2509,6 +2546,9 @@
 (define-extern mp-replay-weapon (function mp-event none)) ;; multiplayer-world.gc
 (define-extern mp-daxter-guns (function none)) ;; multiplayer-guns.gc
 (define-extern mp-draw-daxter-gun (function dma-buffer none))
+(define-extern mp-update-race-vehicles (function none :behavior mp-manager)) ;; "Races", below
+(define-extern mp-draw-race-wait (function none))
+(define-extern mp-draw-beam-count (function none)) ;; "Waypoints reached together", below
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -3520,7 +3560,8 @@
           )
          (else
            (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> puppet root trans))))
-             (+! (-> pos y) (meters 1.2))
+             ;; a seated driver's shoulder is lower than a standing Jak's
+             (+! (-> pos y) (if (mp-jak-driving? st) (meters 0.75) (meters 1.2)))
              (when (mp-coop?)
                ;; on his left shoulder (the puppet's x axis), as his own Daxter sits
                (+! (-> pos y) (meters 0.05))
@@ -3535,14 +3576,18 @@
      (set! *mp-perch-candidate* -1)
      )
     (else
-      ;; a crouching Jak within 2.5 m of Daxter standing in his mode
+      ;; a crouching Jak within 2.5 m of Daxter standing in his mode, or a Jak driving within 3.5 m
       (set! *mp-perch-candidate* -1)
       (when (and (focus-test? *target* indax) (= (mp-target-state-name) 'target-indax-stance) (< *mp-ride-slot* 0))
         (let ((best-dist (meters 2.5)))
           (dotimes (i MP_MAX_PLAYERS)
             (let ((st (mp-remote-state i)))
-              (when (and st (mp-jak-crouching? st))
-                (let ((d (vector-vector-distance (-> *target* control trans) (-> st trans))))
+              (when (and st (or (mp-jak-crouching? st) (mp-jak-driving? st)))
+                (let ((d (+ (vector-vector-distance (-> *target* control trans) (-> st trans))
+                            (if (mp-jak-driving? st) (meters -1) 0.0)
+                            )
+                         )
+                      )
                   (when (< d best-dist)
                     (set! best-dist d)
                     (set! *mp-perch-candidate* i)
@@ -3592,6 +3637,7 @@
       (mp-update-pending-teleport)
       (mp-daxter-guns)
       (mp-update-session)
+      (mp-update-race-vehicles)
       )
     (else
       (set! *mp-ride-slot* -1)
@@ -4168,6 +4214,178 @@
   (none)
   )
 
+;; ------------------------------------------------------------------------------------------------
+;; Races
+;;
+;; Every player can race with a vehicle of its own, or ride with another: the race's start waits
+;; until every player is aboard.
+;;   - A race gives its vehicle at a race continue point (target-death.gc arrive-at-continue, flag
+;;     race): each machine running the race gives its own player one, at the same place. A guest's
+;;     player is moved aside before its vehicle appears (4.5 m per slot, right then left), so the
+;;     vehicles do not stand in each other.
+;;   - A Jak on foot within 60 m of another player whose race start waits gets a vehicle of that
+;;     player's type beside it, once a minute at most, unless he drove in the last 30 s (he left
+;;     his vehicle to ride with another): every player has one when needed.
+;;   - The race's task manager (course-race.gc for Kleiver's race and the beast hunters' time trial and
+;;     rally, artifact-race.gc for Damas's races) waits before the start while a player is not aboard:
+;;     driving, riding a seat of another player's vehicle (L1 + triangle), or Daxter on a driving
+;;     Jak's shoulder (triangle). Meanwhile the players may leave their vehicle (the race forbids it,
+;;     pilot-exit), and "Waiting for every player aboard: 1/2" shows at the bottom.
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-aboard? ((st mp-player-state))
+  "#t when the player of `st` is aboard: driving, riding with a driver, or Daxter on a Jak's shoulder."
+  (logtest? (-> st flags) (mp-flag driving riding perched))
+  )
+
+(defun mp-race-hold? ()
+  "Called every frame by a race's task manager before its start (course-race.gc, artifact-race.gc):
+   #t while, online, another player is in the game and not every player is aboard. Offline or alone,
+   #f: the stock start."
+  (let ((r *mp-race*)
+        (players 1)
+        (aboard (if (mp-aboard? *mp-local*) 1 0))
+        )
+    (when (mp-online?)
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (when (and st (not (logtest? (-> st flags) (mp-flag hidden))))
+            (+! players 1)
+            (if (mp-aboard? st)
+                (+! aboard 1)
+                )
+            )
+          )
+        )
+      )
+    (set! (-> r players) players)
+    (set! (-> r aboard) aboard)
+    (cond
+      ((and (> players 1) (< aboard players))
+       (when (not (-> r holding?))
+         (set! (-> r holding?) #t)
+         (format 0 "[multiplayer] the race start waits for every player aboard~%")
+         )
+       (set! (-> r hold-time) (mp-now))
+       #t
+       )
+      (else
+        (when (-> r holding?)
+          (set! (-> r holding?) #f)
+          (+! (-> r starts) 1)
+          (format 0 "[multiplayer] every player aboard: the race starts~%")
+          )
+        #f
+        )
+      )
+    )
+  )
+
+(defun mp-race-waiting? ()
+  "#t while a race's start waits here (its task manager asked within 0.3 s)."
+  (and (mp-online?) (< (- (mp-now) (-> *mp-race* hold-time)) (seconds 0.3)))
+  )
+
+(defun mp-update-race ()
+  "Every frame from the hook: while our race start waits, the player may leave its vehicle (a
+   setting of ours over the race's pilot-exit #f, *setting-control* engine-hi)."
+  (let ((r *mp-race*)
+        (held? (if (mp-race-waiting?) #t #f))
+        )
+    (when (!= held? (-> r exit?))
+      (set! (-> r exit?) held?)
+      (if held?
+          (set-setting-by-param *setting-control* 'pilot-exit #t 0 0)
+          (remove-by-param0 (-> *setting-control* engine-hi) 'pilot-exit)
+          )
+      (apply-settings *setting-control*)
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-update-race-vehicles mp-manager ()
+  "In game, from the manager: our vehicle of a race start moved aside (a guest), and a vehicle for us
+   when another player's race start waits near us and we are on foot (see above)."
+  (let ((r *mp-race*))
+    ;; a race continue point gives the vehicle where the player stands (change-mode 'pilot at the end
+    ;; of target-continue): before that, a guest's player moves aside
+    (cond
+      ((and (mp-online?)
+            (> *mp-local-slot* 0)
+            (= (mp-target-state-name) 'target-continue)
+            (= (-> *target* mode-cache) 'pilot)
+            )
+       (when (not (-> r aside?))
+         (set! (-> r aside?) #t)
+         (let ((side (* (if (logtest? *mp-local-slot* 1) 1.0 -1.0) (meters 4.5) (the float (/ (+ *mp-local-slot* 1) 2)))))
+           (vector+float*! (-> *target* control trans) (-> *target* control trans)
+                           (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> *target* control quat))
+                           side
+                           )
+           (format 0 "[multiplayer] race start: our vehicle ~,,1m aside~%" side)
+           )
+         )
+       )
+      ((!= (mp-target-state-name) 'target-continue)
+       (set! (-> r aside?) #f)
+       )
+      )
+    ;; another player's race start waits near us, we are Jak on foot: a vehicle of its type beside it
+    (if (focus-test? *target* pilot)
+        (set! (-> r drove) (mp-now))
+        )
+    (when (and (mp-online?)
+               (or (zero? (-> r drove)) (>= (- (mp-now) (-> r drove)) (seconds 30)))
+               (= (mp-target-state-name) 'target-stance)
+               (not (focus-test? *target* indax pilot))
+               (< *mp-ride-slot* 0)
+               (< *mp-perch-slot* 0)
+               (or (zero? (-> r given)) (>= (- (mp-now) (-> r given)) (seconds 60)))
+               )
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (when (and st
+                     (logtest? (-> st flags) (mp-flag race-wait))
+                     (logtest? (-> st flags) (mp-flag driving))
+                     (>= (-> st veh-type) 0)
+                     (< (vector-vector-distance (-> *target* control trans) (-> st veh-trans)) (meters 60))
+                     )
+            (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st veh-trans))))
+              (vector+float*! pos pos (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> st veh-quat)) (meters 4.5))
+              (set! (-> r given) (mp-now))
+              (when (mp-get-vehicle-at (-> st veh-type) pos (-> st veh-quat))
+                (+! (-> r gifts) 1)
+                (format 0 "[multiplayer] a vehicle for the race start of player ~D~%" i)
+                )
+              )
+            (set! i MP_MAX_PLAYERS)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(define *mp-race-line* (new 'global 'string 128 (the-as string #f)))
+
+(defun mp-draw-race-wait ()
+  "While our race start waits: how many players are aboard."
+  (when (mp-race-waiting?)
+    (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 340 0.0 (font-color default) (font-flags shadow kerning middle large))))
+      (set-width! ctx 512)
+      (set-height! ctx 40)
+      (set! (-> ctx scale) 0.5)
+      (format (clear *mp-race-line*) (lookup-text! *common-text* (text-id progress-mp-race-wait) #f) (-> *mp-race* aboard)
+              (-> *mp-race* players)
+              )
+      (print-game-text *mp-race-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+      )
+    )
+  (none)
+  )
+
 ;; MOD multiplayer -- the START menu takes a still copy of the screen and stops drawing the world
 ;; (engine/gfx/blit-displays.gc): while the world runs under the menu, the live game shows instead.
 (define-perm *mp-stock-set-menu-mode* (function blit-displays-work symbol symbol)
@@ -4399,6 +4617,7 @@
     ;; the players at the waypoint near us, and the prompts with their button icon, as the game
     ;; draws its own (outside the bucket above: they fill their own DMA)
     (mp-draw-beam-count)
+    (mp-draw-race-wait)
     (cond
       ((>= *mp-prompt-slot* 0)
        (mp-draw-prompt (text-id progress-mp-prompt-steal))
@@ -4629,6 +4848,7 @@
      (mp-update-scene-skip)
      (mp-draw-scene-skip)
      (mp-update-beams)
+     (mp-update-race)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)

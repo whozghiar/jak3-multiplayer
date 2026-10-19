@@ -16,6 +16,9 @@
 ;; ---artifact-type
 
 
+;; MOD multiplayer: the start waits for every player aboard (pc/features/multiplayer/multiplayer.gc)
+(define-extern mp-race-hold? (function symbol))
+
 ;; DECOMP BEGINS
 
 (deftype artifact-info (structure)
@@ -896,6 +899,11 @@
     (set-setting! 'music 'desrace 0.0 0)
     (wasall-kill-duplicate-vehicle)
     (suspend)
+    ;; MOD multiplayer: online, the race (its timer) waits until every player is aboard (its own
+    ;; vehicle, a seat of another player's, or Daxter on a driving Jak's shoulder)
+    (while (mp-race-hold?)
+      (suspend)
+      )
     (until (< 61440.0 (vector4-dot (target-pos 0) (-> self door-plane)))
       (suspend)
       )

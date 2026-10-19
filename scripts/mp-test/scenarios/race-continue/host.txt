@@ -1,0 +1,13 @@
+# Race continue points (co-op), host side: both players go to the start line of Kleiver's race
+# (desertb-race-start, a continue that gives a turtle); the host's turtle stands at the line.
+1 enable
+1 name Host
+1 color 1
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 continue desertb-race-start
+80 log-vehicles
+80.5 log-me
+81 screenshot start-line
+83 log

@@ -371,5 +371,6 @@
   "157b": "<PAD_X> Keep   <PAD_TRIANGLE> Cancel",
   "157c": "<PAD_TRIANGLE> Skip the cutscene (~D/~D)",
   "157d": "Skip: waiting for the others (~D/~D)",
-  "157e": "Players here: ~D/~D"
+  "157e": "Players here: ~D/~D",
+  "157f": "Waiting for every player aboard: ~D/~D"
 }

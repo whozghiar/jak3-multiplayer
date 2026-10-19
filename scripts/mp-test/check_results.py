@@ -725,6 +725,30 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any(h == "1" and n == "#t" for _, h, _, n, _, _ in gb) and gb[-1:] and gb[-1][5] == "1" and hb[-1][5] == "1",
                 f"guest {gb}, host {hb[-1:]}")
 
+    elif scenario == "race-board":
+        hr = grab(host, r"\] race waiting (\S+) aboard (\d+)/(\d+) starts (\d+) gifts (\d+) exit (\S+)")
+        gm = grab(client, r"\] race me driving (\S+) riding (\S+) perched (\S+) state (\S+)")
+        c.check(scenario, "the guest on foot gets a turtle of its own beside the host: the start goes (1)",
+                any("a vehicle for the race start of player 0" in l for l in client) and bool(gm) and gm[0][0] == "#t"
+                and bool(hr) and hr[0][3] == "1", f"guest {gm[:1]}, host {hr[:1]}")
+        c.check(scenario, "riding on the back of the host's turtle counts as aboard: the start goes at once (2)",
+                any(r == "#t" and st == "target-grab-ride" for _, r, _, st in gm) and len(hr) > 2 and hr[2][3] == "1",
+                f"guest {gm}, host {hr[2:3]}")
+        c.check(scenario, "Daxter on foot holds the start (1/2), the host may leave its vehicle meanwhile (3)",
+                any(w == "#t" and a == "1" and p == "2" and e == "#t" for w, a, p, _, _, e in hr), f"{hr}")
+        c.check(scenario, "Daxter on the driving host's shoulder: the start goes (3)",
+                bool(gm) and gm[-1][2] == "#t" and hr[-1][3] == "2", f"guest {gm[-1:]}, host {hr[-1:]}")
+
+    elif scenario == "race-continue":
+        hm = grab(host, r"\] me " + NUM + " " + NUM + " " + NUM + r" speed \S+ state (\S+)")
+        gm = grab(client, r"\] me " + NUM + " " + NUM + " " + NUM + r" speed \S+ state (\S+)")
+        c.check(scenario, "the guest moves aside before its turtle appears",
+                any("race start: our vehicle 4.5 aside" in l for l in client), "")
+        apart = math.dist((float(hm[-1][0]), float(hm[-1][2])), (float(gm[-1][0]), float(gm[-1][2]))) if hm and gm else 0.0
+        c.check(scenario, "each player drives its own turtle, apart from the other's",
+                bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
+                f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
+
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
         c.check(scenario, "holding SELECT shows the player list without pausing",

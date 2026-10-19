@@ -19,6 +19,7 @@
 ;;   wait-driving <slot>                                     the script waits: that player drives a vehicle (for 2 s)
 ;;   wait-scene | log-skip                                   the script waits: a cutscene plays here; the vote to skip it
 ;;   beam-at-host <dx> <dz> | goto-beam | log-beams          a test waypoint near the host; stand at it; waypoints held
+;;   race-gate | log-race                                    a race start of a test (waits for every player aboard); races
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -121,6 +122,28 @@
 (defun mp-test-word ()
   "Pop the next word of the command into (-> *mp-test* word). #f when none is left."
   (string-get-arg!! (-> *mp-test* word) (-> *mp-test* line))
+  )
+
+;; A race start of a test (race-gate): forbids leaving the vehicle and waits as the races' task
+;; managers do (course-race.gc), then logs the start.
+(deftype mp-test-race-gate (process)
+  ()
+  )
+
+(defstate mp-test-race-gate-active (mp-test-race-gate)
+  :code (behavior ()
+    (set-setting! 'pilot-exit #f 0.0 0)
+    (suspend)
+    (while (mp-race-hold?)
+      (suspend)
+      )
+    (format 0 "[mp-test] race gate open~%")
+    (deactivate self)
+    )
+  )
+
+(defbehavior mp-test-race-gate-init-by-other mp-test-race-gate ()
+  (go mp-test-race-gate-active)
   )
 
 ;; A waypoint of a test mission (beam-at-host): its beam, and its own check that we reached it
@@ -1935,6 +1958,19 @@
          (set! (-> *mp-test-wait* slot) (mp-test-int))
          (set! (-> *mp-test-wait* kind) 'pause)
          (pc-mp-test-pause #t)
+         )
+        ((string= cmd "race-gate")
+         ;; race-gate: a race start of a test, waiting as the races' task managers do (mp-race-hold?)
+         (process-spawn mp-test-race-gate :name "mp-test-race-gate" :to *default-pool* :stack-size #x4000)
+         )
+        ((string= cmd "log-race")
+         ;; log-race: the race start waiting here, the players aboard, starts, vehicles got, our state
+         (format 0 "[mp-test] race waiting ~A aboard ~D/~D starts ~D gifts ~D exit ~A~%" (mp-race-waiting?) (-> *mp-race* aboard)
+                 (-> *mp-race* players) (-> *mp-race* starts) (-> *mp-race* gifts) (-> *setting-control* user-current pilot-exit)
+                 )
+         (format 0 "[mp-test] race me driving ~A riding ~A perched ~A state ~A~%" (logtest? (-> *mp-local* flags) (mp-flag driving))
+                 (logtest? (-> *mp-local* flags) (mp-flag riding)) (logtest? (-> *mp-local* flags) (mp-flag perched)) (mp-target-state-name)
+                 )
          )
         ((string= cmd "beam-at-host")
          ;; beam-at-host <dx> <dz>: a waypoint beam dx, dz meters from the host, whose process checks
