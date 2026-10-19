@@ -39,7 +39,8 @@ Daxter co-op duo with its own multiplayer save.
     A cutscene is skipped once both players asked (triangle). A waypoint (the yellow beam) waits for both players to stand on it
     ("Players here: 1/2"). A race gives each player a vehicle and starts once both are aboard:
     each in their own, riding with the other, or Daxter on Jak's shoulder (triangle next to Jak's
-    vehicle). A 10-second countdown then leaves time to change your mind and ride together.
+    vehicle). A line at the start says each player's choice, and a 10-second countdown leaves
+    time to change your mind and ride together.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
@@ -95,6 +96,8 @@ Daxter co-op duo with its own multiplayer save.
   cheats for guests and players hitting each other, share story progress and your time of day,
   stop the server. When the host leaves, every player goes back to the title screen with "The
   host ended the session".
+- **Adapts to a weak connection:** when a player's connection loses messages, the game sends
+  them less of what can wait, as himstan's mod does, and goes back to full rate once it recovers.
 - **Precursor orbs and Metal Head trophies:** every precursor orb you take and every Metal Head
   you kill counts for you. The host's game keeps every player's count, saves it every minute
   and when the session ends, and gives it back when it hosts that session again; each orb counts

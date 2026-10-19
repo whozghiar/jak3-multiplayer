@@ -73,6 +73,19 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   on a LAN, 95 to 102 ms under 50 ms of delay and 30 of jitter (a fixed 100 ms before; `log-ping`
   prints it). An object keeps its last 500 ms of states; a late one goes on along its last
   velocity for 150 ms, then holds. A shot gone 250 ms without a state is gone.
+- **Network pressure,** after the cadence scheduler of himstan's mod
+  (`game/multiplayer/platform/session/cadence_scheduler.cpp`, `core/network_statistics.h`, ISC):
+  each side counts the unreliable message ids it gets from a peer (the share delivered each
+  second) and tells it in its ping (`PING` carries one more byte; an older build ignores it). The
+  sender classifies its link to that peer with his thresholds: severe when under 50 % of its
+  messages arrive or 500 ms of queueing (round trip above the lowest seen), congested under 75 %
+  or 250 ms, degraded under 90 % or 100 ms, else normal; a higher level applies at once, a lower
+  one after 3 s. As his priorities: bones sent between two 15 Hz batches (bulk, the heavy part) go
+  to that peer every 2, 3 or 5 frames; the player state and the states of our objects between
+  batches every 2 frames from congested on; the batches, which carry effects and sounds, and the
+  reliable messages always go. The host thins what it relays to a guest the same way (a relayed
+  pose message without effects is bulk). `[multiplayer] network to player N: <level>` logs each
+  change.
 - **Poses:** `[u8 source][u32 source time][u16 count]` then one entry per object:
   `[u32 id][u16 bones, bit 15 = effects][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
   translation to 1 mm, per-axis scale, relative to the object's frame), each emitter 20 bytes,
@@ -462,7 +475,7 @@ world and has NPCs react to online players, and to take the best of both. Read i
 | Missions | The host owns the task masks; each machine runs its task managers; a dead player watches a teammate, then comes back near it; a mission fails only when every player is dead | Story nodes shared (1.5); waypoints, races and cutscene skips wait for every player (4.13 to 4.15) | **Taken:** a dead player back next to a living teammate, the mission goes on (4.19) |
 | Daxter riding Jak | The rider hidden; Jak's own Daxter shown in the rider's skin; jump-on animation; stays there in vehicles | A perched Daxter drawn on the puppet's shoulder | **Taken:** the rider hidden, the Jak's own Daxter in the rider's outfit, the stock climb (4.16) |
 | Cutscene actors | Jak and Daxter wear a player's skin | Stock actors | **Taken,** with the host's Jak (4.17) |
-| Sending under pressure | Cadence lowered when the link is loaded; bit-packed values; relayed only to the peers concerned | Everything every frame, relayed to every guest | Not yet: the next step for slow links (6) |
+| Sending under pressure | Cadence lowered when the link is loaded; bit-packed values; relayed only to the peers concerned | Everything every frame, relayed to every guest | **Taken:** his pressure levels, thresholds, dwell and priorities, measured with our own channel (1.1); not taken: bit packing and relaying by interest (a few players, the host relays everything) |
 
 ## 2. Requirements and how they are met
 
@@ -526,7 +539,7 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1593` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status and Kleiver's shop. |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's choice. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
@@ -906,6 +919,11 @@ until every connected player is aboard (multiplayer.gc, "Races"):
   Jak's shoulder, and the wait starts again. Meanwhile the players may leave their vehicle (a
   `pilot-exit #t` setting in `engine-hi` over the race's). Offline, alone or in free roam, the
   stock start.
+- **The choice, on screen.** Under the wait or the countdown, a second line says what the player
+  can do (`mp-race-choice`, texts `#x1594` to `#x1597`): Jak, "Your own vehicle, or L1 + triangle
+  next to another player's to ride with them"; Daxter, "... or triangle next to a driving Jak to
+  ride on his shoulder"; riding in another player's vehicle, "triangle to get off and race in your
+  own vehicle"; on Jak's shoulder, "X to jump off and race in your own vehicle".
 - **Daxter and a driving Jak.** In co-op, Daxter's triangle within 5 m of the vehicle a Jak drives
   puts him on that Jak's shoulder (standing or walking); he never robs that vehicle, and its
   steal prompt is not shown. In free roam he may still steal it beyond 3.5 m of Jak.
@@ -994,7 +1012,9 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
 - **Saved.** In `<settings>/multiplayer-economy.json` on the host: every minute when something
   changed, and when the session closes (the host stops hosting); each closing adds a line to
   `<settings>/multiplayer-sessions.log` (date, session, duration, every account's balances).
-  Hosting the same session again loads them back.
+  Hosting the same session again loads them back, also after the game was closed without ending
+  the session (the minute's save). Each player who comes (or comes back) gets its balances once
+  (`sent` bits): a returning guest sees the orbs it earned before.
 - **Kleiver's shop.** At Kleiver's garage in Spargus (by the city's doors, continue point
   `wasdoors-city`), within 4 m: his line ("Kleiver: Got orbs? I've got just what you need.") and
   "Press triangle to trade". Triangle opens the START menu on one page, the shop
@@ -1034,6 +1054,10 @@ focused window. Default boot as `task boot-game`, `--retail` as `task boot-game-
 python scripts/mp-test/run_mp_test.py <scenario> [--retail] [--latency <ms>[:<jitter ms>]] [--loss <percent>] [--shot-size <w>x<h>]
 ```
 
+`--fixed-cadence` keeps every send at its full rate (`MP_TEST_FIXED_CADENCE`: no network
+pressure, a baseline for 1.1). `--settings-from <scenario>` starts each instance with the economy
+files and `multiplayer.cfg` (its secret id) its namesake left in that scenario: a session hosted
+again after the games were closed.
 `--retail` boots as `task boot-game-retail` (no `-debug`: the title screen, no debug segment;
 `log-session` prints `debug-segment #f`). `--latency` holds what each instance receives that long, plus up to the jitter, before reading it,
 in order (`MP_TEST_LATENCY`, `Session::receive_all` in `kmultiplayer.cpp`), and `--loss <percent>`
@@ -1104,6 +1128,7 @@ A script line is `<seconds> <command>`:
 | `econ-claim <aid>`, `econ-grant <slot> <orbs>`, `shop-buy <item>` | Claim the orb of that entity without taking it (0: the nearest, from where we stand), a cheat the host must refuse; the host credits a player (a test of its accounts; nothing on a guest); buy shop item n as the page's X does. |
 | `kill-mh <slot>` | On the host: a lethal blow from player slot's character (ours or its puppet) to the nearest Metal Head, credited by the economy. |
 | `die`, `log-respawn` | A blow that kills our player; the times we came back next to a teammate, our state and health, the teammate found. |
+| `net <ms> <jitter> <loss %>`, `log-net` | The test network from now on (what this instance receives, as `--latency` and `--loss`); each peer's network pressure, the share of messages delivered both ways, the queueing and the bytes sent it last second. `log-race` also prints the choice line shown. |
 | `look-player <slot>` | Face that player, the camera put 6 m behind us, 2 m up and 1.5 m aside on the line to it (`'teleport-to-vector-start-string`): a screenshot shows that player ahead. |
 | `log-outline` | Outlined models the renderer drew since boot, the pixels of fill and outline it drew last frame where walls hide players (`pc-mp-outline-pixels`), each player in the outline table with its color. |
 | `cheat weapons`, `daxter-mod <pickup-type>`, `log-daxter-gun` | Every weapon (Mods menu); the mod Daxter fires, as the D-pad sets it; Daxter's gun: out, mod, shots fired, ammo, aim, the features, the gun's scale and state, its model's distance to his right hand, its draw status and clip, his clip holding it (index, frame), `gun-daxter`, the joints selected, the gun's distance to his gun joint; each other player's clip holding the gun as its state says. |
@@ -1258,7 +1283,13 @@ Scenarios of the round of 2026-10-19 (late evening) for the user's request on me
 the host leaving, world sync and the economy. Final sweep on its last commit, 16 scenarios (the
 new ones and `smoke`, `daxter-ride`, `ride-seat-daxter`, `race-board`, `race-real-daxter`,
 `beam-real`, `skin`, `lobby`, `drive`; `host-quit` from a retail boot): 130 checks, 129 passed,
-no crash. The failure, `race-board`'s Daxter not getting on the driving host's shoulder, came from
+no crash (the five rows above `pressure` come from it; `pressure` and the rows after it from the
+second pass that day). Final sweep of the second pass on its last code commit (`fa12541f3`): 19
+scenarios (`smoke`, `coop`, `daxter-ride`, `ride-seat-daxter`, `race-real-daxter`, `beam-real`,
+`skin`, `lobby`, `drive`, `player-list`, `scene-skins`, `coop-respawn`, `pressure`, `race-board`,
+`economy`, `economy-trophy`, `economy-persist`, `economy-reload`, `host-quit` from a retail
+boot), 151 checks, 0 failed, no crash. The failure, `race-board`'s Daxter not
+getting on the driving host's shoulder, came from
 its script: the guest moved next to the host 5 s before pressing triangle, while the host's
 turtle rolls down the start's slope (6); it now moves there 1 s before: 8 of 8 in both runs since
 (and in one run before that change).
@@ -1274,6 +1305,11 @@ turtle rolls down the start's slope (6); it now moves there 1 s before: 8 of 8 i
 | `economy-trophy` | Metal Head trophies | A Metal Head killed by the host's blow: a trophy for the host; one killed by the guest's puppet's blow: a trophy for the guest, sent to it; 6 checks. |
 | `coop-respawn` | Back next to a teammate | The guest killed comes back next to the host (`target-stance`, health 8, no continue point), then the host next to the guest; 6 checks. |
 | `beam-real` | Regression | Passes again after the sidekick pointer check (the arena's cutscene left `(-> *target* sidekick)` `#f`, a crash in the `joint-control-remap!` wrapper). |
+| `pressure` | Network pressure (1.1) | The guest drops 40 % of what it receives from 60 s to 80 s (`net`): the host reads 32 to 49 % delivered in its pings, goes severe ("between batches every 5 frames"), sends it about 180 KB/s instead of 290 to 330, and is back to normal 3 s after the losses stop; 7 checks. |
+| `drive --loss 30` | Driving under 30 % loss | The buggy's copy follows the owner's path: 4.7 cm at the 95th percentile with the pressure (links congested and severe), 1.4 cm with `--fixed-cadence`; both within the check (10 cm), both as smooth as the owner's. |
+| `race-board` (extended) | The choice on screen | The line shown at each step: Jak's (own vehicle or L1 + triangle), riding's, Daxter's, the shoulder's (screenshots: above the count, clear of the prompts and the minimap); 9 checks. |
+| `economy-persist` | Saved while running | An orb each, 7 more credited to the guest; 70 s later the minute's save holds the accounts and the orbs credited, and the games are stopped without ending the session; 6 checks. |
+| `economy-reload` (`--settings-from economy-persist`) | After a restart | Hosting again loads "2 account(s) and 2 orb(s) taken"; the guest finds its 8 orbs by its secret id (before the fix: 0 until it earned something), the host its 1; the orbs each takes again in its fresh world are refused as already credited; 7 checks, the pair passing twice in a row. |
 
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
@@ -1315,6 +1351,7 @@ passed, 0 failed, no crash):
 | ![Daxter climbing onto the host's shoulder](multiplayer-screenshots/coop-climb.jpg) | ![A cutscene: the host's outfit on Jak, the guest's on Daxter](multiplayer-screenshots/scene-outfits.jpg) |
 | ![Kleiver's line and prompt in Spargus](multiplayer-screenshots/kleiver-merchant.jpg) | ![Kleiver's shop, the gold outfit worn](multiplayer-screenshots/kleiver-shop.jpg) |
 | ![A guest back at the title screen: the host ended the session](multiplayer-screenshots/host-ended-session.jpg) | ![The player list with a long name](multiplayer-screenshots/player-list-long-name.jpg) |
+| ![A race start: Daxter's choice above the count, the shoulder prompt below](multiplayer-screenshots/race-choice.jpg) | |
 
 The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the late evening
 round of 2026-10-19 for the last three rows (`coop`, `scene-skins`, `economy`, `host-quit`,
@@ -1403,10 +1440,24 @@ public IP.
   once (the stock has no climb in a vehicle).
 - A dead player comes back next to a teammate only on foot and within 300 m; in a vehicle, the
   stock death (a mission that fails on death fails).
-- The playout delay adapts to lateness, not to losses or bandwidth: no lowered cadence on a slow
-  link (1.10).
+- Network pressure (1.1) reads every loss as a loaded link, as himstan's does: on a link that drops
+  datagrams at random without being full, sending less does not lower the losses and costs some
+  precision (`drive` under 30 % loss: 4.7 cm at the 95th percentile against 1.4 cm at a fixed
+  cadence, both within the check). Its levels follow pings, once a second.
 
 ## 7. Change log
+
+- **2026-10-19 (night, second pass):** after the stop hook's review of the first pass.
+  - *Network pressure,* after himstan's cadence scheduler: each link's losses and queueing,
+    measured with our channel, thin the sends between batches (1.1, 1.10).
+  - *Races:* the start says each player's choice on screen (4.15).
+  - *Economy:* a player who comes back gets its balances (it saw 0 until it earned something);
+    saved while running and reloaded after a restart, checked by `economy-persist` and
+    `economy-reload` (`run_mp_test.py --settings-from`).
+  - *Boot fix:* `*fallback-text-heap*` raised to 128 KB; the English text had outgrown its 80 KB and
+    every boot stopped in `c_symlink2` (3).
+  - *Tests:* scenarios `pressure`, `economy-persist`, `economy-reload`; `race-board` extended;
+    commands `net`, `log-net`; `run_mp_test.py --fixed-cadence`.
 
 - **2026-10-19 (late evening):** the user's request on menus, co-op, the host leaving, world sync
   and an economy. The parts that follow himstan's Jak and Daxter II Multiplayer (ISC) say so in
