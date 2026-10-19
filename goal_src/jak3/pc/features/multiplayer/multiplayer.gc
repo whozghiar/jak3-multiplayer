@@ -4623,8 +4623,30 @@
 
 (define *mp-race-line* (new 'global 'string 128 (the-as string #f)))
 
+(defun mp-race-choice ()
+  "The choice a race start leaves us, as the text that says it: on Jak's shoulder or riding in
+   another player's vehicle, how to get off and race in our own; else our own vehicle, or how to
+   ride with another player (Jak: L1 + triangle at their vehicle; Daxter: triangle at a driving
+   Jak, on his shoulder)."
+  (cond
+    ((>= *mp-perch-slot* 0)
+     (text-id progress-mp-race-choice-perched)
+     )
+    ((>= *mp-ride-slot* 0)
+     (text-id progress-mp-race-choice-riding)
+     )
+    ((= (-> *mp-config* character) 1)
+     (text-id progress-mp-race-choice-daxter)
+     )
+    (else
+      (text-id progress-mp-race-choice-jak)
+      )
+    )
+  )
+
 (defun mp-draw-race-wait ()
-  "While our race start waits: how many players are aboard, then the start's countdown."
+  "While our race start waits: how many players are aboard, then the start's countdown; above, the
+   choice it leaves us (mp-race-choice), shrunk to fit clear of the prompts and the minimap."
   (when (mp-race-waiting?)
     (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 296 0.0 (font-color default) (font-flags shadow kerning middle large)))
           (r *mp-race*)
@@ -4641,6 +4663,18 @@
                   )
           )
       (print-game-text *mp-race-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+      ;; above the count: below it are the vehicle and shoulder prompts (mp-draw-prompt, x 22-372 from
+      ;; y 320) and the minimap (right, from y 283, its circle reaching x 406); 360 wide at most, centered
+      (let ((line (lookup-text! *common-text* (mp-race-choice) #f)))
+        (set! (-> ctx origin y) 270.0)
+        (set! (-> ctx scale) 0.4)
+        (let ((w (-> (get-string-length line ctx) length)))
+          (if (< 360.0 w)
+              (set! (-> ctx scale) (/ (* 0.4 360.0) w))
+              )
+          )
+        (print-game-text line ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        )
       )
     )
   (none)

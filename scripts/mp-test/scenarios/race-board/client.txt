@@ -19,12 +19,14 @@
 71 press l1+triangle 200
 74 race-gate
 76 log-race
+76.5 screenshot choice-riding
 87 log-race
 89 press triangle 300
 91 character 1
 95 goto-player 0 2 0
 96 race-gate
 97 log-race
+97.5 screenshot choice-daxter
 99 goto-player 0 2 0
 100 press triangle 100
 102 log-race

@@ -1744,6 +1744,10 @@
   (progress-mp-shop-keys #x1591)
   (progress-mp-shop-line #x1592)
   (progress-mp-shop-prompt #x1593)
+  (progress-mp-race-choice-jak #x1594)
+  (progress-mp-race-choice-daxter #x1595)
+  (progress-mp-race-choice-riding #x1596)
+  (progress-mp-race-choice-perched #x1597)
   )
 ;; ---text-id
 

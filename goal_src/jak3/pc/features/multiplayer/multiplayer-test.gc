@@ -2234,6 +2234,7 @@
          (format 0 "[mp-test] race me driving ~A riding ~A perched ~A state ~A~%" (logtest? (-> *mp-local* flags) (mp-flag driving))
                  (logtest? (-> *mp-local* flags) (mp-flag riding)) (logtest? (-> *mp-local* flags) (mp-flag perched)) (mp-target-state-name)
                  )
+         (format 0 "[mp-test] race choice #x~X ~S~%" (the-as int (mp-race-choice)) (lookup-text! *common-text* (mp-race-choice) #f))
          )
         ((string= cmd "beam-at-host")
          ;; beam-at-host <dx> <dz>: a waypoint beam dx, dz meters from the host, whose process checks

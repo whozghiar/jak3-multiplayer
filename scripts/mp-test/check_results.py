@@ -740,6 +740,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any(w == "#t" and a == "1" and p == "2" and e == "#t" for w, a, p, _, _, e in hr), f"{hr}")
         c.check(scenario, "Daxter on the driving host's shoulder: the start goes (3)",
                 bool(gm) and gm[-1][2] == "#t" and hr[-1][3] == "3", f"guest {gm[-1:]}, host {hr[-1:]}")
+        choices = [ch for (ch,) in grab(client, r"\] race choice #x(\w+)")]
+        c.check(scenario, "the start says the choice: own vehicle or ride (Jak, Daxter), get off to race alone (riding, shoulder)",
+                all(t in choices for t in ("1594", "1596", "1595", "1597")), f"{choices}")
 
     elif scenario == "race-continue":
         hm = grab(host, r"\] me " + NUM + " " + NUM + " " + NUM + r" speed \S+ state (\S+)")
