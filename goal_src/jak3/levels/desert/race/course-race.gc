@@ -252,7 +252,7 @@
         )
     (send-event (handle->process (-> self player-vehicle)) 'set-control-hook-ai)
     (send-event (handle->process (-> self player-vehicle)) 'ai-set-target-speed 0)
-    ;; MOD multiplayer: online, the start waits until every player is aboard (its own vehicle, a
+    ;; MOD multiplayer: in co-op, the start waits until every player is aboard (its own vehicle, a
     ;; seat of another player's, or Daxter on a driving Jak's shoulder)
     (while (mp-race-hold?)
       (suspend)

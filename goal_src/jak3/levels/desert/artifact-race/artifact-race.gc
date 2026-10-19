@@ -899,7 +899,7 @@
     (set-setting! 'music 'desrace 0.0 0)
     (wasall-kill-duplicate-vehicle)
     (suspend)
-    ;; MOD multiplayer: online, the race (its timer) waits until every player is aboard (its own
+    ;; MOD multiplayer: in co-op, the race (its timer) waits until every player is aboard (its own
     ;; vehicle, a seat of another player's, or Daxter on a driving Jak's shoulder)
     (while (mp-race-hold?)
       (suspend)
