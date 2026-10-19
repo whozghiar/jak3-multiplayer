@@ -1,0 +1,14 @@
+# Economy saved while it runs, host side (first of two runs; economy-reload is the second): the host
+# takes an orb, credits the guest 7 orbs, then plays on for 70 s. The runner stops the games without
+# closing the session: only the save made every minute keeps the accounts.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 goto-orb
+53 log-econ
+55 econ-grant 1 7
+62 log-econ
+128 log-econ
+130 log

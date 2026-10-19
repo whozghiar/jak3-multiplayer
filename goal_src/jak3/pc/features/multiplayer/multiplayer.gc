@@ -5257,6 +5257,7 @@
 (deftype mp-econ-state (structure)
   ((open?     symbol)      ;; host: the session's accounts are open
    (key       string)      ;; host: the session key they are kept under
+   (sent        uint32)   ;; host: the players sent their balances since they came (a bit each)
    (claims      int32)    ;; host: orb claims waiting (mp-econ-claims-update): player, entity, until
    (claim-slot  int32 8)
    (claim-aid   uint32 8)
@@ -5545,8 +5546,8 @@
 
 (defun mp-econ-update ()
   "Every frame from the hook. Host in game: the session's accounts open (key: the campaign, free
-   roam, or the world hosted), closed (saved and recorded) when it stops hosting; while open, the
-   orb claims waiting are checked."
+   roam, or the world hosted), closed (saved and recorded) when it stops hosting; while open, each
+   player who comes gets its balances, and the orb claims waiting are checked."
   (let ((e *mp-econ*))
     (cond
       ((and (= *mp-mode* (mp-mode host)) (mp-in-game?) (not (-> e open?)))
@@ -5559,21 +5560,32 @@
        (pc-mp-econ-open (-> e key))
        (set! (-> e open?) #t)
        (set! (-> e claims) 0)
+       (set! (-> e sent) (the-as uint 0))
        (mp-econ-send *mp-local-slot* 0)
-       (dotimes (i MP_MAX_PLAYERS)
-         (if (mp-remote-state i)
-             (mp-econ-send i 0)
-             )
-         )
        )
       ((and (-> e open?) (!= *mp-mode* (mp-mode host)))
        (pc-mp-econ-close)
        (set! (-> e open?) #f)
        )
       )
-    (if (-> e open?)
-        (mp-econ-claims-update)
+    (when (-> e open?)
+      ;; a player who comes (or comes back) gets its balances once: its account may hold what it
+      ;; earned in this session before, which the host kept
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((bit (the-as uint (ash 1 i))))
+          (cond
+            ((not (mp-remote-state i))
+             (logclear! (-> e sent) bit)
+             )
+            ((not (logtest? (-> e sent) bit))
+             (logior! (-> e sent) bit)
+             (mp-econ-send i 0)
+             )
+            )
+          )
         )
+      (mp-econ-claims-update)
+      )
     )
   (none)
   )

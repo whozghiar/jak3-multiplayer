@@ -1,0 +1,12 @@
+# Economy after a restart, host side (run with --settings-from economy-persist): hosting the same
+# session loads the accounts its periodic save kept; the orb it took last time, there again in its
+# fresh world, is taken again but not credited again.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-econ
+51 goto-orb
+56 log-econ
+60 log

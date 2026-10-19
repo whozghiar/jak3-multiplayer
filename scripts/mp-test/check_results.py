@@ -778,6 +778,29 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 '"orbs": 8' in saved and '"items": 1' in saved and '"orbs_taken"' in saved and 'session "world" closed' in record
                 and any('economy "world": 2 account(s) and 2 orb(s) taken loaded' in l for l in host), f"{record.strip()[-160:]}")
 
+    elif scenario == "economy-persist":
+        settings = OUT / "economy-persist" / "host" / "OpenGOAL" / "jak3" / "settings"
+        hs = grab(host, r"\] econ host key (\S+) credits (\d+) refused (\d+) saves (\d+)")
+        ge = grab(client, r"\] econ orbs (\d+) trophies (\d+)")
+        saved = (settings / "multiplayer-economy.json").read_text(encoding="utf-8") if (settings / "multiplayer-economy.json").exists() else ""
+        c.check(scenario, "the host credits its orb and the guest's, and 7 more to the guest (8)",
+                bool(ge) and ge[-1][0] == "8" and any("an orb for player 0" in l for l in host), f"guest {ge}")
+        c.check(scenario, "a minute after the change the accounts are saved while the session runs (no closing)",
+                bool(hs) and int(hs[-1][3]) >= 1 and '"orbs": 8' in saved and '"orbs_taken"' in saved
+                and not any("closed and recorded" in l for l in host), f"saves {hs[-1:]}")
+
+    elif scenario == "economy-reload":
+        ge = grab(client, r"\] econ orbs (\d+) trophies (\d+)")
+        he = grab(host, r"\] econ orbs (\d+) trophies (\d+)")
+        c.check(scenario, "after a restart, hosting the session loads the accounts its periodic save kept",
+                any('economy "world": 2 account(s) and 2 orb(s) taken loaded' in l for l in host), "")
+        c.check(scenario, "the guest, by its secret id, finds its 8 orbs; the host its 1",
+                bool(ge) and ge[0][0] == "8" and bool(he) and he[0][0] == "1", f"guest {ge}, host {he}")
+        c.check(scenario, "the orbs taken again in the fresh worlds are not credited again",
+                any("refused" in l and "already credited" in l and "player 1" in l for l in host)
+                and any("refused" in l and "already credited" in l and "player 0" in l for l in host)
+                and ge[-1][0] == "8" and he[-1][0] == "1", f"guest {ge}, host {he}")
+
     elif scenario == "pressure":
         nets = grab(host, r"\] net player 1 pressure (\S+) tx (\S+) rx (\S+) queue (\S+) sent (\d+) B/s")
         c.check(scenario, "under the guest's losses the host sees the pressure on its link (congested or severe)",

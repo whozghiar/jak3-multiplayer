@@ -1,0 +1,11 @@
+# Economy saved while it runs, guest side: takes an orb (credited by the host) and is credited 7.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 log-econ
+58 goto-orb
+62 log-econ
+128 log-econ
+130 log

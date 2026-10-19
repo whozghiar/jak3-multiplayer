@@ -14,6 +14,9 @@ user's Jak 3 saves and settings, small window, side by side, controller ignored 
 The debug boot loads save slot 1, so the game starts in game, where the save left it. --retail
 boots as `task boot-game-retail` (no -debug): the title screen, without the debug segment.
 
+--settings-from <scenario> starts each instance with the economy files and multiplayer.cfg (its
+secret id) its namesake left in that scenario's folder: a session hosted again after a restart.
+
 When the last command of every script is past (plus --extra-seconds), every instance is stopped.
 Output in out/mp-test/<scenario>/:
   <instance>/gk.log        the instance's whole output
@@ -98,6 +101,8 @@ def main() -> int:
                         help="boot as task boot-game-retail: the title screen, no debug segment")
     parser.add_argument("--fixed-cadence", action="store_true",
                         help="no network pressure: every send at its full rate (MP_TEST_FIXED_CADENCE, a baseline)")
+    parser.add_argument("--settings-from", default="",
+                        help="scenario whose instances' economy files and multiplayer.cfg to start with")
     args = parser.parse_args()
 
     scenario = SCENARIOS / args.scenario
@@ -118,6 +123,13 @@ def main() -> int:
         name = script.stem
         folder = out / name
         prepare_instance(folder, index)
+        if args.settings_from:
+            # the economy and the secret id of the same instance in an earlier run
+            src = ROOT / "out" / "mp-test" / args.settings_from / name / "OpenGOAL" / "jak3" / "settings"
+            dst = folder / "OpenGOAL" / "jak3" / "settings"
+            for kept in ("multiplayer.cfg", "multiplayer-economy.json", "multiplayer-sessions.log"):
+                if (src / kept).exists():
+                    shutil.copy2(src / kept, dst / kept)
         env = dict(os.environ, MP_TEST_SCRIPT=str(script))
         if args.latency:
             env["MP_TEST_LATENCY"] = args.latency

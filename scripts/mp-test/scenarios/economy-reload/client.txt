@@ -1,0 +1,11 @@
+# Economy after a restart, guest side: the same secret id finds its account (8 orbs); the orb it
+# took last time is taken again, and refused by the host.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 log-econ
+54 goto-orb
+58 log-econ
+60 log
