@@ -11,31 +11,44 @@
 ---
 
 ## Overview
-Jak 3 online: host or join a game from the title screen, meet in a lobby, and play the host's
-world together as Jak or Daxter, in free roam or as a Jak and Daxter co-op duo.
+Jak 3 online: host or join a game from the title screen, meet in a lobby, and play together as
+Jak or Daxter: free roam at the end of the game with everything unlocked, or the story as a Jak and
+Daxter co-op duo with its own multiplayer save.
 
 - **Target Game:** Jak 3
 - **Repository:** [`whozghiar/jak3-multiplayer`](https://github.com/whozghiar/jak3-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
 
 ## Key Features
-- **Host Game and Join Game on the title screen:** the host picks a new game or a save, the
-  others type the host's address (`ip:port`). Everyone meets in a lobby: choose Jak or Daxter and
-  say you are ready; the host chooses the game mode and starts once everyone is ready. Hosting and
-  joining from the pause menu (Options > Multiplayer) work too. Up to 8 players.
+- **Host Game and Join Game on the title screen:** the host's lobby opens at once and the others
+  join it by typing the host's address (`ip:port`) before anything starts. In the lobby, choose
+  Jak or Daxter and say you are ready; the host chooses the game mode and starts once everyone is
+  ready. Hosting and joining from the pause menu (Options > Multiplayer) work too. Up to 8
+  players (2 in co-op).
+- **Game modes, chosen by the host in the lobby:** Parkour, Egg hunt, PvP, Battlefront, Hide and
+  seek and Races are listed for later (grayed out, coming soon); two can be played now:
+  - **Free roam:** the end of the game. Every story mission is done and everything is unlocked
+    for every player: all the guns and their upgrades, Dark and Light Jak's powers, the
+    hoverboard, the vehicles. Everyone plays Jak or Daxter and goes where they want. Nothing is
+    saved.
+  - **Co-op (2 players):** the story as Jak and Daxter. The host starts a new campaign, continues
+    it, or picks any mission of the story (everything before it done). The campaign is saved on
+    the host's computer as a multiplayer save of its own, apart from the memory card's save
+    slots. A guest who picks the host's character is offered the other one. When the other
+    player plays Daxter, Jak has no Daxter on his shoulder: Daxter can jump on a crouching Jak's
+    shoulder (triangle) and ride along until he jumps off (X).
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
-- **Two game modes, chosen by the host in the lobby,** with the same rules (shared world,
-  vehicles, weapons, story):
-  - **Free roam:** everyone plays the character they like, Jak or Daxter, and goes where they
-    want; a player who goes far from the others keeps a living world around them.
-  - **Co-op:** Jak and Daxter as a duo. A guest who picks the host's character is offered the
-    other one, and Daxter can jump on a crouching Jak's shoulder (triangle) and ride along until
-    he jumps off (X).
 - **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere. He
-  fights with the guns like Jak, and gets in vehicles and drives them as Daxter.
-- **Player list:** hold SELECT to see every player with their ping. While online, SELECT no longer
-  pauses the game (START does).
+  fires every gun too: R1 fires the mod chosen with the D-pad, aimed at the nearest enemy ahead,
+  with the mod and its ammo shown at the bottom of the screen. He gets in vehicles and drives
+  them as Daxter.
+- **Every weapon:** a Mods menu option gives the gun with its twelve mods, their upgrades and full
+  ammo, for Jak and for Daxter alike.
+- **See each other through walls:** a player hidden by a wall, a vehicle or anything else shows
+  as an outline in their color.
+- **Player list:** hold SELECT to see every player with their health and their ping. While online,
+  SELECT no longer pauses the game (START does).
 - **Your color:** ten colors, shown as a small square before your name and as your dot on the
   minimap.
 - **See each other:** every player appears with their name and health bar over their head, as a
@@ -57,8 +70,8 @@ world together as Jak or Daxter, in free roam or as a Jak and Daxter co-op duo.
 - **Players can hit each other:** punches, shots and blasts between players (the wave concussor,
   the mass inverter, the arc wielder, the needle lazer too) hurt and knock back (the host can turn
   it off).
-- **Cheats menu:** in the Mods menu (L3 + SELECT): refill ammo, restore health, dark eco and
-  light eco, invincibility, teleport to a zone or to a player.
+- **Cheats menu:** in the Mods menu (L3 + SELECT): every weapon, refill ammo, restore health, dark
+  eco and light eco, invincibility, teleport to a zone or to a player.
 - **Shared story:** a mission completed by one player is completed for everybody, with its
   reward; a player who joins catches up with the others; cutscenes play for the players together
   (the host can turn it off).
@@ -72,21 +85,25 @@ world together as Jak or Daxter, in free roam or as a Jak and Daxter co-op duo.
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
    multiplayer**. The setting is remembered.
-2. On the title screen, the host picks **Host Game**, then **New Game** or **Load Game**; the
-   others pick **Join Game**, type the host's address and **Connect**. To edit a text field:
-   confirm, then up / down to change a letter, left / right to move, square to delete, confirm
-   to save (triangle cancels).
+2. On the title screen, the host picks **Host Game**: the lobby opens and the others can join at
+   once. The others pick **Join Game**, type the host's address and **Connect**. Text fields (the
+   address, your name) open an on-screen keyboard: move with the D-pad or the stick, X types the
+   key, square deletes, L1 switches capitals, START (or the OK key) keeps the text, triangle
+   cancels.
 3. In the lobby, everyone picks Jak or Daxter (L1 / R1) and the guests say they are ready (X).
-   The host picks the game mode (square) and starts (X) once everyone is ready: its save menu
-   opens, and the guests follow into its world. Circle opens the multiplayer options (name,
-   color, address), triangle leaves the lobby.
+   The host opens the game modes with square: **Free roam**, or **Co-op**, which then asks for a
+   new campaign, the campaign continued, or a mission of the story. The host starts (X) once
+   everyone is ready, and the guests follow into its world. Circle opens the multiplayer options
+   (name, color, address), triangle leaves the lobby.
 4. In game, START > **Options > Multiplayer** holds the same settings, the server administration
    for the host, and hosting or joining without going back to the title screen.
 
 | Action | Control |
 |---|---|
-| Mods menu (cheats, teleports) | L3 + SELECT |
-| Lobby: character / ready or start / game mode | L1 or R1 / X / Square |
+| Mods menu (every weapon, cheats, teleports) | L3 + SELECT |
+| Lobby: character / ready or start / game modes | L1 or R1 / X / Square |
+| Keyboard: type / delete / capitals / done | X / Square / L1 / START |
+| Daxter: fire / choose the gun mod | R1 / D-pad |
 | Lobby: multiplayer options / leave | Circle / Triangle |
 | Player list | Hold SELECT |
 | Steal a player's vehicle | Triangle next to it |
@@ -95,15 +112,16 @@ world together as Jak or Daxter, in free roam or as a Jak and Daxter co-op duo.
 | Co-op, as Daxter: jump on a crouching Jak's shoulder / jump off | Triangle / X |
 
 > [!NOTE]
-> **Playing over the Internet:** the host must open (forward) TCP port 7777, or the port they
+> **Playing over the Internet:** the host must open (forward) UDP port 7777, or the port they
 > chose, on their router, and give the others their public IP address. On a local network, use the
 > host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
 > mod.
 
 A player who joins plays in the host's world: its progress, items and place. Their own save stays
 as it was: it is not loaded, and nothing is saved while they play in the host's world (load your
-own save, or go back to the title screen, to save again). Story progress is shared: missions
-completed by anyone are completed for all.
+own save, or go back to the title screen, to save again). In co-op, the host's saves (the pause
+menu's and the checkpoints') go into its multiplayer campaign, never into a memory card slot.
+Story progress is shared: missions completed by anyone are completed for all.
 
 ## Download & Play via OpenGOAL Launcher (Players)
 

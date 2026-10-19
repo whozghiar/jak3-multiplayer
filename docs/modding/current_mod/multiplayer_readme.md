@@ -11,12 +11,14 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 | Layer | File | Role |
 |---|---|---|
-| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | TCP session (host or client), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | UDP session (host or client), reliable channel, relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Renderer (C++) | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `shaders/merc2_outline.*` | Other players seen through walls: their models drawn again, at the end of the 3D scene, as an outline in their color where something hides them (4.9). |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
-| Test | `test/test_kmultiplayer.cpp` | Interpolation and a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason). |
+| Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
 | GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
-| GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby, START > Options > Multiplayer and its administration page, the D-pad text field, the Mods menu entries. |
+| GAME | `.../multiplayer-guns.gc` | Every weapon (Mods menu), and Daxter's guns (4.8). |
+| GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby and its game mode, co-op and mission pages, the on-screen keyboard, START > Options > Multiplayer and its administration page, the Mods menu entries. |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
 | Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/`, `compare_poses.py` | Runs several game instances on one PC with a script each, gathers logs and screenshots; compares an owner's bones with its copies'. |
 | Tool | `scripts/mp-test/local_pair.py` | Starts two instances on one PC to play by hand, one with the controller, the other with the keyboard. |
@@ -25,12 +27,28 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 - **Topology:** star. The host is slot 0 and listens on the port of its address field (default
   7777); guests get slots 1 to 7. Every message from a guest goes to the host, which relays it.
-- **Transport:** TCP with `TCP_NODELAY`, non-blocking sockets pumped once per frame from GOAL
-  (`pc-mp-update`), no thread. A frame is `[u16 length][u8 type][payload]`; malformed or
-  oversized frames drop the peer. Message types: `HELLO` (protocol version, now 5), `WELCOME`
-  (slot), `REJECT` (reason, then close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB`
-  (`[u8 from][u8 to][u32 total][u32 offset][bytes]`, 15000 bytes a frame, relayed by the host:
-  the host's world for a guest that joins, 1.7).
+- **Transport:** UDP, one non-blocking socket per session pumped once per frame from GOAL
+  (`pc-mp-update`), no thread. A message is `[u8 type][payload]` (at most 16 KB), cut into
+  fragments of 1180 bytes (a datagram stays under a 1280-byte MTU). Every datagram starts with
+  `['J'][kind][u32 connection id]`, the id a client draws when it joins: a datagram of an older
+  connection from the same address is told apart (the host replaces that client). Two channels:
+  - *Unreliable* (`STATE`, `ACTORS`, `POSES`, `PING`, `PONG`): `[u16 message id][u8 fragment][u8
+    fragments]`; a newer message follows within a frame, so of each peer only a message newer
+    than the last one delivered is delivered (a late one is dropped), and a message with a lost
+    fragment is lost.
+  - *Reliable* (`HELLO`, `WELCOME`, `REJECT`, `LEAVE`, `EVENT`, `BLOB`): `[u32 seq][u8
+    fragment][u8 fragments]`, each fragment its own seq; delivered once and in order; the
+    receiver answers `[u32 next seq expected][u32 bits]` (the 32 seqs after it received); a
+    fragment not acknowledged within 1.5 round trips plus 30 ms (60 ms to 1 s) is sent again; at
+    most 256 fragments in flight per peer, a peer more than 8192 behind is dropped.
+  - `BYE` (sent three times, nothing answers it): the host stopped (with its reason) or a client
+    left; the other side drops the connection at once instead of waiting for the timeout.
+
+  Message types: `HELLO` (protocol version, now 7), `WELCOME` (slot), `REJECT` (reason, then
+  close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
+  offset][bytes]`, 15000 bytes a message, relayed by the host: the host's world for a guest that
+  joins, 1.7), `PING`, `PONG`. A client sees "Connection refused" when the host's machine answers
+  that nothing listens there (Windows), else "Connection timed out" after 8 s.
 - **Player state:** `mp-player-state` (192 bytes: position, orientation, velocity, animation,
   health, flags, character and outfit, body segments, driven vehicle, passenger seat, name, color,
   level, continue point) every frame (60 Hz): a driver's puppet blended between states 33 ms
@@ -54,10 +72,13 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   another player are sent every frame, bones only. About 1.3 KB per Jak pose, 0.6 KB per NPC.
 - **Events:** `mp-event` (80 bytes), routed by slot (`to = -1` for everyone). The kinds are
   defined in GOAL (`mp-event-kind`); the C++ side only stamps the sender.
-- **Timeouts:** 15 s of silence drops a peer, 8 s to connect. The pump runs from the per-frame
+- **Timeouts:** 15 s of silence drops a peer, 8 s to be welcomed. The pump runs from the per-frame
   hook even while paused, so a paused player does not time out.
 - **Config:** `<settings>/multiplayer.cfg` (`%APPDATA%/OpenGOAL/jak3/settings/` on Windows):
-  name, address, character, color, enabled, mode (the game mode when hosting, 1.7).
+  name, address, character, color, enabled, mode (the game mode when hosting: 0 free roam, 1
+  co-op, 1.7).
+- **The host's lobby choices** travel in its state (`lobby-mode`, `lobby-start`, `lobby-mission`,
+  in what was padding): a guest's lobby shows them before any game starts.
 
 ### 1.2 The shared world
 
@@ -302,22 +323,49 @@ the union. Host setting **Share story progress** (on by default).
   the title screen ends it. The guest's memory card is never read or written for the session.
 - **Progress on join.** Only the host sends its closed task nodes to a player who joins; a guest's
   own progress is not merged into the host's world.
-- **Game mode** (host's choice: square in the lobby, or Options > Multiplayer > **Game mode**;
-  saved as `mode` in the config, sent with the world settings as the `coop` flag, and in the
-  host's own state as `mp-flag coop` for guests still in the lobby). Both modes run the same
-  rules: NPC authority by region (1.4), shared vehicles, weapons and story progress, and the
-  host's weather when it shares its time of day (the host sends its clouds, fog and special
-  weather with the world settings, a guest sets them as its `*mood-control*` override, which
-  stops its own random weather).
-  - *Free roam:* every player plays the character it picks, Jak or Daxter.
-  - *Co-op:* the Jak and Daxter duo of himstan's Jak and Daxter II Multiplayer. Once per session,
-    a guest playing the host's character is switched to the other one, with a message
-    (`mp-update-coop-roles`); the lobby offers it first. A Daxter standing in his mode within
-    2.5 m of a crouching Jak (`mp-jak-crouching?`: Jak's duck animations 32 to 34, on foot)
-    presses triangle to jump on his shoulder: the stock grab state (`target-indax-grab`), his model
-    hidden, following the puppet's root 1.2 m up (`mp-update-perch`); X, his death or Jak hidden
-    puts him down. Jak's own Daxter, drawn on his shoulder on every machine, stands for him: no
-    double (the shoulder works in free roam too).
+- **Game modes** (host's choice in the lobby's mode list, 1.8; saved as `mode` in the config, 0
+  free roam, 1 co-op; sent with the world settings as the `coop` flag, and in the host's state
+  for guests still in the lobby). The list shows eight modes: Parkour, Egg hunt, PvP,
+  Battlefront, Hide and seek and Races are grayed out (coming soon); free roam and co-op can be
+  played. Both run the same rules: NPC authority by region (1.4), shared vehicles, weapons and
+  story progress, and the host's weather when it shares its time of day. What the host's X
+  starts (`mp-start-game`, `multiplayer.gc` "Game modes"):
+  - *Free roam:* the end of the game. A new game at Spargus (`initialize!` with
+    `wascitya-start`); once in game, `mp-unlock-everything` closes `city-win-resolution` with
+    `task-node-close!`, whose `open!` closes every node it needs first (the whole story, 254
+    nodes, with their rewards; not sent to the others, `*mp-progress-replaying*`), then adds the
+    features the story does not give (`MP_FREE_FEATURES`: every gun mod and ammo upgrade, the
+    hoverboard's tricks, Dark and Light Jak's powers, armor), the eight vehicles, the secrets
+    shop's upgrades (not its cheats), full ammo and eco. The host answers no world request until
+    that is done; a guest loads that world, and keeps `MP_FREE_FEATURES` while the host's world
+    flag `free` is set (its loaded save leaves two out; a respawn restores the save's). Nothing
+    is saved (`auto-save-command`, below). Everyone plays the character it picks.
+  - *Co-op (two players):* Jak and Daxter. The server accepts two players
+    (`pc-mp-set-max-players`, refusing a third with "The server is full"; the mode list grays
+    co-op out while more than one guest is there). It starts in one of three ways, chosen on the
+    co-op page: a new campaign (the stock New Game's `intro-start`), the campaign continued (its
+    save loaded with `initialize!`), or a mission of the story (`initialize!` with a
+    `resetter-spec` whose node is the mission's `play-node` and its `play-continue`, as the stock
+    mission list's `play-task` starts one: that node opened, the nodes it needs closed). The
+    lobby picks "continue" when the server starts and a campaign exists, else "new".
+    - *The multiplayer campaign:* while it runs (`*mp-session*` `kind` `'campaign`), every save
+      of the host (`auto-save-command` `'save`, `'save-last`, `'auto-save`: the pause menu's,
+      checkpoints') is written into `multiplayer-campaign.bin` next to the memory card saves
+      (`pc-mp-campaign-write`: the `save-game` of the in-memory save, after an 8-byte stamp
+      `OGMPCOOP`), never into a card slot; the menu that asked is told it is done. The guest
+      saves nothing (another player's world). Loading a card save, or the title screen (10 s
+      after a start), ends the campaign.
+    - *Roles:* once per session, a guest playing the host's character is switched to the other
+      one (`mp-update-coop-roles`); the lobby offers it first.
+    - *Daxter on the shoulder:* while the other player plays Daxter, the Jak player's own Daxter
+      is taken off (`mp-update-session`: the manager holds `(set-setting! 'features 'clear 0
+      #x100000)`, the sidekick bit, as `target-death.gc` does; the game's own features, which
+      are saved, are untouched). A Daxter standing in his mode within 2.5 m of a crouching Jak
+      (`mp-jak-crouching?`: Jak's duck animations 32 to 34, on foot) presses triangle to jump on
+      his shoulder: the stock grab state (`target-indax-grab`), following the puppet's root 1.25
+      m up and 0.22 m to its left (its x axis), drawn there (`mp-update-perch`); X, his death or
+      Jak hidden puts him down. In free roam, where Jak keeps his own Daxter, the perched player
+      is hidden instead (no double).
   Until 2026-10-16 co-op held story steps until every player came (`coop-wait` event, now unused)
   and brought a guest more than 150 m away back to the host; both were removed so that the two
   modes play alike.
@@ -334,21 +382,38 @@ The way into a session follows himstan's Jak and Daxter II Multiplayer
   stock list otherwise. Until Secrets is unlocked the stock skips index 3 when moving and shifts
   the entries' heights (`progress-generic-pc.gc`, `progress-draw-pc.gc`), so the hidden Secrets
   entry stays at index 3 then, and the heights are set for the entries shown.
-- **Pages,** routed by the `set-menu-options` wrapper: `mp-host-game` (New Game or Load Game, to
-  `mp-lobby-new` or `mp-lobby-load`, which start the server), `mp-join-game` (the address, then
-  Connect: `mp-join!` and `mp-lobby-join`), and the lobby.
+- **Pages,** routed by the `set-menu-options` wrapper: `mp-lobby-host` (Host Game: the server
+  starts with the lobby, so guests join it before any game starts), `mp-join-game` (the address,
+  then Connect: `mp-join!` and `mp-lobby-join`), the lobby, `mp-mode` (the eight game modes, as
+  `menu-mp-mode-option` buttons grayed out by `should-disable?` with the reason after the name),
+  `mp-coop-start` (the campaign's completion, New campaign, Continue the campaign (grayed out
+  without a campaign), Choose a mission), `mp-mission` (a carousel of the story's missions: the
+  `play-list` entries with a `play-continue` and a name, as the stock mission list) and
+  `mp-keyboard`. The mode page is reached with `push-state` from the lobby; the co-op and
+  mission pages replace it (`set-next-state`), so their choice goes back to the lobby with one
+  `pop-state`. Each page resets its selection and scroll when it opens (the generic store keeps
+  them across pages).
+- **On-screen keyboard** (`mp-keyboard`, a page of its own): a text field (name, address,
+  `menu-mp-text-option`, now a link for the scrolling page) opens it on its value; a grid of four
+  rows of ten keys (letters, `-_.!`, digits; for the address, digits, `.:`, lower case and `-_`)
+  and an action row (capitals, space, delete, OK), moved over with the D-pad or the left stick
+  (held: repeats every 0.15 s). X types the key, square deletes, L1 switches capitals, START or OK
+  keeps the text (trailing spaces removed, `pop-state`), triangle cancels (the stock goes back).
+  Before, a field was edited letter by letter with up / down.
 - **Lobby** (`menu-mp-lobby-option`, one option that draws the page and reads its keys): the
   session status and game mode; the players in slot order (color, name, Host / Ready / Not
   ready) on the left; the one chosen with up / down on the right (character, ping, status); a
-  hint and the keys at the bottom. X: a guest says it is ready (`*mp-lobby-ready*`, sent as
-  `mp-flag ready`); the host starts once every guest is (`push-state`, then the save menu chosen
-  on the Host Game page). L1 / R1: the character (a guest only while not ready). Square: the game
-  mode (host). Circle: the multiplayer options page. Triangle: `mp-leave!`, then the stock goes
-  back a page. The page's frame is computed with `adjust-game-x`: this page is handed the
+  hint and the keys at the bottom. The mode line reads "Game mode: Co-op - Mission: <name>" (or
+  the campaign's start), the hint for free roam says what it is. X: a guest says it is ready
+  (`*mp-lobby-ready*`, sent as `mp-flag ready`); the host starts once every guest is
+  (`mp-start-game`, 1.7). L1 / R1: the character (a guest only while not ready). Square: the game
+  mode list (host). Circle: the multiplayer options page. Triangle: `mp-leave!`, then the stock
+  goes back a page. The page's frame is computed with `adjust-game-x`: this page is handed the
   unadjusted x (70) and width (375), where the frame is drawn squeezed to the screen's ratio.
-- **Differences with himstan's lobby:** square switches the game mode (his copies an invite), the
-  host starts at once (no countdown), guests join by address (no room code, no LAN scan), and the
-  multiplayer options keep this mod's settings (no skin editor, nametag or map marker options).
+- **Differences with himstan's lobby:** square opens the game mode list (his copies an invite),
+  the host starts at once (no countdown), guests join by address (no room code, no LAN scan), and
+  the multiplayer options keep this mod's settings (no skin editor, nametag or map marker
+  options).
 
 ### 1.9 Finding a crash
 
@@ -372,12 +437,19 @@ report added (`gun [type]`, `board`, `stick-r`), then the same scripts run on th
 | Create or join a server from the start menu | The title screen's **Host Game** and **Join Game**, then the lobby (1.8). In game, START > Options > Multiplayer: **Host a server**, **Join the server**, **Disconnect**, plus a status line. The ring of the start menu has exactly ten slots (36 degrees each, matching its 3D model), so the page hangs off the Options list, which gets a sixth entry while the mod is enabled. |
 | The same menus as himstan's Jak 2 mod to reach multiplayer | Host Game / Join Game, the lobby and its keys, the multiplayer options from the lobby, the SELECT player list (1.8, 4.7). |
 | A guest uses the host's world, not its own save | Section 1.7: the host's game sent as a save in memory and loaded with a loading screen, the guest next to the host, its own save neither read nor written. |
-| Free roam and co-op, the same rules, chosen in the lobby | Square in the lobby, or the **Game mode** carousel (host). Free roam: each plays Jak or Daxter; co-op: the Jak and Daxter duo. Section 1.7. |
-| Player list with names and pings | Hold SELECT while online (4.7). |
-| IP address with port, nickname | **Server address (ip:port)** and **Player name** text fields (D-pad editing). |
+| Free roam and co-op, the same rules, chosen in the lobby | Square in the lobby (the mode list), or the **Game mode** carousel (host). Section 1.7. |
+| Player list with names, health and pings | Hold SELECT while online (4.7). |
+| IP address with port, nickname, entered easily | **Server address (ip:port)** and **Player name** text fields, edited on the on-screen keyboard (1.8). |
+| UDP | The session runs over UDP with a reliable channel for what must arrive (1.1). |
+| Every weapon, for Jak and Daxter | Mods menu > multiplayer > **Give every weapon**; Daxter fires them (4.8). |
+| Players outlined through walls in their color | 4.9. |
+| Game modes in the lobby, those not ready grayed out | The mode list (1.8): six coming soon, free roam and co-op playable. |
+| Join the host's lobby before it starts | Host Game opens the lobby with the server (1.8). |
+| Free roam: the end of the game, everything unlocked for everyone | 1.7. |
+| Co-op: two players, a mission chosen, a new campaign or the campaign continued, saved at the host's as multiplayer; no Daxter on Jak's shoulder when the other plays Daxter | 1.7. |
 | Jak or Daxter | **Character** carousel, L1 / R1 in the lobby. Daxter is the stock playable-Daxter mode (`indax`), made resident in GAME (section 3). He fights with the guns like Jak, and drives vehicles as Daxter (4.3). |
 | Color | **Color** carousel. A marker, not a tint: a small square of the player's color before its name, and its minimap dot in that color (own copies of the stock dot class, `*mp-minimap-nodes*`). |
-| Cheats menu per player | Mods menu (L3 + SELECT) > multiplayer: refill ammo, restore health, dark eco, light eco, invincibility, teleport to a zone, teleport to a player. Greyed out for guests when the host disallows cheats. |
+| Cheats menu per player | Mods menu (L3 + SELECT) > multiplayer: every weapon, refill ammo, restore health, dark eco, light eco, invincibility, teleport to a zone, teleport to a player. Greyed out for guests when the host disallows cheats. |
 | Health bar above players | Name, color square and health bar (green, yellow, red) over every remote player in view. |
 | Shared vehicle: steal or sit next to the driver | Next to a remote driver's vehicle: press triangle to steal it, L1 + triangle to ride as passenger when it has a free seat (himstan's binding). A guest can also take the host's NPC vehicles. The prompts are the game's own kind: `print-game-text` with a `<PAD_TRIANGLE>` icon, where the game draws its vehicle prompt (`vehicle-method-144`). See 4.3. |
 | Synchronize everything | Section 1.2. |
@@ -395,10 +467,12 @@ Each is marked `MOD multiplayer`.
 | `game/kernel/jak3/kmachine.cpp` | `InitMachine_PCPort` registers the `pc-mp-*` functions. |
 | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | `game/CMakeLists.txt`, `test/CMakeLists.txt` | The new C++ file and its test. |
-| `goal_src/jak3/dgos/game.gd` | The four mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o`, `jak-indax+0-ag.go`, and `jak-pidax+0-ag.go` (Daxter's driving animations, for `pilot` with `as-daxter?`). |
+| `goal_src/jak3/dgos/game.gd` | The five mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o`, `jak-indax+0-ag.go`, and `jak-pidax+0-ag.go` (Daxter's driving animations, for `pilot` with `as-daxter?`). |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c` and `#x1530`-`#x1547` for the menu labels, the prompts, the game modes, the player list and the lobby. |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e` and `#x1550`-`#x155f` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard and the co-op pages. |
+| `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls and colors) and `pc-merc-bits outline`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags (4.9). |
+| `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
 | `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`). |
 | `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
@@ -421,7 +495,8 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `com-airlock` `want-cross-airlock?` | `engine/common-obs/airlock.gc` | Doors open for remote players too. |
 | `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there. |
 | `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first; the art heap goes with its host level. |
-| `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world (1.7). |
+| `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world or in free roam; the co-op campaign's saves into its file (1.7). |
+| `target-gun-compute-pos` | `engine/target/target-gun.gc` | Where the gun is drawn: before Daxter, along his aim, while he fires (4.8). |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -556,8 +631,9 @@ player far from the authority are not frozen.
 
 ### 4.7 Player list and ping
 
-Holding SELECT while online shows every player, ourselves first, with its color, name and round
-trip to the host (`mp-draw-player-list`). The binding and the layout (a title, NAME and PING
+Holding SELECT while online shows every player, ourselves first, with its color, name, health (a
+bar colored as over its head, and the value: `8/8`) and round trip to the host
+(`mp-draw-player-list`). The binding and the layout (a title, NAME and PING
 columns) follow himstan's `mp-player-list.gc`. The stock pauses on SELECT
 (`determine-pause-mode`): the wrapper clears SELECT alone while online, so START still pauses and
 L3 + SELECT still opens the Mods menu.
@@ -566,6 +642,66 @@ The runtime measures the ping (protocol version 6): each side sends `MSG_PING` e
 answers `MSG_PONG`; the round trip is smoothed (0.7 old, 0.3 new). A client puts its own round
 trip in its state (`ping-ms`), so `pc-mp-player-ping` gives, on the host, each client's measured
 round trip; on a client, its own and the others' reported values; 0 for the host.
+
+### 4.8 Daxter's guns
+
+The stock playable Daxter cannot use the gun: his surfaces (`*indax-walk-mods*`...) carry
+`gun-off`, and the gun process's `use` state calls `target-gun-check` every frame, which pushes
+Jak's gun animations onto the player's skeleton (Daxter's while he plays). So the stock gun stays
+put away for him (`gun-type` 0) and `multiplayer-guns.gc` fires instead
+(`mp-daxter-gun-update`, run as the player from the manager):
+
+- *The mod:* the stock marking menu (`target-gun-marking-menu`, a pad engine connection) runs in
+  his mode too and sets `using-gun-type` on the D-pad; R1 fires it. The ranges each mod's shots and
+  aim use (`fire-range`, `track-*`), which `target-gun-type-set!` sets for Jak only, are set
+  when the gun comes out (`mp-daxter-gun-setup`).
+- *Aim:* from his chest toward the nearest enemy, guard, civilian or crate within 40 m in a
+  60-degree cone ahead (`fill-actor-list-for-box`, `find-nearest-focusable`, as
+  `target-gun-find-track`), else straight ahead; the target found is the gun's tracked target
+  for homing shots. `fire-point` is 0.6 m ahead, `fire-dir-out` the aim.
+- *The gun drawn:* `target-gun-compute-pos` (wrapped) puts the gun 0.6 m up and 0.35 m ahead
+  along the aim while he fires (2 s after R1 is let go), its barrel along the aim: the shots that
+  read the gun's joints fly right.
+- *Firing:* the stock per-mod functions (`target-gun-fire-yellow`, `-red`, `-blue`, `-dark`), as
+  `target-gun-fire` calls them but without Jak's animations, the ammo taken as it takes it, at
+  the stock rates; the vulcan fury and the needle lazer fire while R1 is held, the arc wielder
+  holds one arc (its tracker reads `using-gun-type` 33 and `gun active?`, set meanwhile), the
+  others fire once per press.
+- *The charge weapons:* the wave concussor's charging state goes off after 0.1 s in his mode, and
+  the peace maker's shot fizzles at once (both check the player is not in `indax` mode). Daxter
+  fires subtypes, `mp-daxter-shockwave` and `mp-daxter-dark-shot`, whose overridden states
+  (`:virtual #t`) charge at `fire-point` while R1 is held and go off or fly on release, the
+  dark shot along his aim (`moving` `:enter`: the parent's, then the velocity turned).
+- *Feedback:* the mod's name and its ammo at the bottom of the screen while he holds the gun (his
+  mode has no gun HUD).
+
+Every weapon (Mods menu): the gun, its twelve mods and their ammo upgrades
+(`MP_ALL_GUN_FEATURES`), full ammo; kept through a respawn (in another player's world a respawn
+restores that player's save) until the title screen. Jak takes them out as usual.
+
+### 4.9 Outlines through walls
+
+Every remote player's puppet puts its draw-control and color in `*pc-merc-outlines*` (its slot,
+each frame; cleared when it goes). `pc-merc-draw-request` flags those models (`pc-merc-bits
+outline`, the color at byte 20 of the flags), and Merc2 keeps each one with its bones and camera
+(`record_outline`). Once the 3D scene is drawn (after `generic-warp`, before the overlay's
+`debug-no-zbuf1`), `draw_outlines` draws them again with `merc2_outline` (merc2's skinning and
+projection, one color, an optional screen offset):
+
+1. every silhouette into the stencil (1), whatever the depth;
+2. where the model itself is what the depth buffer shows (its parts in view, not those it hides
+   itself), stencil 2: depth `GEQUAL`, pulled toward the camera by a polygon offset (drawn again,
+   a model comes out a hair behind its first drawing);
+3. a faint fill (alpha 0.18) where the stencil is still 1: the silhouette hidden by something
+   else;
+4. the outline: the model shifted by 2 pixels (more on large screens) in eight directions, where
+   the stencil is 0 (outside every silhouette) and the depth is behind what is drawn (`LESS`:
+   depth is reversed here, `GEQUAL` is in front), each pixel once.
+
+An occlusion query counts the pixels of steps 3 and 4 (`pc-mp-outline-pixels`, the last frame's).
+Measured (`outline`): about 100 pixels for a player in the open 9 m away (its feet in the ground),
+900 to 1850 for the same player behind a buggy, whose outline shows through it (screenshot).
+`MP_OUTLINE_ALWAYS=1` draws them whatever the depth (a test of the drawing alone).
 
 ## 5. Testing in game
 
@@ -599,8 +735,9 @@ python scripts/mp-test/run_mp_test.py <scenario> [--latency <ms>[:<jitter ms>]]
 ```
 
 `--latency` holds what each instance receives that long, plus up to the jitter, before reading it,
-in order (`MP_TEST_LATENCY`, `Peer::receive` in `kmultiplayer.cpp`): both instances run on one
-machine, this stands in for the network between two.
+in order (`MP_TEST_LATENCY`, `Session::receive_all` in `kmultiplayer.cpp`), and `--loss <percent>`
+drops that share of the datagrams received (`MP_TEST_LOSS`): both instances run on one machine,
+these stand in for the network between two.
 
 `python scripts/mp-test/compare_poses.py` compares, after a `pose-all` run, the bones the host
 logged for its objects with those of their copies on the guest at the same moment: both log every
@@ -658,7 +795,12 @@ A script line is `<seconds> <command>`:
 | `wait-joined`, `wait-player <slot>` | The script's clock stops until this guest is in the host's world (next to it), or until player `slot` is in game for 2 s: the steps after keep their spacing from then. Every scenario's guest waits after `join`, its host before the guest arrives. |
 | `wait-menu <page>`, `address <ip:port>`, `log-lobby` | The script's clock stops until the menu shows that page for 1.5 s (`title`: X is tapped every 2 s until the title screen opens its menu, which waits for a press); the server address field alone; the menu page shown, the title screen's entries, and the lobby as drawn (players, characters, statuses, game mode, ready). |
 | `spawn-vehicle <type>`, `log-vehicles` | An empty vehicle 3 m in front of us (traffic spawn path); every vehicle within 30 m of us, ours and copies (a vehicle shown twice). |
-| `log-ping` | Each player's round trip as the player list shows it, the list shown, and whether the game is paused. |
+| `log-ping` | Each player's round trip and health as the player list shows them, the list shown, and whether the game is paused. |
+| `look-player <slot>` | Face that player, the camera put 6 m behind us, 2 m up and 1.5 m aside on the line to it (`'teleport-to-vector-start-string`): a screenshot shows that player ahead. |
+| `log-outline` | Outlined models the renderer drew since boot, the pixels of fill and outline it drew last frame where walls hide players (`pc-mp-outline-pixels`), each player in the outline table with its color. |
+| `cheat weapons`, `daxter-mod <pickup-type>`, `log-daxter-gun` | Every weapon (Mods menu); the mod Daxter fires, as the D-pad sets it; Daxter's gun: out, mod, shots fired, ammo, aim, where the gun is drawn, the features. |
+| `log-name` | The player name kept and the on-screen keyboard's text. |
+| `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered. |
 | `gun [pickup-type]`, `board` | Every gun mod unlocked with ammo, the gun out, the mod `pickup-type` picked (26 red 1 ... 31 yellow 3 ... 35 dark 1 ... 37 dark 3); the hoverboard unlocked with its zap, the player on it. |
 | `mode <0\|1>`, `title` | Game mode when hosting (free roam, co-op); back to the title screen as the pause menu's quit does. |
 | `log-join`, `try-save` | Joining the host's world: stage, world sent or loaded and its size, saves refused, continue point, title screen or in game, language, distance to the host; an auto-save, as a checkpoint asks it. |
@@ -737,6 +879,21 @@ guns were fired from farther, where the arc wielder and needle lazer turn to the
 around. The target now steps back to 7 m, facing the shooter, before each gun: 3 runs out of 3
 passed (12 of 12), every gun of both players landing on the other in two of them.
 
+Round of 2026-10-19 (UDP, outlines, Daxter's guns, keyboard, game modes, free roam, co-op
+campaign; 21 scenarios, `check_results.py`: 170 checks passed, 0 failed, no crash; the unit tests
+pass, the reliable channel's under 20 % loss included): `smoke`, `pvp`, `join-world`,
+`join-title`, `coop`, `ride`, `daxter-ride`, `steal-dup`, `daxter-drive`, `daxter-drive-own`,
+`daxter-guns`, `vehicle`, `vehicle-guns`, `powers`, `guns-fx`, `progress` as before, and:
+
+| Scenario | Checks | Result |
+|---|---|---|
+| `lobby` (rewritten) | Host Game, joining before the start, keyboard, mode list, free roam | Host Game opens the lobby; the guest is listed there before any game starts (2 players); on the keyboard the host's name goes from "Host" to "Jak3"; square opens the mode list (six modes grayed out); X is refused until the guest is ready, then starts free roam: 254 story nodes closed, `city-win-resolution` done, every feature, the eight vehicles; the guest follows into it with the same. |
+| `coop-campaign` | Co-op from the lobby, three players | Co-op from the mode list, the co-op page, the mission list (first mission: the arena's jump training): the mission starts with 4 nodes closed; a third player is refused ("The server is full"); the host's auto-save goes to `multiplayer-campaign.bin`, the guest's is refused; while the guest plays Daxter the host's Jak has no Daxter (sidekick off), he is back once the guest leaves; after 3 more nodes closed (7), "Continue the campaign" loads the save: 4 again. |
+| `daxter-fire` | Daxter fires every weapon | The weapons cheat gives the twelve mods; Daxter fires each one at the host 4 to 7 m away: 47 hits taken, by ten kinds of shots (scatter gun, wave concussor, blaster, beam reflexor, gyro burster, vulcan fury, needle lazer, peace maker, mass inverter, super nova); screenshots of the blaster and the arc wielder fired by Daxter. |
+| `outline` | Another player through a vehicle | In the open 9 m away, about 107 pixels of fill and outline (its feet in the ground); behind a Rhino buggy spawned between the players, 1770 to 1848: its red outline shows through the buggy (screenshot). |
+| `player-list` | Health | The list gives each player's health (8/8) next to its ping (16 ms). |
+| `join-world --loss 10` | The world save over a lossy link | The 42928-byte world arrives whole: every check of `join-world` passes. |
+
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
 passed, 0 failed, no crash):
@@ -762,12 +919,17 @@ passed, 0 failed, no crash):
 | ![The guest in the street before the host starts the elevator](multiplayer-screenshots/elevator-guest-before.jpg) | ![The guest carried up the shaft by the elevator the host started](multiplayer-screenshots/elevator-guest-riding.jpg) |
 | ![The host's laser sight, drawn from its gun's copy](multiplayer-screenshots/remote-laser.jpg) | ![The host's shot in flight and its impact, as the guest sees them](multiplayer-screenshots/remote-shot.jpg) |
 | ![The guest at the title screen, before joining](multiplayer-screenshots/join-title.jpg) | ![The same guest after joining: next to the host, in the host's world](multiplayer-screenshots/join-joined.jpg) |
+| ![The host behind a buggy, outlined in red through it](multiplayer-screenshots/outline-through-vehicle.jpg) | ![Daxter firing the arc wielder at the host](multiplayer-screenshots/daxter-arc-wielder.jpg) |
+| ![The game mode list, six modes grayed out](multiplayer-screenshots/lobby-modes.jpg) | ![The lobby in free roam](multiplayer-screenshots/lobby-free-roam.jpg) |
+| ![The on-screen keyboard](multiplayer-screenshots/keyboard.jpg) | ![The player list with health and ping](multiplayer-screenshots/player-list-health.jpg) |
+| ![Co-op: Jak without Daxter on his shoulder, Daxter played by the other player](multiplayer-screenshots/coop-no-shoulder-daxter.jpg) | |
 
-The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): `vehicle-prompt`,
-`remote-laser`, `remote-shot` and `join-*` from the last round (2026-10-15), the others from
-earlier rounds.
+The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the outline,
+Daxter's arc wielder, the lobby, the keyboard, the player list and the co-op one from the round of
+2026-10-19; `vehicle-prompt`, `remote-laser`, `remote-shot` and `join-*` from 2026-10-15; the others
+from earlier rounds.
 
-Over the Internet, the host forwards TCP port 7777 (or the port chosen) and guests use the host's
+Over the Internet, the host forwards UDP port 7777 (or the port chosen) and guests use the host's
 public IP.
 
 ## 6. Known limits
@@ -799,8 +961,19 @@ public IP.
   shown: meanwhile both are seen.
 - The scenarios run two instances on one machine; `--latency` delays what each receives (one
   way, with jitter), not a real link's losses or bandwidth limits.
-- Text fields use the D-pad (keyboard arrows work too).
-- TCP head-of-line blocking can stall a player on a lossy link (interpolation hides short stalls).
+- UDP without congestion control: the session sends what the frame produces (about 0.85 MB/s
+  per other player with a crowd nearby, 1.1) whatever the link; a slow link loses states and
+  poses (the next ones replace them) and resends events.
+- Text fields use the on-screen keyboard; a PC keyboard drives it as a controller (no typing).
+- Outlines show a player hidden by anything, our own player's model included, and a few pixels
+  of a player's feet where they sink into the ground.
+- Daxter's gun is drawn in its holstered shape before him (the gun's `use` state, which shapes
+  each mod, would run Jak's gun code); his shots auto-aim at enemies, guards, civilians and
+  crates, not at players (as Jak's).
+- Six game modes of the list are placeholders (grayed out).
+- Free roam starts at Spargus; a guest's progress is the host's (it joins the host's world).
+- Co-op: one multiplayer campaign per host (a new campaign or a mission replaces it at its first
+  save).
 - Another player's Dark Jak has no dark texture swap (a purple tint instead) and keeps its eyes;
   Light Jak's wings and shield are not drawn (their art is loaded only with our own Light Jak).
 - The wave concussor's charge glow is not drawn on its copy (its particles follow our own gun);
@@ -812,6 +985,29 @@ public IP.
   stock pause rule is extended to other players as a safeguard (4.6).
 
 ## 7. Change log
+
+- **2026-10-19:** the user's nine-point request.
+  - *UDP.* The session runs over UDP: states, objects and poses unreliable (only newer than the
+    last delivered), join, events and the world save on a reliable ordered channel (sequence
+    numbers, selective acknowledgements, resends); protocol 7 (1.1). `--loss` drops received
+    datagrams in tests; a unit test sends a 200 KB world and 200 events under 20 % loss.
+  - *Every weapon, for Jak and Daxter.* Mods menu > Give every weapon. Daxter fires every mod
+    with R1, chosen with the D-pad, aimed at the nearest enemy ahead; the wave concussor and the
+    peace maker charge through subtypes of theirs (4.8).
+  - *Outlines through walls,* in each player's color: a pass of the PC renderer after the 3D
+    scene (4.9).
+  - *On-screen keyboard* for the name and the address (1.8).
+  - *Lobby:* Host Game opens the lobby with the server, which guests join before any game starts;
+    the game mode list shows eight modes, six grayed out (coming soon) (1.8).
+  - *Free roam* is the end of the game: the story closed, everything unlocked, for every player;
+    nothing saved (1.7).
+  - *Co-op:* two players; a new campaign, the campaign continued, or a mission of the story; the
+    host's saves go into its multiplayer campaign file; Jak has no Daxter on his shoulder while
+    the other player plays Daxter, who sits there himself when perched (1.7).
+  - *Player list:* each player's health next to its ping (4.7).
+  - *Tests.* Scenarios `outline`, `daxter-fire`, `coop-campaign`, `lobby` (rewritten); commands
+    `look-player`, `log-outline`, `cheat weapons`, `daxter-mod`, `log-daxter-gun`, `log-name`,
+    `log-session`, `coop-start`, `log-missions`; `log-ping` gives the health.
 
 - **2026-10-16 (evening):** himstan's menus and duo, Daxter in vehicles. The parts that follow
   himstan's [Jak and Daxter II Multiplayer](https://github.com/himstan/Jak-And-Daxter-2-Multiplayer)
