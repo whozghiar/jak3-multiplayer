@@ -64,6 +64,7 @@
 ;;   log-end                                                 a session ended without us: the note, where we are
 ;;   log-scene-skins                                         the cutscene's Jak and Daxter actors and their outfit tints
 ;;   log-econ | goto-merchant | goto-orb                     balances; stand at Kleiver's shop; take the nearest orb
+;;   merchant-spot <i>                                       host: the merchant at spot i, sent to everyone
 ;;   econ-claim <aid> | shop-buy <item>                      claim an orb not taken (0: the nearest; refused); buy a shop item
 ;;   econ-grant <slot> <orbs>                                the host credits a player (test of the server's accounts)
 ;;   kill-mh <slot>                                          host: a lethal blow from player slot to the nearest Metal Head
@@ -1596,6 +1597,19 @@
          (format 0 "[mp-test] econ host key ~S credits ~D refused ~D saves ~D game skill ~f~%" (-> *mp-econ* key)
                  (-> *mp-econ* credits) (-> *mp-econ* refused) (pc-mp-econ-saves) (-> *game-info* skill)
                  )
+         (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+           (format 0 "[mp-test] merchant spot ~D at ~m ~m ~m icon ~A name-drawn ~D~%" (-> *mp-econ* spot)
+                   (-> *mp-merchant-pos* x) (-> *mp-merchant-pos* y) (-> *mp-merchant-pos* z)
+                   (and mgr (-> mgr merchant-icon) #t) (-> *mp-econ* tag-drawn)
+                   )
+           )
+         )
+        ((string= cmd "merchant-spot")
+         ;; merchant-spot <i>: host, the merchant at spot i, sent to every player (their balances again)
+         (when (= *mp-mode* (mp-mode host))
+           (mp-merchant-set-spot (mp-test-int))
+           (set! (-> *mp-econ* sent) (the-as uint 0))
+           )
          )
         ((string= cmd "goto-merchant")
          ;; goto-merchant: stand at Kleiver's spot in Spargus (his shop)

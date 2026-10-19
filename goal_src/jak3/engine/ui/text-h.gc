@@ -1750,6 +1750,7 @@
   (progress-mp-race-choice-perched #x1597)
   (progress-mp-spectating #x1598)
   (progress-mp-respawn-in #x1599)
+  (progress-mp-merchant #x159a)
   )
 ;; ---text-id
 

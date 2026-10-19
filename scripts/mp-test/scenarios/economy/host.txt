@@ -1,11 +1,13 @@
 # Economy, host side (the server keeps the accounts). Takes the nearest precursor orb (credited once
 # its entity is checked), claims an orb it did not take (refused), credits the guest 12 orbs; ends the
-# session (accounts saved, the closing recorded), hosts again: the accounts are loaded back.
+# session (accounts saved, the closing recorded), hosts again: the accounts are loaded back. Kleiver
+# stands at the doors (spot 0), where the guest shops.
 1 enable
 1 name Host
 1 color 1
 38 host 0.0.0.0:7777
 44.9 wait-player 1
+47 merchant-spot 0
 50 log-econ
 51 goto-orb
 54 log-econ

@@ -1,0 +1,37 @@
+# Merchant, host side: its accounts open at a random spot of Kleiver's; then it puts him at each of
+# his 4 spots in turn (sent to the guest), goes there and stands on the ground: his name over the
+# spot, his icon on the minimap, his shop's line.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 log-econ
+50 merchant-spot 0
+51 continue wasdoors-city
+61 goto-merchant
+62 stick 128 255 700
+64 log-econ
+64.2 log-me
+64.5 screenshot spot0
+66 merchant-spot 1
+67 continue wascitya-start
+77 goto-merchant
+78 stick 128 255 700
+80 log-econ
+80.2 log-me
+80.5 screenshot spot1
+82 merchant-spot 2
+83 continue wascityb-start
+93 goto-merchant
+94 stick 128 255 700
+96 log-econ
+96.2 log-me
+96.5 screenshot spot2
+98 merchant-spot 3
+99 goto-merchant
+100 stick 128 255 700
+102 log-econ
+102.2 log-me
+102.5 screenshot spot3
+104 log

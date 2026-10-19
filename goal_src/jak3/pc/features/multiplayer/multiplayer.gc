@@ -2644,6 +2644,8 @@
 (define-extern mp-draw-race-wait (function none))
 (define-extern mp-draw-beam-count (function none)) ;; "Waypoints reached together", below
 (define-extern mp-draw-merchant (function none))
+(define-extern mp-draw-merchant-name (function dma-buffer none))
+(define-extern mp-merchant-set-spot (function int none))
 (define-extern mp-draw-spectate (function none)) ;; "Co-op: back next to a teammate", below
 (define-extern mp-econ-claim-orb (function int uint none))
 (define-extern mp-econ-apply (function mp-event none))
@@ -2668,6 +2670,7 @@
    (world-time  time-frame)
    (last-hit    time-frame)
    (spawn-retry time-frame) ;; last failed puppet spawn (process pool full)
+   (merchant-icon connection-minimap) ;; Kleiver's icon on the minimap while he is out, #f
    (event       mp-event :inline)
    )
   )
@@ -3971,6 +3974,7 @@
   (set! (-> self ride-want) -1)
   (set! (-> self steal-want) -1)
   (set! (-> self tp-slot) -1)
+  (set! (-> self merchant-icon) #f)
   (go mp-manager-active)
   )
 
@@ -5035,6 +5039,7 @@
               )
           )
         )
+      (mp-draw-merchant-name buf)
       (when (< (- (mp-now) (-> *mp-globals* message-time)) (seconds 4))
         (mp-draw-text buf *mp-message* 256 360 0.5)
         )
@@ -5481,14 +5486,18 @@
    (result    int32)       ;; our last purchase: 0 none, 1 bought, 2 refused, 3 equipped
    (result-at time-frame)
    (near?     symbol)      ;; we stand at the merchant
+   (spot      int32)       ;; the merchant's spot this session (*mp-merchant-spots*), -1 none yet
+   (tag-drawn int32)       ;; frames his name was drawn (test log)
    )
   )
 
 (define *mp-econ* (new 'global 'mp-econ-state))
 (set! (-> *mp-econ* open?) #f)
 (set! (-> *mp-econ* near?) #f)
+(set! (-> *mp-econ* spot) -1)
 (set! (-> *mp-econ* key) (new 'global 'string 32 (the-as string #f)))
 (define *mp-econ-name* (new 'global 'string 32 (the-as string #f)))
+(defconstant MP_MERCHANT_SPOTS 4) ;; Kleiver's spots (*mp-merchant-spots*, below)
 
 (define-extern pc-mp-econ-open (function string none))
 (define-extern pc-mp-econ-close (function none))
@@ -5564,6 +5573,7 @@
           (set! (-> ev iarg 1) trophies)
           (set! (-> ev iarg 2) items)
           (set! (-> ev iarg 3) result)
+          (set! (-> ev fvec x) (the float (-> *mp-econ* spot)))
           (pc-mp-send-event ev)
           )
         )
@@ -5579,6 +5589,7 @@
     (set! (-> *mp-econ* trophies) (-> ev iarg 1))
     (set! (-> *mp-econ* items) (the-as uint (-> ev iarg 2)))
     (pc-mp-econ-set-own (-> ev iarg 0) (-> ev iarg 1) (-> ev iarg 2))
+    (mp-merchant-set-spot (the int (-> ev fvec x)))
     (when (nonzero? (-> ev iarg 3))
       (set! (-> *mp-econ* result) (-> ev iarg 3))
       (set! (-> *mp-econ* result-at) (mp-now))
@@ -5770,6 +5781,8 @@
                             )
        (pc-mp-econ-open (-> e key))
        (set! (-> e open?) #t)
+       (mp-merchant-set-spot (rand-vu-int-count MP_MERCHANT_SPOTS))
+       (format 0 "[multiplayer] the merchant is at spot ~D~%" (-> e spot))
        (set! (-> e claims) 0)
        (set! (-> e sent) (the-as uint 0))
        (mp-econ-send *mp-local-slot* 0)
@@ -5823,20 +5836,107 @@
     )
   )
 
-;; Kleiver's shop, in Spargus: at his garage, a line of his and a prompt; triangle opens the START
+;; Kleiver's shop, in Spargus: at his spot, a line of his and a prompt; triangle opens the START
 ;; menu on the shop's page (multiplayer-menu.gc, 'mp-shop), the only page offering trades for orbs.
-(define *mp-merchant-pos* (new 'static 'vector :x 9306030.0 :y 125214.7 :z 686858.2 :w 1.0)) ;; 2271.98 30.57 167.69 m
+;; The host draws his spot among these when its accounts open, and sends it with the balances: the
+;; same for every player. His icon shows on the minimap (and the big map), "Merchant" in yellow
+;; over the spot, as a player's name. Only the spot: his model is not loaded in Spargus.
+(define *mp-merchant-spots*
+  (new 'static 'inline-array vector 4
+    (new 'static 'vector :x 9306030.0 :y 125214.7 :z 686858.2 :w 1.0)    ;; his garage at the doors, 2271.98 30.57 167.69 m
+    (new 'static 'vector :x 9234227.0 :y 27033.6 :z -281845.75 :w 1.0)   ;; the lower city's square, 2254.45 6.60 -68.81 m
+    (new 'static 'vector :x 6533816.5 :y 86671.36 :z -1681449.0 :w 1.0)  ;; his spot in the upper city (his minimap icon's)
+    (new 'static 'vector :x 6151454.5 :y 118784.0 :z -1344594.0 :w 1.0)  ;; the upper city, 1501.82 29.0 -328.27 m
+    )
+  )
+
+(define *mp-merchant-pos* (new 'static 'vector :x 9306030.0 :y 125214.7 :z 686858.2 :w 1.0)) ;; his spot this session
 (defconstant MP_MERCHANT_RANGE (meters 4))
+
+;; His minimap icon: Kleiver's own (class 116, kleever-wascityb: his face, shown in the wasteland
+;; and on the big map), without the trail the missions draw to him, kept on the minimap's edge when
+;; far.
+(define *mp-merchant-node* (new 'global 'minimap-class-node))
+(mem-copy! (the-as pointer *mp-merchant-node*) (the-as pointer (-> *minimap-class-list* 116)) (size-of minimap-class-node))
+(set! (-> *mp-merchant-node* flags) (minimap-flag clamp bigmap local-only transport wasall))
+
+(defun mp-merchant-set-spot ((spot int))
+  "The merchant at spot `spot` of *mp-merchant-spots* (*mp-merchant-pos*); -1 or out of range: none."
+  (cond
+    ((and (>= spot 0) (< spot MP_MERCHANT_SPOTS))
+     (set! (-> *mp-econ* spot) spot)
+     (vector-copy! *mp-merchant-pos* (-> *mp-merchant-spots* spot))
+     )
+    (else
+      (set! (-> *mp-econ* spot) -1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-update-merchant-icon ()
+  "His minimap icon while his spot is known, owned by the manager (removed with it)."
+  (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+    (when mgr
+      (cond
+        ((and (>= (-> *mp-econ* spot) 0) (not (-> mgr merchant-icon)))
+         (let ((icon (add-icon! *minimap* mgr (the-as uint 116) (the-as int #f) *mp-merchant-pos* 0)))
+           (when icon
+             (set! (-> icon class) *mp-merchant-node*)
+             (set! (-> mgr merchant-icon) icon)
+             )
+           )
+         )
+        ((and (< (-> *mp-econ* spot) 0) (-> mgr merchant-icon))
+         (kill-callback (-> *minimap* engine) (-> mgr merchant-icon))
+         (set! (-> mgr merchant-icon) #f)
+         )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-merchant-name ((buf dma-buffer))
+  "\"Merchant\" in yellow over his spot within 80 m, as a player's name (mp-draw-nameplate)."
+  (when (>= (-> *mp-econ* spot) 0)
+    (let ((pos (new 'stack-no-clear 'vector))
+          (scr (new 'stack-no-clear 'vector))
+          )
+      (vector-copy! pos *mp-merchant-pos*)
+      (+! (-> pos y) (meters 2.6))
+      (when (and (< (vector-vector-distance pos (math-camera-pos)) (meters 80)) (transform-point-vector! scr pos))
+        (let ((x (the int (+ -1792.0 (-> scr x))))
+              (y (the int (+ -1840.0 (-> scr y))))
+              )
+          (when (and (< 24 x) (< x 488) (< 24 y) (< y 400))
+            (let ((ctx (new 'stack 'font-context *font-default-matrix* x (+ y -14) 0.0 (font-color yellow) (font-flags shadow kerning middle large))))
+              (set! (-> ctx scale) 0.45)
+              (draw-string-adv (lookup-text! *common-text* (text-id progress-mp-merchant) #f) buf ctx)
+              )
+            (+! (-> *mp-econ* tag-drawn) 1)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
 
 (defun mp-update-merchant ()
   "In game online, on foot within 4 m of Kleiver's spot (on the ground, 4 m above or below): his
-   line shows; triangle opens the shop."
+   line shows; triangle opens the shop. Offline he has no spot."
   (let ((e *mp-econ*))
+    (if (not (mp-online?))
+        (set! (-> e spot) -1)
+        )
+    (mp-update-merchant-icon)
     (set! (-> e near?) (if (and (mp-online?)
                             *target*
                             (mp-in-game?)
                             (not *progress-process*)
                             (not (focus-test? *target* pilot grabbed dead))
+                            (>= (-> e spot) 0)
                             (< (vector-vector-xz-distance (-> *target* control trans) *mp-merchant-pos*) MP_MERCHANT_RANGE)
                             (< (fabs (- (-> *target* control trans y) (-> *mp-merchant-pos* y))) (meters 4))
                             )

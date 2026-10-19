@@ -754,6 +754,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "merchant":
+        hm = grab(host, r"\] merchant spot (-?\d+) at \S+ \S+ \S+ icon (\S+) name-drawn (\d+)")
+        cm = grab(client, r"\] merchant spot (-?\d+) at \S+ \S+ \S+ icon (\S+) name-drawn (\d+)")
+        me = grab(host, r"\] me \S+ (\S+) \S+ speed \S+ state (\S+)")
+        ce = grab(client, r"\] econ orbs \d+ trophies \d+ items #x\w+ result \d+ near (\S+)")
+        c.check(scenario, "the host draws Kleiver's spot when its accounts open, the guest gets the same",
+                any("the merchant is at spot" in l for l in host) and bool(hm) and bool(cm) and hm[0][0] == cm[0][0] != "-1",
+                f"host {hm[:1]}, guest {cm[:1]}")
+        c.check(scenario, "each spot the host sets reaches the guest (0, 1, 2, 3)",
+                [s for s, _, _ in hm[1:]] == ["0", "1", "2", "3"] and [s for s, _, _ in cm[2:]] == ["1", "2", "3"]
+                and cm[1][0] == "0", f"host {[s for s, _, _ in hm]}, guest {[s for s, _, _ in cm]}")
+        c.check(scenario, "every spot is on the ground (the host stands there)",
+                len(me) == 4 and all(st == "target-stance" for _, st in me), f"{me}")
+        c.check(scenario, "his icon is on the minimap, his name drawn, his shop's line at his spot (guest)",
+                all(i == "#t" for _, i, _ in hm + cm) and int(hm[-1][2]) > int(hm[1][2]) > 0 and int(cm[1][2]) > 0
+                and len(ce) > 1 and ce[1][0] == "#t", f"host {hm}, guest near {ce}")
+
     elif scenario == "economy":
         settings = OUT / "economy" / "host" / "OpenGOAL" / "jak3" / "settings"
         ge = grab(client, r"\] econ orbs (\d+) trophies (\d+) items #x(\w+) result (\d+) near (\S+)")

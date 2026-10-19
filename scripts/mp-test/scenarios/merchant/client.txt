@@ -1,0 +1,16 @@
+# Merchant, guest side: gets the host's spot with its balances; at spot 0 (the doors) stands on it:
+# his line and prompt, his name, his icon; logs the spot the host sends after each move.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+48 log-econ
+51 continue wasdoors-city
+61 goto-merchant
+64 log-econ
+64.5 screenshot guest-spot0
+80 log-econ
+96 log-econ
+102 log-econ
+104 log
