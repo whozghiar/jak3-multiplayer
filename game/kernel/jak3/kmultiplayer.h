@@ -28,7 +28,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 7;
+constexpr u32 kProtocolVersion = 8;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -75,9 +75,12 @@ struct PlayerState {
   s16 lobby_mission;    // 196 host: co-op mission chosen
   s16 top_index;        // 198 Daxter's gun clip on his upper body (art group index), -1 = none
   float top_frame;      // 200 its frame
-  u32 pad1;             // 204
+  u32 powers;           // 204 Dark / Light Jak as the model shows them (mp-pack-powers)
+  u16 countdown_ms;     // 208 host: ms before the lobby's game starts, 0 = no countdown
+  u16 resume_ms;        // 210 host: ms before the paused game resumes, 0 = none
+  u32 pad1[3];          // 212
 };
-static_assert(sizeof(PlayerState) == 208, "PlayerState must match mp-player-state");
+static_assert(sizeof(PlayerState) == 224, "PlayerState must match mp-player-state");
 
 // Mirrors the GOAL type `mp-event`. `kind` and the arguments are defined in GOAL.
 struct Event {

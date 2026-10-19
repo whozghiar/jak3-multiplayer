@@ -592,6 +592,17 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         started = grab(host, r"game started: (\S+)")
         c.check(scenario, "X waits for the guest to be ready, then starts free roam",
                 "#f" in ready and started[:1] == [("free",)], f"all-ready {ready}, started {started}")
+        events = grab(host, r"\[multiplayer\] lobby countdown (started|cancelled|over)")
+        c.check(scenario, "X starts the 10 s countdown, X again cancels it, the second one starts the game",
+                [e for (e,) in events] == ["started", "cancelled", "started", "over"], f"{events}")
+        hc = [int(ms) for (ms,) in grab(host, r"\] lobby countdown (\d+) ms")]
+        gc = [int(ms) for (ms,) in grab(client, r"\] lobby countdown (\d+) ms")]
+        c.check(scenario, "the host and the guest both see the countdown",
+                any(5000 < ms <= 10000 for ms in hc) and any(5000 < ms <= 10000 for ms in gc), f"host {hc}, guest {gc}")
+        gready = grab(client, r"\] lobby mode 2 players \d+ coop \S+ all-ready \S+ ready (\S+)")
+        gcancel = [int(t) for (t,) in grab(client, r"\] lobby countdown 0 ms, cancelled (-?\d+) s ago")]
+        c.check(scenario, "the guest sees the host cancel it, and X no longer unreadies it meanwhile",
+                any(0 <= t <= 3 for t in gcancel) and gready[-3:] == [("#t",)] * 3, f"cancelled {gcancel}, ready {gready[-3:]}")
         sess = grab(host, r"session kind (\S+) unlock-pending (\S+) saves \d+ campaign \S+ closed (\d+)")
         win = grab(host, r"session sidekick-hidden \S+ sidekick \S+ character \d+ indax \S+ city-win (\S+)")
         c.check(scenario, "free roam is the end of the game: the story closed, everything unlocked (host)",

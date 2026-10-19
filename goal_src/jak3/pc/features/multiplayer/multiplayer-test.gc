@@ -14,6 +14,7 @@
 ;;   host <ip:port> | join <ip:port> | leave                 session
 ;;   address <ip:port> | log-lobby                           server address field only; menu page, title entries, lobby
 ;;   wait-menu <page>                                        the script waits: the menu shows that page (title...)
+;;   wait-countdown                                          the script waits: the lobby's start countdown runs
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -77,7 +78,7 @@
 ;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
 ;; (mp-test-update).
 (deftype mp-test-waiting (structure)
-  ((kind  symbol)     ;; 'joined, 'player, 'menu or #f
+  ((kind  symbol)     ;; 'joined, 'player, 'menu, 'countdown or #f
    (slot  int32)
    (menu  symbol)     ;; the menu page waited for
    (since time-frame)
@@ -1314,6 +1315,9 @@
                  (-> *mp-config* mode) (-> *mp-session* coop-start) (-> *mp-session* coop-mission) (mp-max-players)
                  )
          (format 0 "[mp-test] lobby line ~S~%" (mp-lobby-mode-line *mp-lobby-line*))
+         (format 0 "[mp-test] lobby countdown ~D ms, cancelled ~D s ago~%" (mp-lobby-countdown-ms)
+                 (if (nonzero? (-> *mp-globals* lobby-cancel)) (/ (- (mp-now) (-> *mp-globals* lobby-cancel)) 300) -1)
+                 )
          (dotimes (row (+ 1 (mp-player-count)))
            (let* ((slot (mp-lobby-slot row))
                   (st (mp-slot-state slot))
@@ -1848,6 +1852,11 @@
          (set! (-> *mp-test-wait* menu) (string->symbol (-> *mp-test* word)))
          (set! (-> *mp-test-wait* since) 0)
          (set! (-> *mp-test-wait* kind) 'menu)
+         (pc-mp-test-pause #t)
+         )
+        ((string= cmd "wait-countdown")
+         ;; the script waits until the lobby's start countdown runs (the host's, for a guest)
+         (set! (-> *mp-test-wait* kind) 'countdown)
          (pc-mp-test-pause #t)
          )
         ((string= cmd "wait-player")
@@ -2405,6 +2414,9 @@
     (case (-> w kind)
       (('joined)
        (= (-> *mp-join* stage) 4)
+       )
+      (('countdown)
+       (> (mp-lobby-countdown-ms) 0)
        )
       (('menu)
        (cond

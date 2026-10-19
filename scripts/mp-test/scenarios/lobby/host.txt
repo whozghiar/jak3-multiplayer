@@ -3,8 +3,9 @@
 # multiplayer options: the name field opens the on-screen keyboard, where "Host" becomes "Jak3"
 # (D-pad moves, X types, square deletes, L1 capitals, START keeps it); triangle comes back. Square
 # opens the game mode list (six modes grayed out, coming soon), free roam is chosen; X is refused
-# while the guest is not ready, then starts free roam: the end of the game, everything unlocked, and
-# the guest follows into that world.
+# while the guest is not ready; once it is, X starts the 10 s countdown, X again cancels it, X starts it
+# again and free roam starts when it is over: the end of the game, everything unlocked, and the guest
+# follows into that world.
 1 enable
 1 name Host
 1 color 1
@@ -87,6 +88,12 @@
 88 log-lobby
 89 press x 100
 91 log-lobby
-130 log-session
-131 screenshot free-roam
-132 log
+91.5 screenshot lobby-countdown
+94 press x 100
+95 log-lobby
+95.3 screenshot lobby-cancelled
+98 press x 100
+104 log-lobby
+140 log-session
+141 screenshot free-roam
+142 log

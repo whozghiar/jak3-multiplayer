@@ -96,7 +96,7 @@
   (free 5)      ;; the host plays the free roam it started from the lobby (everything unlocked)
   )
 
-;; One player's state. 208 bytes, mirrors mp::PlayerState.
+;; One player's state. 224 bytes, mirrors mp::PlayerState.
 (deftype mp-player-state (structure)
   ((trans      vector     :inline)
    (quat       quaternion :inline)
@@ -125,9 +125,12 @@
    (lobby-mission int16)   ;; host: game-task of the co-op mission chosen, -1 none
    (top-index  int16)      ;; Daxter's gun clip on his upper body, index in his art group, -1 none
    (top-frame  float)      ;; its frame
-   (pad1       uint32)
+   (powers     uint32)     ;; Dark Jak and Light Jak as the model shows them (mp-pack-powers)
+   (countdown  uint16)     ;; host: ms before the lobby's game starts, 0 no countdown (multiplayer-menu.gc)
+   (resume     uint16)     ;; host: ms before the paused game resumes, 0 none ("Pause for everyone")
+   (pad1       uint32 3)
    )
-  :size-assert #xd0
+  :size-assert #xe0
   )
 
 ;; One network event. 80 bytes, mirrors mp::Event.
@@ -245,6 +248,9 @@
   ((manager       handle)     ;; the mp-manager process
    (manager-retry time-frame) ;; real-clock time of the last failed manager spawn
    (message-time  time-frame) ;; real-clock time the notification was set
+   (lobby-go      time-frame) ;; host: real-clock time the lobby's countdown ends, 0 none
+   (lobby-cancel  time-frame) ;; when the lobby's countdown was cancelled (its hint), 0 never
+   (lobby-last    int32)      ;; the countdown's ms left as last seen (a guest notices a cancel)
    )
   )
 
@@ -714,6 +720,7 @@
 (defun mp-leave! ()
   "Leave the session (a host stops its server)."
   (set! *mp-lobby-ready* #f)
+  (set! (-> *mp-globals* lobby-go) 0)
   (when (!= *mp-mode* (mp-mode offline))
     (pc-mp-leave)
     (set! *mp-mode* (mp-mode offline))
@@ -736,15 +743,19 @@
   )
 
 (defun mp-pack-powers ((tgt target) (st mp-player-state))
-  "Dark Jak and Light Jak as our model shows them, in the free bits of the state's flags: bits 8-15
-   darkjak-interp, 16-23 lightjak-interp (0-255), 24 no-textures and 25 rim-lights (the light look,
-   target-effect te0-te2 and te3-te5), 26-29 the invisible fade (force-fade 16-128 as 1-15, 0 off),
-   30 scarf and 31 goggles (blend shapes, target-draw-process). The puppet applies them
-   (mp-puppet-apply-powers)."
-  (let ((f (the-as uint (-> st flags)))
+  "Dark Jak and Light Jak as our model shows them, in the state's powers field: bits 0-7 Dark Jak's
+   skin (the texture morph target-darkjak-process sets: 1 under the dark eco powerup, te6, else
+   darkjak-interp), 8-15 darkjak-interp, 16-23 lightjak-interp (0-255), 24 no-textures and 25
+   rim-lights (the light look, target-effect te0-te2 and te3-te5), 26-29 the invisible fade
+   (force-fade 16-128 as 1-15, 0 off), 30 scarf and 31 goggles (blend shapes, target-draw-process).
+   The puppet applies them (mp-puppet-apply-powers). Until protocol 8 they were packed in the flags
+   from bit 8, over the lobby's ready and co-op flags."
+  (let ((f (the-as uint 0))
         (fx (-> tgt target-effect))
+        (dark (fmax 0.0 (fmin 1.0 (-> tgt darkjak-interp))))
         )
-    (set! f (logior f (shl (the int (* 255.0 (fmax 0.0 (fmin 1.0 (-> tgt darkjak-interp))))) 8)))
+    (set! f (logior f (the int (* 255.0 (if (logtest? fx (target-effect te6)) 1.0 dark)))))
+    (set! f (logior f (shl (the int (* 255.0 dark)) 8)))
     (set! f (logior f (shl (the int (* 255.0 (fmax 0.0 (fmin 1.0 (-> tgt lightjak-interp))))) 16)))
     (if (logtest? fx (target-effect te0 te1 te2))
         (set! f (logior f (shl 1 24)))
@@ -761,9 +772,33 @@
     (if (< 0.5 (-> tgt goggles-interp))
         (set! f (logior f (shl 1 31)))
         )
-    (set! (-> st flags) (the-as mp-flag f))
+    (set! (-> st powers) f)
     )
   (none)
+  )
+
+;; The lobby's start countdown (multiplayer-menu.gc): the host's X starts it once every guest is
+;; ready, 10 s during which every player in the lobby sees it, and X again cancels it. The time left
+;; travels in the host's state (countdown).
+(defconstant MP_LOBBY_COUNTDOWN (seconds 10))
+
+(defun mp-lobby-countdown-ms ()
+  "Milliseconds left before the lobby's game starts: our countdown as host, the host's as a guest;
+   0 when none runs (1 once a host's countdown is over, until the game starts)."
+  (cond
+    ((= *mp-mode* (mp-mode host))
+     (if (nonzero? (-> *mp-globals* lobby-go))
+         (max 1 (/ (* 10 (- (-> *mp-globals* lobby-go) (mp-now))) 3))
+         0
+         )
+     )
+    ((mp-remote-state 0)
+     (the-as int (-> (mp-remote-state 0) countdown))
+     )
+    (else
+      0
+      )
+    )
   )
 
 (defun mp-build-local-state ()
@@ -799,7 +834,13 @@
     (set! (-> st lobby-mode) (the-as uint (-> *mp-config* mode)))
     (set! (-> st lobby-start) (the-as uint (-> *mp-session* coop-start)))
     (set! (-> st lobby-mission) (-> *mp-session* coop-mission))
+    (set! (-> st countdown) (if (= *mp-mode* (mp-mode host))
+                                (the-as uint (min #xffff (mp-lobby-countdown-ms)))
+                                (the-as uint 0)
+                                )
+          )
     (set! (-> st seg-mask) (the-as uint 0))
+    (set! (-> st powers) (the-as uint 0))
     (cond
       ;; joining: still at the title screen or loading the host's world
       ((or (not *target*) (and (> (-> *mp-join* stage) 0) (< (-> *mp-join* stage) 3)))
@@ -1032,7 +1073,7 @@
    are left out (mp-play-emitters): these, on the puppet's own body, replace them. The dark texture
    swap is global (one palette for every model of Jak): a dark tint stands for it. Light Jak's
    wings live in art loaded only for our own player's light mode: not shown here."
-  (let* ((f (the-as uint (-> st flags)))
+  (let* ((f (-> st powers))
          (dark (* 0.003921569 (the float (logand (shr f 8) 255))))
          (light (* 0.003921569 (the float (logand (shr f 16) 255))))
          (fade (the-as int (logand (shr f 26) 15)))

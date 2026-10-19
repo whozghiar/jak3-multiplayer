@@ -1,7 +1,8 @@
 # Lobby, guest side: back to the title screen, Join Game > Connect opens the lobby of the host, who
 # has not started any game yet (both wait there); the guest sees the host's choices (free roam), says
-# it is ready (X), and follows into the host's free roam once it starts: the end of the game, everything
-# unlocked for the guest too.
+# it is ready (X), sees the host's start countdown (X no longer changes its ready state), then the host
+# cancelling it, then the countdown again, and follows into the host's free roam once it starts: the end
+# of the game, everything unlocked for the guest too.
 1 enable
 1 name Guest
 1 color 2
@@ -23,7 +24,16 @@
 84 press x 100
 85 log-lobby
 85.5 screenshot lobby-guest-ready
-90 wait-joined
+86 wait-countdown
+87 log-lobby
+87.5 screenshot lobby-countdown-guest
+88 press x 100
+89 log-lobby
+92.5 log-lobby
+92.7 screenshot lobby-cancelled-guest
+93.5 wait-countdown
+94.5 log-lobby
+96 wait-joined
 97 log-join
 97.5 log-session
 98 screenshot joined

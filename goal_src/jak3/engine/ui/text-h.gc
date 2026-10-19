@@ -1693,6 +1693,9 @@
   (progress-mp-mission #x155d)
   (progress-mp-no-campaign #x155e)
   (progress-mp-free-hint #x155f)
+  (progress-mp-countdown #x1560)
+  (progress-mp-countdown-keys #x1561)
+  (progress-mp-countdown-cancelled #x1562)
   )
 ;; ---text-id
 

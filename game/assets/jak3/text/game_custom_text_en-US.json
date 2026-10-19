@@ -341,5 +341,8 @@
   "155c": "Co-op start",
   "155d": "Mission",
   "155e": "No multiplayer campaign yet",
-  "155f": "Free roam: the end of the game, everything unlocked"
+  "155f": "Free roam: the end of the game, everything unlocked",
+  "1560": "The game starts in ~D",
+  "1561": "<PAD_X> Cancel the start   <PAD_SQUARE> Game mode",
+  "1562": "The host cancelled the start"
 }

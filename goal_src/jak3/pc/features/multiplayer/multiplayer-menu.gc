@@ -432,7 +432,8 @@
 ;; details the selected one on the right, with his keys: X ready (guest) or start (host, once every
 ;; guest is ready), L1 / R1 character, circle multiplayer options, triangle leave. Written anew for
 ;; Jak 3's menus, with these differences: square switches the game mode (the host chooses free roam
-;; or co-op here), the host starts at once (no countdown), and guests join by address.
+;; or co-op here), the start countdown lasts 10 s (his: 3 s; X again cancels it, as his does), and
+;; guests join by address.
 ;; ------------------------------------------------------------------------------------------------
 
 ;; Title screen entries, shown while the mod is enabled (mp-update-title).
@@ -644,6 +645,50 @@
   (none)
   )
 
+(defun mp-lobby-cancel-countdown! ()
+  "Host: stop the lobby's start countdown, if one runs (X again, a guest no longer ready, another
+   page opened)."
+  (when (nonzero? (-> *mp-globals* lobby-go))
+    (set! (-> *mp-globals* lobby-go) 0)
+    (set! (-> *mp-globals* lobby-cancel) (mp-now))
+    (format 0 "[multiplayer] lobby countdown cancelled~%")
+    (sound-play "roll-over")
+    )
+  (none)
+  )
+
+(defun mp-lobby-update-countdown ()
+  "Every frame the lobby is shown. Host: the countdown is cancelled when a guest is no longer ready,
+   and starts the game once over. Guest: a countdown of the host's that went away well before its
+   end was cancelled (its hint)."
+  (cond
+    ((= *mp-mode* (mp-mode host))
+     (when (nonzero? (-> *mp-globals* lobby-go))
+       (cond
+         ((not (mp-lobby-all-ready?))
+          (mp-lobby-cancel-countdown!)
+          )
+         ((>= (mp-now) (-> *mp-globals* lobby-go))
+          (set! (-> *mp-globals* lobby-go) 0)
+          (format 0 "[multiplayer] lobby countdown over: the game starts~%")
+          (sound-play "window-expand")
+          (if (not (mp-start-game))
+              (sound-play "roll-over")
+              )
+          )
+         )
+       )
+     )
+    (else
+      (if (and (zero? (mp-lobby-countdown-ms)) (< 600 (-> *mp-globals* lobby-last)))
+          (set! (-> *mp-globals* lobby-cancel) (mp-now))
+          )
+      )
+    )
+  (set! (-> *mp-globals* lobby-last) (mp-lobby-countdown-ms))
+  (none)
+  )
+
 (defmethod draw-option ((this menu-mp-lobby-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
   "The lobby: session status and game mode, the players on the left, the selected one on the right,
    a hint and the keys at the bottom."
@@ -735,13 +780,34 @@
        )
       )
     (set-flags! font-ctx (font-flags kerning middle large))
-    (if (nonzero? hint)
-        (mp-lobby-print font-ctx (lookup-text! *common-text* hint #f) left (- bottom 66.0) width 0.4 (font-color font-color-33))
+    (let ((ms (mp-lobby-countdown-ms)))
+      (cond
+        ;; the start countdown, for every player of the lobby, in place of the hint; the host's keys
+        ;; say X cancels it
+        ((> ms 0)
+         (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-countdown) #f) (/ (+ ms 999) 1000))
+         (mp-lobby-print font-ctx *mp-lobby-line* left (- bottom 72.0) width 0.6 (font-color font-color-33))
+         )
+        ((and (nonzero? (-> *mp-globals* lobby-cancel)) (< (- (mp-now) (-> *mp-globals* lobby-cancel)) (seconds 3)))
+         (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-countdown-cancelled) #f)
+                         left (- bottom 66.0) width 0.4 (font-color font-color-33)
+                         )
+         )
+        ((nonzero? hint)
+         (mp-lobby-print font-ctx (lookup-text! *common-text* hint #f) left (- bottom 66.0) width 0.4 (font-color font-color-33))
+         )
         )
-    (mp-lobby-print font-ctx
-                    (lookup-text! *common-text* (if host? (text-id progress-mp-lobby-keys-host) (text-id progress-mp-lobby-keys-guest)) #f)
-                    left (- bottom 46.0) width 0.4 (font-color font-color-32)
-                    )
+      (mp-lobby-print font-ctx
+                      (lookup-text! *common-text* (cond
+                                                    ((and host? (> ms 0)) (text-id progress-mp-countdown-keys))
+                                                    (host? (text-id progress-mp-lobby-keys-host))
+                                                    (else (text-id progress-mp-lobby-keys-guest))
+                                                    )
+                                    #f
+                                    )
+                      left (- bottom 46.0) width 0.4 (font-color font-color-32)
+                      )
+      )
     (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-lobby-keys-2) #f)
                     left (- bottom 28.0) width 0.4 (font-color font-color-32)
                     )
@@ -751,9 +817,14 @@
 
 (defmethod respond-progress ((this menu-mp-lobby-option) (progress progress) (selected? symbol))
   "The lobby keys: up / down choose the player detailed, X ready (guest) or start (host, once every
-   guest is ready), L1 / R1 character, square game mode (host), circle multiplayer options, triangle
-   leave (the stock respond-to-cpad then goes back a page)."
-  (let ((host? (!= *mp-mode* (mp-mode client))))
+   guest is ready: a 10 s countdown every player sees, X again cancels it), L1 / R1 character, square
+   game mode (host), circle multiplayer options, triangle leave (the stock respond-to-cpad then goes
+   back a page). While the countdown runs a guest can change neither its ready state nor its
+   character, and the host's other pages cancel it."
+  (let ((host? (!= *mp-mode* (mp-mode client)))
+        (counting? (> (mp-lobby-countdown-ms) 0))
+        )
+    (mp-lobby-update-countdown)
     (cond
       ((cpad-pressed? 0 up l-analog-up)
        (cpad-clear! 0 up l-analog-up)
@@ -768,15 +839,20 @@
       ((cpad-pressed? 0 confirm)
        (cpad-clear! 0 confirm)
        (cond
+         ((and (= *mp-mode* (mp-mode client)) counting?)
+          (sound-play "roll-over")
+          )
          ((= *mp-mode* (mp-mode client))
           (set! *mp-lobby-ready* (not *mp-lobby-ready*))
           (sound-play "generic-beep")
           )
+         ((and (= *mp-mode* (mp-mode host)) counting?)
+          (mp-lobby-cancel-countdown!)
+          )
          ((and (= *mp-mode* (mp-mode host)) (mp-lobby-all-ready?))
-          (sound-play "window-expand")
-          (if (not (mp-start-game))
-              (sound-play "roll-over")
-              )
+          (set! (-> *mp-globals* lobby-go) (+ (mp-now) MP_LOBBY_COUNTDOWN))
+          (format 0 "[multiplayer] lobby countdown started~%")
+          (sound-play "generic-beep")
           )
          (else
            (sound-play "roll-over")
@@ -786,7 +862,7 @@
       ((cpad-pressed? 0 l1 r1)
        (cpad-clear! 0 l1 r1)
        (cond
-         ((and (not host?) *mp-lobby-ready*)
+         ((and (not host?) (or *mp-lobby-ready* counting?))
           (sound-play "roll-over")
           )
          (else
@@ -798,12 +874,16 @@
        )
       ((and host? (cpad-pressed? 0 square))
        (cpad-clear! 0 square)
+       (mp-lobby-cancel-countdown!)
        (sound-play "window-expand")
        (push-state progress)
        (set-next-state progress 'mp-mode 0)
        )
       ((cpad-pressed? 0 circle)
        (cpad-clear! 0 circle)
+       (if host?
+           (mp-lobby-cancel-countdown!)
+           )
        (sound-play "window-expand")
        (push-state progress)
        (set-next-state progress 'multiplayer 0)
