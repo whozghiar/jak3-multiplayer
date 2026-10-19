@@ -487,7 +487,7 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x157f` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page and the co-op lines. |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1580` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page and the co-op lines. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
@@ -836,27 +836,36 @@ always with `(target-pos 0)` and a radius of 3 to 40 m. In co-op, until every pl
 within 6 m of the beam (xz), the `target-pos` wrapper answers that process alone with our
 position pushed away from the beam, as far as the farthest player, 45 m at most: above every
 arrival radius, below the distances that fail a mission for going too far. The mission goes on
-once everyone is there. The beams are listed every frame from the process tree (shown ones: not
-`taf4`). "Players here: 1/2" shows at the bottom within 30 m of a beam.
+once everyone is there. A player still loading the host's world counts as away. The beams are
+listed every frame from the process tree (shown ones: not `taf4`). "Players here: 1/2" shows at the
+bottom within 30 m of a beam, the count of the nearest one; the log says when a held beam is
+released ("every player at the waypoint (2/2)").
 
 ### 4.15 Co-op: races
 
-Every player races with a vehicle of its own, or rides with another; the start waits until every
-player is aboard (multiplayer.gc, "Races"):
+In co-op, every player races with a vehicle of its own, or rides with another; the start waits
+until every connected player is aboard (multiplayer.gc, "Races"):
 
 - **A vehicle each.** A race continue point (`continue-flags race`) gives its vehicle where the
   player stands at the end of `target-continue`: each machine running the race gives its own
-  player one. A guest's player is moved aside first (4.5 m per slot, right then left), so the
-  vehicles do not appear in each other. A Jak on foot within 60 m of a player whose race start
-  waits gets a vehicle of that player's type beside it (once a minute at most, not when he drove
-  in the last 30 s: he left his vehicle to ride with another).
+  player one, Daxter included (he drives as Daxter). A guest's player is moved back first (6 m
+  per slot): the player starts last on the grid, the racers stand ahead and beside it (moved
+  aside, the guest's turtle fell over against a racer). A Jak on foot within 60 m of a player
+  whose race start waits gets a vehicle of that player's type beside it (once a minute at most,
+  not when he drove in the last 30 s: he left his vehicle to ride with another).
 - **The start waits.** The race's task manager (`course-race.gc`: Kleiver's race, the beast
   hunters' time trial and rally; `artifact-race.gc`: Damas's races) loops on `mp-race-hold?` before
-  the start: #t while, online, a player is not aboard, i.e. driving, riding a seat of another
-  player's vehicle (L1 + triangle), or Daxter on a driving Jak's shoulder (triangle, flag
-  `perched`). Meanwhile the players may leave their vehicle (a `pilot-exit #t` setting in
-  `engine-hi` over the race's), and "Waiting for every player aboard: 1/2" shows at the bottom
-  (flag `race-wait`). Offline or alone, the stock start.
+  the start: #t while, in co-op, a connected player is not aboard, i.e. driving, riding a seat of
+  another player's vehicle (L1 + triangle), or Daxter on a driving Jak's shoulder (triangle, flag
+  `perched`); a player still loading the host's world is not aboard. "Waiting for every player
+  aboard: 1/2" shows at the bottom (flag `race-wait`). Once every player is aboard, "The race
+  starts in 10" counts down: a player may still leave its vehicle to ride with another or sit on
+  Jak's shoulder, and the wait starts again. Meanwhile the players may leave their vehicle (a
+  `pilot-exit #t` setting in `engine-hi` over the race's). Offline, alone or in free roam, the
+  stock start.
+- **Daxter and a driving Jak.** In co-op, Daxter's triangle within 5 m of the vehicle a Jak drives
+  puts him on that Jak's shoulder (standing or walking); he never robs that vehicle, and its
+  steal prompt is not shown. In free roam he may still steal it beyond 3.5 m of Jak.
 
 ## 5. Testing in game
 
@@ -886,10 +895,11 @@ focused window. Default boot as `task boot-game`, `--retail` as `task boot-game-
 ### 5.3 Automated sessions
 
 ```bash
-python scripts/mp-test/run_mp_test.py <scenario> [--latency <ms>[:<jitter ms>]] [--loss <percent>] [--shot-size <w>x<h>]
+python scripts/mp-test/run_mp_test.py <scenario> [--retail] [--latency <ms>[:<jitter ms>]] [--loss <percent>] [--shot-size <w>x<h>]
 ```
 
-`--latency` holds what each instance receives that long, plus up to the jitter, before reading it,
+`--retail` boots as `task boot-game-retail` (no `-debug`: the title screen, no debug segment;
+`log-session` prints `debug-segment #f`). `--latency` holds what each instance receives that long, plus up to the jitter, before reading it,
 in order (`MP_TEST_LATENCY`, `Session::receive_all` in `kmultiplayer.cpp`), and `--loss <percent>`
 drops that share of the datagrams received (`MP_TEST_LOSS`): both instances run on one machine,
 these stand in for the network between two. `--shot-size` renders the screenshots at that size
@@ -977,6 +987,8 @@ A script line is `<seconds> <command>`:
 | `wait-scene`, `log-skip` | The script waits until a cutscene that can be skipped plays here; the vote to skip it (voted, votes, viewers, skips). |
 | `beam-at-host <dx> <dz>`, `goto-beam`, `log-beams` | A test waypoint dx, dz meters from the host, whose process checks the arrival with `(target-pos 0)` within 3 m as missions do; stand at the nearest beam; the beams, the count, how far their owner sees us, the calls held. |
 | `race-gate`, `log-race` | A race start of a test: a process sets the race's `pilot-exit #f` and waits on `mp-race-hold?` as the races' task managers do, then logs "race gate open"; the race state (waiting, aboard, starts, vehicles given, exit allowed) and ours (driving, riding, perched). |
+| `coop-mission <name>` | Co-op starts at the story mission of that play-list name (`desert-course-race`, `arena-training-1`), as the lobby's mission list does. |
+| `go-state <type> <state>`, `log-state <type>` | The first process of that type goes to that virtual state (`method-state`, `go-process`): a mission's task manager taken to a later step, its own code running from there; the state of the first process of that type. |
 | `log-stretch`, `hide-puppets <0\|1>`, `hide-copies <0\|1>` | Each puppet's bone farthest from its root, and the copies with a bone over 5 m away (a stretched scarf); hide the puppets or the copies (counter-tests). |
 | `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
 
@@ -1090,8 +1102,12 @@ fix, 10 of 10. The scenarios new or extended in this round:
 | `ride-multi` | Three passengers' seats | Two passengers in the host's three-seat car: seats 1 and 2, each drawn in its own. |
 | `scene-skip` | Skipping a cutscene together | Both watch the host's cutscene (2 viewers); the host's triangle asks (1/2) and it goes on; the guest sees the vote, asks, and the cutscene is skipped on both machines; 8 checks. |
 | `beam` | A waypoint reached together | The host at a test beam is held (1/2, its owner sees it 45 m away) while the guest is away; the guest sees the count, comes, and the mission goes on for both; 6 checks. |
-| `race-board` | A race start waiting for every player | The guest on foot gets a turtle of its own beside the host and the start goes; riding on the back of the host's turtle counts as aboard; Daxter on foot holds the start (1/2, the host may leave its vehicle), then sits on the driving host's shoulder and it goes; 8 checks (screenshot). |
-| `race-continue` | Both players at a race continue point | `desertb-race-start`: each machine gives its own player a turtle, the guest's 4.5 m aside; each player drives its own; 6 checks. |
+| `race-board` | A race start waiting for every player | The guest on foot gets a turtle of its own beside the host, then the 10 s countdown and the start; riding on the back of the host's turtle counts as aboard (countdown, start); Daxter on foot holds the start (1/2, the host may leave its vehicle), then sits on the driving host's shoulder and it goes; 8 checks (screenshot). |
+| `race-continue` | Both players at a race continue point | `desertb-race-start`: each machine gives its own player a turtle, the guest's 6 m back; each player drives its own; 6 checks. |
+| `race-real` | Kleiver's race, a real mission | Co-op from the lobby at `desert-course-race`: the host's race (its `task-manager-race`) waits (1/2) while the guest loads the host's world, each machine's race gives its player a turtle (the guest's 6 m back), the countdown, then the race starts (held 14 s): timer and laps running on both screens; 7 checks (screenshots). |
+| `race-real-daxter` | The same race, the guest plays Daxter | Daxter arrives in a turtle of his own; during the countdown he leaves it (1/2 again), jumps on the driving host's shoulder (triangle), the countdown starts again, the race starts with him there (held 16 to 20 s); twice in a row, 8 checks each (screenshots). Before the fixes of this round: the race started while the guest was still loading; the guest's turtle, moved aside, fell over against a racer; Daxter's triangle beside the host's turtle stole it instead. |
+| `retail-general` (`--retail`) | The general features from a retail boot, three players | The title screen without the debug segment (`debug-segment #f`; its intro skipped with triangle); Host Game, two guests join; the lobby's countdown on the three screens; free roam with three players; the host's SELECT pauses both guests (stock pause, "The host paused the game"), SELECT again: the 3 s countdown, then both play on; START opens the menu over the running world on the host and on a guest; the first guest's Dark Jak skin drawn on the host and on the other guest (screenshots: its dark aura on both); the host's outfit (shirt, scarf) received by both guests; 12 checks. |
+| `beam-real` | The arena's jump training, a real mission | Co-op at `arena-training-1`; its task manager taken to its last step (`go-state ... done`), whose beam it checks itself with `(target-pos 0)` within 3 m: the host in the beam is held (1/2, 480 calls answered from 45 m away) while the guest (Daxter) is 63 m away; the guest comes: "every player at the waypoint (2/2)", the mission completes on both machines (`resolution`); 7 checks (screenshot). |
 
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
@@ -1129,9 +1145,10 @@ passed, 0 failed, no crash):
 | ![The host in its outfit, as the guest sees it](multiplayer-screenshots/outfit-remote.jpg) | ![The guest's Dark Jak skin on the host's screen](multiplayer-screenshots/dark-jak-remote-skin.jpg) |
 | ![The vote to skip a cutscene](multiplayer-screenshots/scene-skip-vote.jpg) | ![Players at a waypoint](multiplayer-screenshots/beam-players-here.jpg) |
 | ![A race start waiting for Daxter](multiplayer-screenshots/race-wait.jpg) | ![Two passengers in the host's car, seats 1 and 2](multiplayer-screenshots/ride-multi-seats.jpg) |
+| ![Kleiver's race: Daxter on the host's shoulder, the start's countdown](multiplayer-screenshots/race-countdown-daxter.jpg) | ![A guest's Dark Jak seen by a third player, retail boot](multiplayer-screenshots/dark-jak-third-player.jpg) |
 
 The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the evening
-round of 2026-10-19 for the last five rows; the seated
+round of 2026-10-19 for the five rows before the last, its night round (`race-real-daxter`, `retail-general`) for the last; the seated
 passengers and Daxter holding the gun from the afternoon round of 2026-10-19 (`--shot-size
 2560x1440`, cropped); the outline, Daxter's arc wielder, the lobby, the keyboard, the player list
 and the co-op one from the round of 2026-10-19; `vehicle-prompt`, `remote-laser`, `remote-shot` and `join-*` from 2026-10-15; the others
@@ -1191,7 +1208,11 @@ public IP.
   Jak).
 - The Appearance page's preview has no cloth (scarf, flaps).
 - Co-op waypoints only wait for missions whose arrival check calls `target-pos` from the process
-  that spawned the beam; those checking the vehicle or a cutscene region go on with one player.
+  that spawned the beam; those checking the vehicle, a cutscene region or a touch (the arena
+  training's first beam: its judge is touched) go on with one player. The count at the bottom is
+  the nearest beam's.
+- Each machine runs its own copy of a race (its timer, laps and racers): the host's and a guest's
+  start on their own once every player is aboard on each.
 - Races: a vehicle left at a race start rolls down its slope while the start waits (no hand brake,
   as in the stock game; 30 m in 20 s at `desertb-race-start`). The race's opponents are simulated
   by the authority (1.4): in a race run on a guest's machine they sleep there.
@@ -1204,6 +1225,18 @@ public IP.
   stock pause rule is extended to other players as a safeguard (4.6).
 
 ## 7. Change log
+
+- **2026-10-19 (night):** the co-op features checked on real missions and from a retail boot.
+  - *Races,* in Kleiver's race: the start waited only for the players already in game, so it went
+    while the guest was still loading the host's world; it now waits for every connected player,
+    in co-op only. Once every player is aboard, "The race starts in 10" leaves time to leave a
+    vehicle and ride with another. The guest's vehicle appears 6 m behind the player's (moved
+    aside, it fell over against a racer). In co-op, Daxter's triangle next to a driving Jak's
+    vehicle puts him on that Jak's shoulder, never steals the vehicle (4.15).
+  - *Waypoints:* a player still loading counts as away; the log says when a held beam is released.
+  - *Tests.* Scenarios `race-real`, `race-real-daxter`, `beam-real` (real missions, `coop-mission`,
+    `go-state`, `log-state`), `retail-general` (`run_mp_test.py --retail`, three players; the
+    title screen's intro is skipped with triangle while the scripts wait for its menu).
 
 - **2026-10-19 (evening):** the user's lobby, pause, Dark Jak, Appearance, seats and co-op
   request. The parts that follow himstan's Jak and Daxter II Multiplayer (ISC) are credited in the

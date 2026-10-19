@@ -38,7 +38,8 @@ Daxter co-op duo with its own multiplayer save.
     shoulder (triangle) and ride along until he jumps off (X). A cutscene is skipped once both
     players asked (triangle). A waypoint (the yellow beam) waits for both players to stand on it
     ("Players here: 1/2"). A race gives each player a vehicle and starts once both are aboard:
-    each in their own, riding with the other, or Daxter on Jak's shoulder.
+    each in their own, riding with the other, or Daxter on Jak's shoulder (triangle next to Jak's
+    vehicle). A 10-second countdown then leaves time to change your mind and ride together.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
