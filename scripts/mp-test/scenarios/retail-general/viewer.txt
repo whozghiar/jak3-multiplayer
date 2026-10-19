@@ -1,5 +1,6 @@
 # The general features from a retail boot, second guest: joins the same lobby, follows into free
-# roam; paused and resumed with everyone; sees the first guest's Dark Jak; receives the host's outfit.
+# roam; paused and resumed with everyone; sees the first guest's Dark Jak; receives the host's outfit;
+# asks last to skip the host's cutscene (3/3): it is skipped on the three machines.
 1 enable
 1 name Viewer
 1 color 3
@@ -17,17 +18,23 @@
 50 press x 100
 51 wait-countdown
 52 log-lobby
-53 wait-joined
-55 goto-player 0 -4
-56 face-player 0
-57 wait-pause 1
-58 log-pause
-61 wait-resume
-61.5 log-pause
-62 wait-pause 0
-63 log-pause
-76 log-power
-76.5 look-player 1
-77 screenshot dark-seen
-88 log-skin
-90 log
+55 log-lobby
+56.5 wait-countdown
+59 wait-joined
+61 goto-player 0 -4
+62 face-player 0
+63 wait-pause 1
+64 log-pause
+67 wait-resume
+67.5 log-pause
+68 wait-pause 0
+69 log-pause
+82 log-power
+82.5 look-player 1
+83 screenshot dark-seen
+94 log-skin
+98 wait-scene
+99 log-skip
+105 press triangle 100
+107 log-skip
+109 log

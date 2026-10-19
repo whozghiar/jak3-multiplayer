@@ -756,6 +756,14 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and grab(host, r"session status .* players (\d+)")[-1:] == [("3",)], "")
         cd = [[int(ms) for (ms,) in grab(lines, r"\] lobby countdown (\d+) ms") if int(ms) > 0] for lines in (host, client, viewer)]
         c.check(scenario, "the lobby's countdown on the host and on both guests", all(cd), f"{cd}")
+        gone = [grab(lines, r"\] lobby countdown 0 ms, cancelled (-?\d+) s ago") for lines in (client, viewer)]
+        c.check(scenario, "the host's X cancels it (both guests see it cancelled), X starts it again",
+                bool(grab(host, r"lobby countdown cancelled")) and all(any(0 <= int(t) <= 5 for (t,) in g) for g in gone)
+                and len(grab(host, r"lobby countdown started")) >= 2, f"{gone}")
+        votes = [grab(lines, r"\] skip scene (\S+) voted (\S+) votes (\d+) viewers (\d+) skips (\d+)") for lines in (host, client, viewer)]
+        c.check(scenario, "a cutscene the three watch is skipped once the three asked (1/3, 2/3, then skipped on all)",
+                any(v == "3" for _, _, _, v, _ in votes[0]) and any(n != "none" and vo == "#t" and int(k) < 3 for n, vo, k, _, _ in votes[0])
+                and all(x and x[-1][0] == "none" and x[-1][4] == "1" for x in votes), f"{votes}")
         ok = True
         for lines in (client, viewer):
             p = pause_logs(lines)
@@ -786,6 +794,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 f"states {hs}")
         gs = grab(client, r"\] state task-manager-arena-training (\S+)")
         c.check(scenario, "and on the guest", bool(gs) and gs[-1][0] == "resolution", f"{gs}")
+        shown = grab(host, r"\] beam count shown (\d+) line (.*)")
+        c.check(scenario, "the count at the bottom of the host's screen: \"Players here: 1/2\" while it waits, then 2/2",
+                any(int(n) > 0 and line.endswith("1/2") for n, line in shown) and bool(shown) and shown[-1][1].endswith("2/2"),
+                f"{shown}")
 
     elif scenario in ("race-real", "race-real-daxter"):
         held = grab(host, r"\] the race starts \(held " + NUM + " s\\)")

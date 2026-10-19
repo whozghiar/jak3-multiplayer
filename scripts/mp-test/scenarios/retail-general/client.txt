@@ -1,6 +1,7 @@
 # The general features from a retail boot, first guest: Join Game > Connect, X ready, sees the
-# countdown, follows into free roam; paused by the host (START refused), the resume countdown; its own
-# START menu over the running world; turns into Dark Jak; receives the host's outfit.
+# countdown and its cancel, follows into free roam; paused by the host (START refused), the resume countdown; its own
+# START menu over the running world; turns into Dark Jak; receives the host's outfit; asks to skip the
+# host's cutscene (2/3).
 1 enable
 1 name Guest
 1 color 2
@@ -18,24 +19,30 @@
 50 press x 100
 51 wait-countdown
 52 log-lobby
-52.5 screenshot countdown-guest
-53 wait-joined
-55 goto-player 0 4
-56 face-player 0
-57 wait-pause 1
-58 log-pause
-58.5 screenshot paused-guest
-59 press start 100
-60 log-pause
-61 wait-resume
-61.5 log-pause
-62 wait-pause 0
-63 log-pause
-64 press start 100
+55 log-lobby
+56.5 wait-countdown
+58.5 screenshot countdown-guest
+59 wait-joined
+61 goto-player 0 4
+62 face-player 0
+63 wait-pause 1
+64 log-pause
+64.5 screenshot paused-guest
+65 press start 100
 66 log-pause
-66.5 screenshot guest-menu
-68 press start 100
-72 power dark
-74 log-power
-88 log-skin
-90 log
+67 wait-resume
+67.5 log-pause
+68 wait-pause 0
+69 log-pause
+70 press start 100
+72 log-pause
+72.5 screenshot guest-menu
+74 press start 100
+78 power dark
+80 log-power
+94 log-skin
+98 wait-scene
+99 log-skip
+102 press triangle 100
+107 log-skip
+109 log

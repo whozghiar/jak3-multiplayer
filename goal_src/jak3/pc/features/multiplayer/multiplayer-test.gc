@@ -2049,6 +2049,8 @@
          (format 0 "[mp-test] beams ~D here ~D/~D near ~A held ~D reached ~D~%" (-> *mp-beams* count) (-> *mp-beams* here)
                  (-> *mp-beams* players) (-> *mp-beams* near?) (-> *mp-beams* held) *mp-test-beams-reached*
                  )
+         ;; the count at the bottom of the screen: frames drawn, its last text
+         (format 0 "[mp-test] beam count shown ~D line ~S~%" (-> *mp-beams* shown) *mp-beam-line*)
          (dotimes (i (-> *mp-beams* count))
            (format 0 "[mp-test] beam ~D at ~m from us, hold ~m~%" i
                    (vector-vector-xz-distance (-> *mp-beams* pos i) (if *target* (-> *target* control trans) (math-camera-pos)))

@@ -4109,6 +4109,7 @@
    (held    int32)            ;; calls answered with the far position (test log)
    (fake    vector :inline)   ;; that position
    (waited? symbol)           ;; a beam's owner was held last frame (log of its release)
+   (shown   int32)            ;; frames the count was drawn (test log)
    )
   )
 
@@ -4116,6 +4117,7 @@
 (set! (-> *mp-beams* count) 0)
 (set! (-> *mp-beams* near?) #f)
 (set! (-> *mp-beams* waited?) #f)
+(set! (-> *mp-beams* shown) 0)
 
 (defun mp-collect-beam ((proc object))
   "iterate-process-tree callback: note a beam shown (not hidden, taf4) and the process that spawned it."
@@ -4247,6 +4249,7 @@
         (set! (-> ctx scale) 0.55)
         (format (clear *mp-beam-line*) (lookup-text! *common-text* (text-id progress-mp-beam-here) #f) (-> b here) (-> b players))
         (print-game-text *mp-beam-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        (+! (-> b shown) 1)
         )
       )
     )

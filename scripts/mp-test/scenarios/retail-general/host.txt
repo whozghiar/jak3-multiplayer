@@ -1,8 +1,9 @@
 # The general features from a retail boot (run_mp_test.py --retail: the title screen, no debug
 # segment), three players, host side. Host Game opens the lobby; once both guests are ready, X starts
-# the 10 s countdown and free roam. In game: SELECT pauses everyone, SELECT again resumes 3 s later;
-# START opens the menu over the running world; the first guest's Dark Jak is seen here; the host's
-# outfit (Appearance page) reaches both guests.
+# the 10 s countdown, X again cancels it, X starts it again, then free roam. In game: SELECT pauses
+# everyone, SELECT again resumes 3 s later; START opens the menu over the running world; the first
+# guest's Dark Jak is seen here; the host's outfit (Appearance page) reaches both guests; a cutscene
+# is skipped once the three players asked.
 1 enable
 1 name Host
 1 color 1
@@ -17,6 +18,11 @@
 70.5 press x 100
 71.5 log-lobby
 72 screenshot countdown
+73.5 press x 100
+74.5 log-lobby
+75 screenshot cancelled
+77 press x 100
+78 log-lobby
 90 wait-player 1
 90.5 wait-player 2
 92 log-session
@@ -41,4 +47,10 @@
 126.5 screenshot page
 128 press x 100
 130 log-skin
-140 log
+134 scene wascity-pre-game-intro
+136 log-skip
+137 press triangle 100
+138 log-skip
+138.5 screenshot vote-host
+146 log-skip
+148 log
