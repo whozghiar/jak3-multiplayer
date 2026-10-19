@@ -766,6 +766,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(shown) and float(shown[0][0]) > 0.9 and float(shown[0][1]) > 0.9, f"{shown[:1]}")
         c.check(scenario, "then its Light Jak (no dark shape, its glow)",
                 len(shown) >= 2 and float(shown[1][1]) < 0.1 and int(shown[1][2], 16) != 0, f"{shown[1:2]}")
+        skin = grab(host, r"power puppet 1 skin (\d+) own-morph (\S+) skin-draws (\d+) color-mult (\S+)")
+        c.check(scenario, "the host draws the guest's Dark Jak skin while its own stays normal, no tint",
+                bool(skin) and skin[0][0] == "255" and float(skin[0][1]) == 0.0 and int(skin[0][2]) > 0
+                and float(skin[0][3]) == 1.0, f"{skin[:1]}")
+        gskin = grab(client, r"power puppet 0 skin (\d+) own-morph (\S+)")
+        c.check(scenario, "the guest's own Dark Jak skin does not darken the host's model there",
+                bool(gskin) and gskin[0][0] == "0" and float(gskin[0][1]) > 0.9, f"{gskin[:1]}")
 
     elif scenario in ("far-split", "far-split-host"):
         for side, lines in (("host", host), ("client", client)):

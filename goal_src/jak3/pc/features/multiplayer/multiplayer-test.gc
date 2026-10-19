@@ -76,6 +76,7 @@
 (define-extern pc-mp-test-pause (function symbol none))
 (define-extern pc-mp-outlines-drawn (function int))
 (define-extern pc-mp-outline-pixels (function int))
+(define-extern pc-mp-dark-skin-draws (function int))
 
 ;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
 ;; (mp-test-update).
@@ -2107,6 +2108,11 @@
                    (format 0 "[mp-test] power puppet ~D blend ~,,2f dark ~,,2f effect #x~X fade ~A~%" slot
                            (-> pup skel override 0) (-> pup skel override 2) (-> pup draw global-effect)
                            (logtest? (-> pup draw status) (draw-control-status force-fade))
+                           )
+                   ;; its own Dark Jak skin (renderer), and the skin every model of Jak shares (ours)
+                   (format 0 "[mp-test] power puppet ~D skin ~D own-morph ~,,2f skin-draws ~D color-mult ~,,2f~%" slot
+                           (-> *pc-merc-outlines* dark slot) (-> *darkjak-texture-anim-array* array-data 0 frame-time)
+                           (pc-mp-dark-skin-draws) (-> pup draw color-mult y)
                            )
                    )
                  )

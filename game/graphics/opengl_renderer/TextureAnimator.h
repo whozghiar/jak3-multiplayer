@@ -284,6 +284,11 @@ class TextureAnimator {
   GLuint get_by_slot(int idx);
   void draw_debug_window();
   const std::vector<GLuint>* slots() { return &m_public_output_slots; }
+  // MOD multiplayer: Dark Jak's skin at fixed morph levels, kDarkjakLevels per animated texture
+  // slot (index slot * kDarkjakLevels + level, level 0 the plain skin), 0 for the other slots. Merc2
+  // draws another player's model with them instead of the slot every model of Jak shares.
+  static constexpr int kDarkjakLevels = 17;
+  const std::vector<GLuint>* darkjak_variants() { return &m_darkjak_variants; }
   void clear_stale_textures(u64 frame_idx);
 
  private:
@@ -291,6 +296,7 @@ class TextureAnimator {
   void setup_texture_anims_common();
   void setup_texture_anims_jak2();
   void setup_texture_anims_jak3();
+  void setup_darkjak_variants();
 
   void setup_sky();
   void handle_upload_clut_16_16(const DmaTransfer& tf, const u8* ee_mem);
@@ -389,6 +395,7 @@ class TextureAnimator {
 
   std::vector<GLuint> m_private_output_slots;
   std::vector<GLuint> m_public_output_slots;
+  std::vector<GLuint> m_darkjak_variants;  // MOD multiplayer, see darkjak_variants()
   std::vector<int> m_skip_tbps;
 
   struct Bool {

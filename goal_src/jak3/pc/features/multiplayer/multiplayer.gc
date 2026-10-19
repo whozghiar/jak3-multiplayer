@@ -1107,9 +1107,12 @@
    (blend shapes, as target-draw-process), Light Jak's look (no textures, rim lights), the
    invisible fade, and their auras drawn here: Dark Jak's particles and lightning
    (target-darkjak-process), Light Jak's glow (target-lightjak-do-effect). Their replayed launches
-   are left out (mp-play-emitters): these, on the puppet's own body, replace them. The dark texture
-   swap is global (one palette for every model of Jak): a dark tint stands for it. Light Jak's
-   wings live in art loaded only for our own player's light mode: not shown here."
+   are left out (mp-play-emitters): these, on the puppet's own body, replace them. Dark Jak's grey
+   skin is a texture morph shared by every model of Jak (set-darkjak-texture-morph!, the local
+   player's): the renderer draws the puppet with a skin of its own at its player's morph
+   (mp-puppet-outline, pc-merc-bits dark-skin). His horns, neck and arms grow in his player's pose
+   (mp-pose-postbind). Light Jak's wings live in art loaded only for our own player's light mode:
+   not shown here."
   (let* ((f (-> st powers))
          (dark (* 0.003921569 (the float (logand (shr f 8) 255))))
          (light (* 0.003921569 (the float (logand (shr f 16) 255))))
@@ -1140,12 +1143,6 @@
         (logior! (-> self draw global-effect) (draw-control-global-effect rim-lights))
         (logclear! (-> self draw global-effect) (draw-control-global-effect rim-lights))
         )
-    ;; Dark Jak's grey skin is a texture swap shared by every model of Jak (set-darkjak-texture-morph!):
-    ;; a dark tint stands for it on the puppet, as strong as the player's transformation
-    (let ((k (* 0.3 dark)))
-      (set-vector! (-> self draw color-mult) (- 1.0 k) (- 1.0 (* 1.1 k)) (- 1.0 (* 0.6 k)) 1.0)
-      (set-vector! (-> self draw color-emissive) (* 0.25 k) 0.0 (* 0.5 k) 0.0)
-      )
     (cond
       ((> fade 0)
        (logior! (-> self draw status) (draw-control-status force-fade))
@@ -1586,14 +1583,16 @@
 
 (defbehavior mp-puppet-outline mp-puppet ()
   "Seen through walls in its player's color: the renderer draws the model again wherever something
-   hides it (*pc-merc-outlines*, engine/gfx/foreground/foreground.gc; Merc2 outline pass). Every
+   hides it (*pc-merc-outlines*, engine/gfx/foreground/foreground.gc; Merc2 outline pass), with
+   its own Dark Jak skin at its player's texture morph (powers bits 0-7), whatever ours. Every
    remote player's puppet; not our own model riding as a passenger."
   (when (not (-> self local?))
     (let ((st (mp-remote-state (-> self slot))))
       (set! (-> *pc-merc-outlines* dc (-> self slot)) (-> self draw))
-      (if st
-          (set! (-> *pc-merc-outlines* color (-> self slot)) (mp-color-rgba (-> st color)))
-          )
+      (when st
+        (set! (-> *pc-merc-outlines* color (-> self slot)) (mp-color-rgba (-> st color)))
+        (set! (-> *pc-merc-outlines* dark (-> self slot)) (logand (-> st powers) 255))
+        )
       )
     )
   (none)

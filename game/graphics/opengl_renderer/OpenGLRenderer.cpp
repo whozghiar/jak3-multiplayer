@@ -145,6 +145,7 @@ OpenGLRenderer::OpenGLRenderer(std::shared_ptr<TexturePool> texture_pool,
   }
 
   m_merc2 = std::make_shared<Merc2>(m_render_state.shaders, anim_slot_array());
+  m_merc2->set_darkjak_variants(darkjak_variants());  // MOD multiplayer
   m_generic2 = std::make_shared<Generic2>(m_render_state.shaders);
 
   // initialize all renderers

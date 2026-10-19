@@ -111,6 +111,10 @@ class OpenGLRenderer {
   const std::vector<GLuint>* anim_slot_array() {
     return m_texture_animator ? m_texture_animator->slots() : nullptr;
   }
+  // MOD multiplayer: Dark Jak's skin of other players' models (TextureAnimator::darkjak_variants)
+  const std::vector<GLuint>* darkjak_variants() {
+    return m_texture_animator ? m_texture_animator->darkjak_variants() : nullptr;
+  }
 
   SharedRenderState m_render_state;
   Profiler m_profiler;

@@ -1636,6 +1636,7 @@
   (disable-envmap 3)
   (no-textures 4)
   (outline 5) ;; MOD multiplayer: drawn again where hidden, in outline-color (Merc2 outline pass)
+  (dark-skin 6) ;; MOD multiplayer: Dark Jak's skin of its own, at dark-morph (another player's model)
   )
 
 (deftype pc-merc-flags (structure)
@@ -1643,16 +1644,20 @@
    (ignore-alpha-mask uint64)
    (effect-count uint8)
    (bit-flags pc-merc-bits)
+   (dark-morph uint8 :offset 18) ;; MOD multiplayer
    (outline-color rgba :offset 20) ;; MOD multiplayer
    )
   )
 
 ;; MOD multiplayer -- models seen through walls: up to 8 draw-controls (one per player slot of the
 ;; multiplayer mod, goal_src/jak3/pc/features/multiplayer/multiplayer.gc) drawn again by the PC
-;; renderer, in their color, wherever something hides them. Empty unless the mod fills it.
+;; renderer, in their color, wherever something hides them. Empty unless the mod fills it. Their
+;; skin follows their own player's Dark Jak (dark, 0-255), not the one every model of Jak shares
+;; (the local player's texture morph, set-darkjak-texture-morph!).
 (deftype pc-merc-outline-table (structure)
   ((dc    draw-control 8)
    (color rgba 8)
+   (dark  uint8 8)
    )
   )
 
@@ -1771,8 +1776,9 @@
             ;; MOD multiplayer: an outlined model (another player)
             (dotimes (i 8)
               (when (= (-> *pc-merc-outlines* dc i) dc)
-                (logior! (-> flags bit-flags) (pc-merc-bits outline))
+                (logior! (-> flags bit-flags) (pc-merc-bits outline dark-skin))
                 (set! (-> flags outline-color) (-> *pc-merc-outlines* color i))
+                (set! (-> flags dark-morph) (-> *pc-merc-outlines* dark i))
                 )
               )
             (set! (-> flags enable-mask) enable-mask)

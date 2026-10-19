@@ -372,6 +372,9 @@ std::atomic<int>& outlines_drawn();
 // Samples of fill and outline drawn last frame where walls hide those players
 // (pc-mp-outline-pixels): 0 while every outlined player is in view.
 std::atomic<int>& outline_pixels();
+// Draws of another player's model with a Dark Jak skin of its own (morph above 0) since boot,
+// counted by Merc2::do_draws, read by the test log (pc-mp-dark-skin-draws).
+std::atomic<int>& dark_skin_draws();
 
 }  // namespace mp
 

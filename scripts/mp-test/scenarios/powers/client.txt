@@ -1,11 +1,11 @@
-# Dark Jak and Light Jak on another machine, guest side: 7 m from the host, facing it, turns into
+# Dark Jak and Light Jak on another machine, guest side: 3 m from the host, facing it, turns into
 # Dark Jak, then later into Light Jak, logging its own state (log-power).
 1 enable
 1 name Guest
 1 color 2
 45 join 127.0.0.1:7777
 45.1 wait-joined
-52 goto-player 0 7
+52 goto-player 0 3
 53 face-player 0
 55 power dark
 59 log-power

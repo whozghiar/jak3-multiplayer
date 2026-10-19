@@ -7,6 +7,7 @@
 #include "common/util/simd_util.h"
 
 #include "game/graphics/opengl_renderer/EyeRenderer.h"
+#include "game/graphics/opengl_renderer/TextureAnimator.h"
 #include "game/graphics/opengl_renderer/background/background_common.h"
 
 #include "third-party/imgui/imgui.h"
@@ -550,6 +551,9 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   bool model_disables_envmap = flags->bitflags & 8;
   bool model_no_texture = flags->bitflags & 16;
   bool model_outline = flags->bitflags & 32;  // MOD multiplayer, its color at byte 20
+  // MOD multiplayer: another player's model, its own Dark Jak skin (morph 0-255 at byte 18)
+  bool model_dark_skin = flags->bitflags & 64;
+  u8 dark_morph = ((const u8*)flags)[18];
   u32 outline_rgba;
   memcpy(&outline_rgba, (const u8*)flags + 20, 4);
   input_data += 32;
@@ -642,6 +646,9 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.lights = lights;
   args.first_bone = first_bone;
   args.no_texture = render_state->version == GameVersion::Jak3 && model_no_texture;
+  args.dark_level = model_dark_skin && m_darkjak_variants
+                        ? (u8)((dark_morph * (TextureAnimator::kDarkjakLevels - 1) + 127) / 255)
+                        : 0xff;
 
   if (model_outline) {
     record_outline(model, lev, skel_matrix_buffer, bone_count, current_effect_enable_bits,
@@ -1092,6 +1099,7 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
     draw->mode.disable_depth_write();
   }
   draw->texture = envmap_texture;
+  draw->dark_level = 0xff;  // MOD multiplayer
   draw->first_bone = args.first_bone;
   draw->light_idx = args.lights;
   draw->num_triangles = mdraw.num_triangles;
@@ -1120,6 +1128,14 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
   }
 
   draw->texture = mdraw.eye_id == 0xff ? mdraw.tree_tex_id : (0xefffff00 | mdraw.eye_id);
+  draw->dark_level = 0xff;
+  if (args.dark_level != 0xff && mdraw.eye_id == 0xff && mdraw.tree_tex_id < 0) {
+    // MOD multiplayer: an animated slot with a Dark Jak skin of its own
+    size_t idx = -(mdraw.tree_tex_id + 1) * TextureAnimator::kDarkjakLevels + args.dark_level;
+    if (idx < m_darkjak_variants->size() && m_darkjak_variants->at(idx)) {
+      draw->dark_level = args.dark_level;
+    }
+  }
   draw->first_bone = args.first_bone;
   draw->light_idx = args.lights;
   draw->num_triangles = mdraw.num_triangles;
@@ -1239,6 +1255,7 @@ void Merc2::do_draws(const Draw* draw_array,
                      SharedRenderState* render_state) {
   glBindVertexArray(m_vao);
   s32 last_tex = INT32_MIN;
+  u8 last_dark = 0xff;  // MOD multiplayer: Dark Jak skin level of the texture bound
   int last_light = -1;
   bool normal_vtx_buffer_bound = true;
 
@@ -1273,7 +1290,7 @@ void Merc2::do_draws(const Draw* draw_array,
       fog_on = true;
     }
     bool use_mipmaps_for_filtering = true;
-    if (draw.texture != last_tex) {
+    if (draw.texture != last_tex || draw.dark_level != last_dark) {
       if (draw.texture < (int)lev->textures.size() && draw.texture >= 0) {
         glBindTexture(GL_TEXTURE_2D, lev->textures.at(draw.texture));
       } else if ((draw.texture & 0xffffff00) == 0xefffff00) {
@@ -1294,11 +1311,21 @@ void Merc2::do_draws(const Draw* draw_array,
         use_mipmaps_for_filtering = false;
       } else if (draw.texture < 0) {
         int slot = -(draw.texture + 1);
-        glBindTexture(GL_TEXTURE_2D, m_anim_slot_array->at(slot));
+        if (draw.dark_level != 0xff) {
+          // MOD multiplayer: another player's Dark Jak skin
+          glBindTexture(GL_TEXTURE_2D, m_darkjak_variants->at(
+                                           slot * TextureAnimator::kDarkjakLevels + draw.dark_level));
+          if (draw.dark_level > 0) {
+            mp::dark_skin_draws()++;
+          }
+        } else {
+          glBindTexture(GL_TEXTURE_2D, m_anim_slot_array->at(slot));
+        }
       } else {
         fmt::print("Invalid draw.texture is {}, would have crashed.\n", draw.texture);
       }
       last_tex = draw.texture;
+      last_dark = draw.dark_level;
     }
 
     if ((int)draw.light_idx != last_light && !set_fade) {

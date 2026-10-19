@@ -1788,6 +1788,11 @@ std::atomic<int>& outline_pixels() {
   return count;
 }
 
+std::atomic<int>& dark_skin_draws() {
+  static std::atomic<int> count{0};
+  return count;
+}
+
 namespace test {
 struct Step {
   double at_ms;
@@ -2119,6 +2124,11 @@ u64 pc_mp_outlines_drawn() {
 // (pc-mp-outline-pixels) -> samples the outline passes drew last frame (see outline_pixels).
 u64 pc_mp_outline_pixels() {
   return (u64)mp::outline_pixels().load();
+}
+
+// (pc-mp-dark-skin-draws) -> draws of other players' models with their own Dark Jak skin since boot.
+u64 pc_mp_dark_skin_draws() {
+  return (u64)mp::dark_skin_draws().load();
 }
 
 u64 pc_mp_player_ping(u32 slot) {
@@ -2460,6 +2470,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-player-ping", (void*)pc_mp_player_ping);
   make_function_symbol_from_c("pc-mp-outlines-drawn", (void*)pc_mp_outlines_drawn);
   make_function_symbol_from_c("pc-mp-outline-pixels", (void*)pc_mp_outline_pixels);
+  make_function_symbol_from_c("pc-mp-dark-skin-draws", (void*)pc_mp_dark_skin_draws);
   make_function_symbol_from_c("pc-mp-campaign-write", (void*)pc_mp_campaign_write);
   make_function_symbol_from_c("pc-mp-campaign-read", (void*)pc_mp_campaign_read);
   make_function_symbol_from_c("pc-mp-set-max-players", (void*)pc_mp_set_max_players);

@@ -612,6 +612,9 @@ TextureAnimator::TextureAnimator(ShaderLibrary& shaders,
     case GameVersion::Jak3:
     case GameVersion::JakX:
       setup_texture_anims_jak3();
+      if (m_version == GameVersion::Jak3) {
+        setup_darkjak_variants();
+      }
       break;
     default:
       ASSERT_NOT_REACHED();
@@ -783,7 +786,46 @@ void TextureAnimator::add_to_clut_blender_group(int idx,
   }
 }
 
+/*!
+ * MOD multiplayer: Dark Jak's skin of every texture of the darkjak group at kDarkjakLevels fixed
+ * morphs, as the group's blenders compute it (index data of the texture, CLUT of -norm and -dark
+ * blended by the morph). The group itself follows the local player's morph and every model of Jak
+ * shares its output: another player's model is drawn with these instead (Merc2, pc-merc-bits
+ * dark-skin), at its own player's morph.
+ */
+void TextureAnimator::setup_darkjak_variants() {
+  m_darkjak_variants.assign(m_public_output_slots.size() * kDarkjakLevels, 0);
+  for (const char* name : {"jakc-arm", "jakc-eyebrow", "jakc-face", "jakc-finger", "jakc-hair"}) {
+    const std::string prefix = name;
+    const auto* dest = itex_by_name(m_common_level, prefix, {});
+    const auto* norm = &itex_by_name(m_common_level, prefix + "-norm", {})->color_table;
+    const auto* dark = &itex_by_name(m_common_level, prefix + "-dark", {})->color_table;
+    const int slot = output_slot_by_idx(m_version, prefix);
+    std::vector<u32> rgba(dest->w * dest->h);
+    std::array<math::Vector4<u8>, 256> clut;
+    for (int level = 0; level < kDarkjakLevels; level++) {
+      const float f = level / (float)(kDarkjakLevels - 1);
+      for (int i = 0; i < 256; i++) {
+        math::Vector4f v = (*norm)[i].cast<float>() * (1.f - f) + (*dark)[i].cast<float>() * f;
+        clut[i] = v.cast<u8>();
+      }
+      for (size_t i = 0; i < rgba.size(); i++) {
+        memcpy(&rgba[i], clut[dest->index_data[i]].data(), 4);
+      }
+      GLuint tex;
+      glGenTextures(1, &tex);
+      opengl_upload_texture(tex, rgba.data(), dest->w, dest->h);
+      m_darkjak_variants.at(slot * kDarkjakLevels + level) = tex;
+    }
+  }
+}
+
 TextureAnimator::~TextureAnimator() {
+  for (GLuint tex : m_darkjak_variants) {
+    if (tex) {
+      glDeleteTextures(1, &tex);
+    }
+  }
   glDeleteVertexArrays(1, &m_vao);
   glDeleteBuffers(1, &m_vertex_buffer);
   glDeleteTextures(1, &m_dummy_texture);

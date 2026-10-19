@@ -53,9 +53,13 @@ class Merc2 {
   void draw_outlines(SharedRenderState* render_state, ScopedProfilerNode& prof);
   // Outlined models drawn last frame (multiplayer test log, pc-mp-outline-count).
   int outlines_drawn() const { return m_outlines_drawn; }
+  // MOD multiplayer: Dark Jak's skin at fixed morphs (TextureAnimator::darkjak_variants), drawn on
+  // models flagged dark-skin instead of the shared animated slot.
+  void set_darkjak_variants(const std::vector<GLuint>* variants) { m_darkjak_variants = variants; }
 
  private:
   const std::vector<GLuint>* m_anim_slot_array;
+  const std::vector<GLuint>* m_darkjak_variants = nullptr;  // MOD multiplayer
   enum MercDataMemory {
     LOW_MEMORY = 0,
     BUFFER_BASE = 442,
@@ -194,6 +198,7 @@ class Merc2 {
     u16 first_bone;
     u16 light_idx;
     u8 flags;
+    u8 dark_level;  // MOD multiplayer: Dark Jak's skin level of an animated slot, 0xff = shared slot
     ModBuffers mod_vtx_buffer;
     u8 fade[4];
     // no strip hack for custom models
@@ -225,6 +230,7 @@ class Merc2 {
     u64 hash;
     u32 lights;
     u32 first_bone;
+    u8 dark_level = 0xff;  // MOD multiplayer, see Draw::dark_level
   };
 
   Draw* alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawArgs& args);
