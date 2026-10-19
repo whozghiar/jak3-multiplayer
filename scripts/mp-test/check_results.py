@@ -765,9 +765,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any(r == "2" and i == "0" for _, _, i, r, _ in ge) and any(r == "1" and i == "1" and o == "8" for o, _, i, r, _ in ge),
                 f"{ge}")
         skin = grab(client, r"\] skin own (.*)")
-        c.check(scenario, "at Kleiver's spot the shop opens (triangle); X wears the item bought",
-                any(n == "#t" for _, _, _, _, n in ge) and any("lobby menu mp-shop" in l for l in client)
-                and bool(skin) and skin[-1][0].split()[1] == "c0ffd040" and ge[-1][3] == "3", f"{skin[-1:]}")
+        menus = grab(client, r"\] lobby menu (\S+)")
+        c.check(scenario, "at Kleiver's spot the shop opens (triangle); X wears the item bought; triangle leaves it",
+                any(n == "#t" for _, _, _, _, n in ge) and ("mp-shop",) in menus and menus[-1] != ("mp-shop",)
+                and bool(skin) and skin[-1][0].split()[1] == "c0ffd040" and ge[-1][3] == "3", f"{skin[-1:]}, menus {menus}")
         saved = (settings / "multiplayer-economy.json").read_text(encoding="utf-8") if (settings / "multiplayer-economy.json").exists() else ""
         record = (settings / "multiplayer-sessions.log").read_text(encoding="utf-8") if (settings / "multiplayer-sessions.log").exists() else ""
         c.check(scenario, "the session's closing saves the accounts and the orbs credited, and is recorded; hosting it again loads them back",

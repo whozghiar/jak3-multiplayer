@@ -25,6 +25,7 @@
 95 goto-player 0 2 0
 96 race-gate
 97 log-race
+99 goto-player 0 2 0
 100 press triangle 100
 102 log-race
 102.5 screenshot perched

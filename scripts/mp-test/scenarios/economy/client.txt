@@ -1,7 +1,7 @@
 # Economy, guest side: claims an orb that does not exist, then the nearest orb from 80 m away (the
 # host refuses both), buys an item without the orbs (refused); takes an orb, then, once the host
 # credited it 12 more, buys the gold outfit; at Kleiver's spot (Spargus's doors, wasdoors-city)
-# opens his shop (triangle) and wears it (X).
+# opens his shop (triangle), wears it (X) and leaves it (triangle).
 1 enable
 1 name Guest
 1 color 2
@@ -29,4 +29,5 @@
 84.5 log-skin
 85 screenshot shop-worn
 86 press triangle 100
+87.5 log-lobby
 88 log
