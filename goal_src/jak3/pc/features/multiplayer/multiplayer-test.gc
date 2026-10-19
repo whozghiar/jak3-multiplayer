@@ -70,6 +70,7 @@
 ;;   die | log-respawn                                       kill our player; co-op respawns next to a teammate
 ;;   net <ms> <jitter> <loss %> | log-net                    the test network from now on; each peer's network pressure
 ;;   open-menu <page> | econ-grant-self <0|1>                a START page; the host's +100 orbs / trophies
+;;   log-eyes                                                the remote puppets' eye slots and their last writer
 ;;   log-outline                                             outlined players drawn through walls (renderer count, table)
 ;;   spawn-vehicle <type>                                    an empty vehicle 3 m in front of us
 ;;   power <dark|light> | log-power                          Dark / Light Jak on; ours and what puppets show
@@ -1728,6 +1729,26 @@
               )
              (else
                (format 0 "[mp-test] scene actor none~%")
+               )
+             )
+           )
+         )
+        ((string= cmd "log-eyes")
+         ;; log-eyes: each remote player's puppet, its eye slot and which process wrote it last
+         (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+           (when mgr
+             (dotimes (i MP_MAX_PLAYERS)
+               (let ((pp (the-as process-drawable (handle->process (-> mgr puppets i)))))
+                 (when (and pp (nonzero? (-> pp draw)) (nonzero? (-> pp draw mgeo header eye-ctrl)))
+                   (let* ((idx (-> pp draw mgeo header eye-ctrl eye-ctrl-index))
+                          (by (handle->process (-> *eye-control-array* data idx process)))
+                          )
+                     (format 0 "[mp-test] eyes player ~D slot ~D by ~A puppet ~A target ~A~%" i idx
+                             (if by (-> by name) "none") (= by pp) (= by *target*)
+                             )
+                     )
+                   )
+                 )
                )
              )
            )

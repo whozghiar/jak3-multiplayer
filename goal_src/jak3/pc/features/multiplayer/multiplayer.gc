@@ -1284,6 +1284,30 @@
 
 (define *mp-test-hide-puppets* #f) ;; test switch (hide-puppets): remote players' puppets hidden
 
+(defun mp-target-as-daxter? ()
+  "#t while our player is Daxter on Jak's model: his mode (indax), or riding a lizard as Daxter."
+  (and *target*
+       (or (focus-test? *target* indax)
+           (and (focus-test? *target* flut) (nonzero? (-> *target* flut)) (-> *target* flut as-daxter?))
+           )
+       )
+  )
+
+;; MOD multiplayer -- engine/gfx/foreground/eye.gc: every model of Jak shares one eye slot
+;; (*eye-control-array*, found by art group name when the model logs in), which the last model to
+;; animate fills. Our player as Daxter keeps Jak's model, hidden, playing Daxter's clips: it wrote
+;; Daxter's eyes into Jak's slot, and the other players' Jaks showed them. Online, that model feeds
+;; no eyes; the Jak puppets do.
+(define-perm *mp-stock-merc-eye-anim* (function process-drawable none) merc-eye-anim)
+
+(defun merc-eye-anim ((arg0 process-drawable))
+  "Stock, except our player's own model while it plays Daxter online (see above)."
+  (if (not (and (= arg0 *target*) (mp-online?) (mp-target-as-daxter?)))
+      (*mp-stock-merc-eye-anim* arg0)
+      )
+  (none)
+  )
+
 (defbehavior mp-puppet-apply-powers mp-puppet ((st mp-player-state))
   "Dark Jak and Light Jak as their player shows them (mp-pack-powers): Dark Jak's face and claws
    (blend shapes, as target-draw-process), Light Jak's look (no textures, rim lights), the
@@ -1886,8 +1910,12 @@
   (ja-channel-set! 1)
   ;; the bones take the player's own pose once computed
   (set! (-> self skel postbind-function) mp-pose-postbind)
+  ;; its eyes animate from its own clips, as the player's and its Daxter's do (logic-target.gc,
+  ;; sidekick.gc): every model of Jak (or of Daxter) shares one eye slot, and without it the slot of
+  ;; Jak's model only had the local player's eyes, Daxter's while it plays Daxter (merc-eye-anim)
+  (logior! (-> self skel status) (joint-control-status eye-anim))
   ;; Dark Jak's face and claws are blend shapes driven by an override array, as on the player's
-  ;; model (logic-target.gc); not the eyes: their control is shared by every model of Jak
+  ;; model (logic-target.gc)
   (when (and (not daxter?) (not local?))
     (set! (-> self skel override) (new 'process 'boxed-array float 54))
     (logior! (-> self skel status) (joint-control-status blend-shape))

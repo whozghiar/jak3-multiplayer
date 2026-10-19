@@ -833,6 +833,11 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "under the START menu the throttle does not drive the buggy (it only rolls); after it, it does",
                 len(hm) >= 3 and hm[1][2] <= hm[0][2] + 0.5 and hm[2][2] > 5.0, f"{hm}")
 
+    elif scenario == "eyes":
+        ey = grab(client, r"\] eyes player 0 slot (\d+) by (\S+) puppet (\S+) target (\S+)")
+        c.check(scenario, "the guest playing Daxter: the host's Jak has its eyes from its own clips (its puppet feeds the slot, not our hidden model)",
+                bool(ey) and all(p == "#t" and t == "#f" for _, _, p, t in ey), f"{ey}")
+
     elif scenario == "coop-respawn":
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")
