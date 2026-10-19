@@ -344,5 +344,8 @@
   "155f": "Free roam: the end of the game, everything unlocked",
   "1560": "The game starts in ~D",
   "1561": "<PAD_X> Cancel the start   <PAD_SQUARE> Game mode",
-  "1562": "The host cancelled the start"
+  "1562": "The host cancelled the start",
+  "1564": "SELECT: resume the game for everyone",
+  "1565": "The host paused the game",
+  "1566": "The game resumes in ~D"
 }

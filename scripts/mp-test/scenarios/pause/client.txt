@@ -1,0 +1,30 @@
+# Pause, guest side: not paused while the host's START menu is open (its NPCs move here); paused when
+# the host taps SELECT (START refused meanwhile), the resume countdown shown, then running again; its
+# own START menu opens over the running world and does not pause the host.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+49 goto-player 0 4
+50 face-player 0
+51 log-pause
+54 log-pause
+54.5 log-motion
+56 log-motion
+57 wait-pause 1
+58 log-pause
+58.5 screenshot paused-guest
+59 press start 100
+60 log-pause
+61 wait-resume
+61.5 log-pause
+61.7 screenshot resuming-guest
+62 wait-pause 0
+63 log-pause
+66 press start 100
+68 log-pause
+68.5 screenshot guest-menu
+70 press start 100
+72 log-pause
+74 log

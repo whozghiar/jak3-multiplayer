@@ -50,6 +50,7 @@
   (authority 7)    ;; simulates the NPCs around it (see multiplayer-world.gc)
   (ready 8)        ;; a guest said it is ready in the lobby (multiplayer-menu.gc)
   (coop 9)         ;; the host's game mode is co-op (read by guests in the lobby, before any world event)
+  (paused-all 10)  ;; host: the game is paused for everyone (its resume field counts the restart down)
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -241,6 +242,33 @@
 (define *mp-perch-count* 0)
 ;; Co-op: the character the other players' was offered against already (once per session).
 (define *mp-coop-offered?* #f)
+
+;; The host's pause for everyone, and the START menu over a running world ("Pause for everyone",
+;; below). In a structure: a time-frame or a handle is 64 bits, a global symbol holds 32.
+(deftype mp-pause-state (structure)
+  ((paused?       symbol)     ;; host: the game is paused for everyone (state flag paused-all)
+   (resume-at     time-frame) ;; host: real-clock time the paused game resumes, 0 none
+   (applied?      symbol)     ;; this machine is in the stock pause because the host paused
+   (select-down   time-frame) ;; real-clock time SELECT went down, 0 up (a tap pauses, held: list)
+   (select-other? symbol)     ;; another button was pressed while SELECT was held
+   (live?         symbol)     ;; online in game: the world runs under the START menu (setting set)
+   (sounds?       symbol)     ;; the sounds were let go on under the START menu
+   (pad-held?     symbol)     ;; pad 0 hidden from the world this frame (mp-input), given back by the hook
+   (input         handle)     ;; the mp-input process
+   (pauses        int32)      ;; pauses and pad frames hidden, for the test log
+   (pad-frames    int32)
+   )
+  )
+
+(define *mp-pause* (new 'global 'mp-pause-state))
+(set! (-> *mp-pause* paused?) #f)
+(set! (-> *mp-pause* applied?) #f)
+(set! (-> *mp-pause* live?) #f)
+(set! (-> *mp-pause* sounds?) #f)
+(set! (-> *mp-pause* pad-held?) #f)
+(set! (-> *mp-pause* input) (the-as handle #f))
+;; pad 0 as the display process read it, kept while the world must not see it (mp-input)
+(define *mp-pad-backup* (new 'global 'cpad-info 0))
 
 ;; Values wider than 32 bits. A global symbol only holds 32 bits (goalc writes symbol values with a
 ;; 32-bit store): a handle kept in one loses its pid (upper half) and never resolves again.
@@ -831,6 +859,15 @@
     (if (and (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag coop)))
         (logior! (-> st flags) (mp-flag coop))
         )
+    ;; the host's pause for everyone, and the time left before it resumes
+    (if (and (= *mp-mode* (mp-mode host)) (-> *mp-pause* paused?))
+        (logior! (-> st flags) (mp-flag paused-all))
+        )
+    (set! (-> st resume) (if (and (= *mp-mode* (mp-mode host)) (-> *mp-pause* paused?) (nonzero? (-> *mp-pause* resume-at)))
+                             (the-as uint (max 1 (min #xffff (/ (* 10 (- (-> *mp-pause* resume-at) (mp-now))) 3))))
+                             (the-as uint 0)
+                             )
+          )
     (set! (-> st lobby-mode) (the-as uint (-> *mp-config* mode)))
     (set! (-> st lobby-start) (the-as uint (-> *mp-session* coop-start)))
     (set! (-> st lobby-mission) (-> *mp-session* coop-mission))
@@ -3537,8 +3574,15 @@
 ;; ------------------------------------------------------------------------------------------------
 
 (defun mp-player-list-shown? ()
-  "#t while SELECT is held in a session (L3 + SELECT is the Mods menu)."
-  (and (mp-online?) *target* (cpad-hold? 0 select) (not (cpad-hold? 0 l3)))
+  "#t while SELECT is held in a session for 0.25 s (a tap is the host's pause; L3 + SELECT is the
+   Mods menu)."
+  (and (mp-online?)
+       *target*
+       (cpad-hold? 0 select)
+       (not (cpad-hold? 0 l3))
+       (nonzero? (-> *mp-pause* select-down))
+       (>= (- (mp-now) (-> *mp-pause* select-down)) (seconds 0.25))
+       )
   )
 
 (defun mp-draw-text-id ((buf dma-buffer) (id text-id) (x int) (y int) (scale float))
@@ -3605,17 +3649,300 @@
   (none)
   )
 
-;; MOD multiplayer -- SELECT shows the player list while online, instead of pausing the game as the
-;; stock does (engine/draw/drawable.gc, select or start); START still pauses. define-perm keeps the
-;; stock function when this file is reloaded in a REPL session.
+;; MOD multiplayer -- while online, SELECT alone no longer pauses as the stock does
+;; (engine/draw/drawable.gc, select or start): held it shows the player list, tapped by the host it
+;; pauses everyone ("Pause for everyone", below); START opens the menu over the running world. While
+;; the host has the game paused, nothing pauses or unpauses it here. define-perm keeps the stock
+;; function when this file is reloaded in a REPL session.
 (define-perm *mp-stock-determine-pause-mode* (function none) determine-pause-mode)
 
 (defun determine-pause-mode ()
-  "Stock, except SELECT alone while online (multiplayer mod)."
-  (if (and (mp-online?) (cpad-pressed? 0 select) (not (cpad-hold? 0 l3)) (not (cpad-pressed? 0 start)))
-      (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons select))
-      )
+  "Stock, except SELECT alone while online, and the stock pause the host put us in (multiplayer
+   mod)."
+  (when (mp-online?)
+    (if (and (cpad-pressed? 0 select) (not (cpad-hold? 0 l3)) (not (cpad-pressed? 0 start)))
+        (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons select))
+        )
+    (if (and (-> *mp-pause* applied?) (= *master-mode* 'pause))
+        (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons select start r2))
+        )
+    )
   (*mp-stock-determine-pause-mode*)
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Pause for everyone, and the START menu over a running world
+;;
+;; Online, nobody stops the shared world alone:
+;;   - START opens the menu while the game goes on behind it, for us and for the others. The menu
+;;     stops every process masked `progress` (its process-mask setting, progress-init-by-other): a
+;;     setting of ours, applied after it (*setting-control* engine-hi), clears that bit again; its
+;;     sounds go on, and the screen behind it is the live game, not the stock still copy
+;;     (blit-displays menu mode left off). The world must not read the pad meanwhile: the mp-input
+;;     process, first to run every frame (its pool is the first child of *active-pool*), hides pad 0
+;;     from everything after it (the player, the camera, the NPCs), and the hook gives it back before
+;;     the menu reads it (the display process runs the hook, reads the pads, then runs the menu, its
+;;     child).
+;;   - The host's SELECT (a tap; held, SELECT shows the player list) pauses the game of every player:
+;;     the stock pause ('pause master mode), with "PAUSE" on screen. SELECT again resumes it 3 s
+;;     later, the countdown shown to everyone. The host's state carries both (flag paused-all, field
+;;     resume).
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_RESUME_DELAY (seconds 3))
+
+(defun mp-world-paused? ()
+  "#t while the host has the game paused for everyone: our pause as host, the host's flag as guest."
+  (case *mp-mode*
+    (((mp-mode host))
+     (-> *mp-pause* paused?)
+     )
+    (((mp-mode client))
+     (let ((host (mp-remote-state 0)))
+       (and host (logtest? (-> host flags) (mp-flag paused-all)))
+       )
+     )
+    (else
+      #f
+      )
+    )
+  )
+
+(defun mp-resume-ms ()
+  "Milliseconds before the paused game resumes, 0 when no countdown runs (the host's, as guest)."
+  (cond
+    ((= *mp-mode* (mp-mode host))
+     (if (and (-> *mp-pause* paused?) (nonzero? (-> *mp-pause* resume-at)))
+         (max 1 (/ (* 10 (- (-> *mp-pause* resume-at) (mp-now))) 3))
+         0
+         )
+     )
+    ((mp-remote-state 0)
+     (the-as int (-> (mp-remote-state 0) resume))
+     )
+    (else
+      0
+      )
+    )
+  )
+
+(defun mp-host-toggle-pause ()
+  "Host, SELECT tapped: pause the game for everyone (only from the game itself, not a menu); paused,
+   resume it in 3 s; during that countdown, stay paused."
+  (let ((p *mp-pause*))
+    (cond
+      ((not (-> p paused?))
+       (when (and (= *master-mode* 'game) (mp-in-game?))
+         (set! (-> p paused?) #t)
+         (set! (-> p resume-at) 0)
+         (+! (-> p pauses) 1)
+         (format 0 "[multiplayer] the host pauses the game for everyone~%")
+         )
+       )
+      ((zero? (-> p resume-at))
+       (set! (-> p resume-at) (+ (mp-now) MP_RESUME_DELAY))
+       (format 0 "[multiplayer] the game resumes in 3 s~%")
+       )
+      (else
+        (set! (-> p resume-at) 0)
+        (format 0 "[multiplayer] resume cancelled, still paused~%")
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-update-select ()
+  "SELECT alone: when it went down (the player list shows once it is held 0.25 s); released quickly
+   with no other button, the host's pause or resume."
+  (let ((p *mp-pause*)
+        (pad (-> *cpad-list* cpads 0))
+        )
+    (cond
+      ((and (cpad-pressed? 0 select) (not (cpad-hold? 0 l3)) (not *popup-menu-open*))
+       (set! (-> p select-down) (mp-now))
+       (set! (-> p select-other?) #f)
+       )
+      ((cpad-hold? 0 select)
+       (if (nonzero? (logclear (-> pad button0-rel 0) (pad-buttons select)))
+           (set! (-> p select-other?) #t)
+           )
+       )
+      ((nonzero? (-> p select-down))
+       (if (and (= *mp-mode* (mp-mode host))
+                (not (-> p select-other?))
+                (< (- (mp-now) (-> p select-down)) (seconds 0.35))
+                )
+           (mp-host-toggle-pause)
+           )
+       (set! (-> p select-down) 0)
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-update-pause ()
+  "Every frame from the hook, even paused: the host's SELECT, its resume countdown, the stock pause
+   on every machine while the host has the game paused, and the START menu over a running world
+   (see above)."
+  (let ((p *mp-pause*))
+    (when (not (mp-online?))
+      (set! (-> p paused?) #f)
+      (set! (-> p resume-at) 0)
+      )
+    (if (mp-online?)
+        (mp-update-select)
+        )
+    ;; host: the countdown over, everyone resumes
+    (when (and (-> p paused?) (nonzero? (-> p resume-at)) (>= (mp-now) (-> p resume-at)))
+      (set! (-> p paused?) #f)
+      (set! (-> p resume-at) 0)
+      (format 0 "[multiplayer] the game resumes~%")
+      )
+    ;; every player: the stock pause while the host has the game paused (a player in its START menu
+    ;; stays there, its world stopped with the others', below)
+    (cond
+      ((and (mp-world-paused?) (= *master-mode* 'game) (mp-in-game?))
+       (set-master-mode 'pause)
+       (set! (-> p applied?) #t)
+       )
+      ((and (not (mp-world-paused?)) (-> p applied?))
+       (set! (-> p applied?) #f)
+       (if (= *master-mode* 'pause)
+           (set-master-mode 'game)
+           )
+       )
+      )
+    ;; online in game, the world runs under the START menu, unless the host paused it
+    (let ((live? (if (and (mp-online?) (mp-in-game?) (not (mp-world-paused?))) #t #f)))
+      (when (!= live? (-> p live?))
+        (set! (-> p live?) live?)
+        (if live?
+            (set-setting-by-param *setting-control* 'process-mask 'clear 0 (process-mask progress))
+            (remove-by-param0 (-> *setting-control* engine-hi) 'process-mask)
+            )
+        (apply-settings *setting-control*)
+        )
+      ;; the menu paused every sound (set-master-mode 'progress): the world's go on
+      (cond
+        ((and live? (= *master-mode* 'progress))
+         (when (not (-> p sounds?))
+           (set! (-> p sounds?) #t)
+           (sound-group-continue (the-as sound-group #xffffffff))
+           )
+         )
+        (else
+          (set! (-> p sounds?) #f)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- the START menu takes a still copy of the screen and stops drawing the world
+;; (engine/gfx/blit-displays.gc): while the world runs under the menu, the live game shows instead.
+(define-perm *mp-stock-set-menu-mode* (function blit-displays-work symbol symbol)
+  (method-of-type blit-displays-work set-menu-mode)
+  )
+
+(defmethod set-menu-mode ((this blit-displays-work) (arg0 symbol))
+  "Stock, except while the world runs under the START menu (online in game): no still copy, the
+   live game shows behind the menu."
+  (*mp-stock-set-menu-mode* this (and arg0 (not (-> *mp-pause* live?))))
+  )
+
+;; The first process to run every frame: its pool is the newest child of *active-pool*, which the
+;; kernel runs first (change-parent puts a child at the front).
+(define-perm *mp-input-pool* process-tree
+  (let ((pool (new 'global 'process-tree "mp-input-pool")))
+    (change-parent pool *active-pool*)
+    (set! (-> pool mask) (process-mask process-tree))
+    pool
+    )
+  )
+
+(deftype mp-input (process)
+  ()
+  )
+
+(defun mp-input-update ()
+  "Run first every frame: while our START menu is open over the running world, pad 0 is kept in
+   *mp-pad-backup* and hidden from what runs next (no button, sticks centered); the hook gives it
+   back before the menu reads it."
+  (when (and (-> *mp-pause* live?) (= *master-mode* 'progress) *progress-process*)
+    (let ((pad (-> *cpad-list* cpads 0)))
+      (mem-copy! (the-as pointer (&-> *mp-pad-backup* type)) (the-as pointer (&-> pad type)) (the-as int (size-of cpad-info)))
+      (cpad-invalid! pad)
+      (set! (-> pad valid) (-> *mp-pad-backup* valid))
+      (set! (-> *mp-pause* pad-held?) #t)
+      (+! (-> *mp-pause* pad-frames) 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-input-restore ()
+  "The hook, first: pad 0 back as the display process read it, for the menus and the pause check."
+  (when (-> *mp-pause* pad-held?)
+    (mem-copy! (the-as pointer (&-> (-> *cpad-list* cpads 0) type)) (the-as pointer (&-> *mp-pad-backup* type)) (the-as int (size-of cpad-info)))
+    (set! (-> *mp-pause* pad-held?) #f)
+    )
+  (none)
+  )
+
+(defstate mp-input-active (mp-input)
+  :code (behavior ()
+    (loop
+      (mp-input-update)
+      (suspend)
+      )
+    )
+  )
+
+(defbehavior mp-input-init-by-other mp-input ()
+  "Runs in every master mode (no freeze, pause, menu or progress bit)."
+  (logclear! (-> self mask) (process-mask freeze pause menu progress))
+  (go mp-input-active)
+  )
+
+(defun mp-draw-encoded ((buf dma-buffer) (str string) (x int) (y int) (scale float))
+  "A game-encoded string (lookup-text!, or formatted from one) centered at x, y."
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* x y 0.0 (font-color default) (font-flags shadow kerning middle large))))
+    (set! (-> ctx scale) scale)
+    (draw-string-adv str buf ctx)
+    )
+  (none)
+  )
+
+(defun mp-draw-pause ()
+  "While the host has the game paused: who resumes it, or the countdown before it does."
+  (when (and (mp-world-paused?) *target*)
+    (with-dma-buffer-add-bucket ((buf (-> (current-frame) global-buf)) (bucket-id debug-no-zbuf1))
+      (dma-buffer-add-gs-set-flusha buf
+                                    (alpha-1 (new 'static 'gs-alpha :b #x1 :d #x1))
+                                    (tex1-1 (new 'static 'gs-tex1 :mmag #x1 :mmin #x1))
+                                    )
+      ;; the stock pause shows "Pause" itself: who resumes it, or the countdown, above it
+      (draw-sprite2d-xy buf 0 164 512 32 (new 'static 'rgba :a #x50) #x3fffff)
+      (let ((ms (mp-resume-ms)))
+        (cond
+          ((> ms 0)
+           (format (clear *mp-temp-string*) (lookup-text! *common-text* (text-id progress-mp-resuming) #f) (/ (+ ms 999) 1000))
+           (mp-draw-encoded buf *mp-temp-string* 256 170 0.7)
+           )
+          ((= *mp-mode* (mp-mode host))
+           (mp-draw-text-id buf (text-id progress-mp-paused-host) 256 172 0.55)
+           )
+          (else
+            (mp-draw-text-id buf (text-id progress-mp-paused-guest) 256 172 0.55)
+            )
+          )
+        )
+      )
+    )
   (none)
   )
 
@@ -3701,6 +4028,7 @@
   "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
    then, when the mod is enabled, the network and the overlay. Network traffic must keep flowing
    while paused, or the other players would time out."
+  (mp-input-restore)
   (mods-menu-update)
   (if (pc-mp-test-active?)
       (mp-test-update)
@@ -3718,6 +4046,14 @@
          )
        )
      (mp-read-remote-states)
+     (mp-update-pause)
+     (if (not (handle->process (-> *mp-pause* input)))
+         (let ((proc (process-spawn mp-input :name "mp-input" :to *mp-input-pool*)))
+           (if proc
+               (set! (-> *mp-pause* input) (ppointer->handle proc))
+               )
+           )
+         )
      (mp-update-join-request)
      (mp-update-session-title)
      ;; when the process pool is full, retry once a second instead of every frame
@@ -3732,6 +4068,7 @@
          )
        )
      (mp-draw-overlay)
+     (mp-draw-pause)
      (mp-keep-seen-npcs)
      ;; the title screen's Host Game and Join Game (its layout follows the Secrets entry, which
      ;; appears once the memory card says it is unlocked)
@@ -3739,6 +4076,7 @@
      )
     ((or (!= *mp-mode* (mp-mode offline)) (handle->process (-> *mp-globals* manager)))
      (mp-shutdown)
+     (mp-update-pause)
      )
     )
   (none)

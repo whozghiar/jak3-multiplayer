@@ -1,0 +1,36 @@
+# Pause, host side. START opens the menu over the running world: the clocks of the target and of the
+# entities go on, the stick pushed meanwhile does not move the player, the guest is not paused.
+# SELECT tapped pauses everyone (PAUSE on every screen), SELECT again resumes 3 s later (countdown on
+# every screen); SELECT held shows the player list without pausing. The guest's own START menu does
+# not pause the host.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-pause
+50.5 log-me
+51 press start 100
+53 log-pause
+53.2 log-me
+53.5 stick 128 0 1500
+55.5 log-me
+56 log-pause
+56.5 screenshot menu-live
+57 press start 100
+60 log-pause
+62 press select 100
+64 log-pause
+64.5 screenshot paused
+68 log-pause
+70 press select 100
+71 log-pause
+71.5 screenshot resuming
+75 log-pause
+78 press select 1200
+78.8 log-pause
+80 log-pause
+84 wait-pause 0
+88 log-pause
+88.5 log-me
+90 log

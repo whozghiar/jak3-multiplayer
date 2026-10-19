@@ -1696,6 +1696,9 @@
   (progress-mp-countdown #x1560)
   (progress-mp-countdown-keys #x1561)
   (progress-mp-countdown-cancelled #x1562)
+  (progress-mp-paused-host #x1564)
+  (progress-mp-paused-guest #x1565)
+  (progress-mp-resuming #x1566)
   )
 ;; ---text-id
 

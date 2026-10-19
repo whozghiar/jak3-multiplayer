@@ -344,5 +344,8 @@
   "155f": "Libre : la fin du jeu, tout est débloqué",
   "1560": "La partie commence dans ~D",
   "1561": "<PAD_X> Annuler le lancement   <PAD_SQUARE> Mode de jeu",
-  "1562": "L'hôte a annulé le lancement"
+  "1562": "L'hôte a annulé le lancement",
+  "1564": "SELECT : reprendre la partie pour tous",
+  "1565": "L'hôte a mis la partie en pause",
+  "1566": "La partie reprend dans ~D"
 }

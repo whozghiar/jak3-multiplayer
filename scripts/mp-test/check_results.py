@@ -42,6 +42,21 @@ def grab(lines: list[str], pattern: str) -> list[tuple[str, ...]]:
     return [m.groups() for line in lines if (m := rx.search(line))]
 
 
+def pause_logs(lines):
+    """Every log-pause, as a dict: master, applied, world, resume, live, prevent, menu, target, pads, list."""
+    out = []
+    for i, line in enumerate(lines):
+        m = re.search(r"\] pause master (\S+) applied (\S+) world (\S+) resume (\d+) live (\S+)", line)
+        if not m or i + 2 >= len(lines):
+            continue
+        n = re.search(r"\] pause prevent-progress (\S+) menu-mode (\S+)", lines[i + 1])
+        k = re.search(r"\] pause clocks target (\d+) entity \d+ pad-frames (\d+) pauses \d+ list (\S+)", lines[i + 2])
+        if n and k:
+            out.append(dict(master=m[1], applied=m[2], world=m[3], resume=int(m[4]), live=m[5], prevent=n[1],
+                            menu=n[2], target=int(k[1]), pads=int(k[2]), list=k[3]))
+    return out
+
+
 class Checker:
     def __init__(self) -> None:
         self.failed = 0
@@ -613,6 +628,37 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the guest follows into it with everything unlocked too",
                 bool(gs) and int(gs[-1][0]) > 200 and gs[-1][1] == "#t" and gv[-1:] and gv[-1][1] == "#xff",
                 f"{gs[-1:]}, {gv[-1:]}")
+
+    elif scenario == "pause":
+        hp, gp = pause_logs(host), pause_logs(client)
+        menu = [d for d in hp if d["master"] == "progress"]
+        c.check(scenario, "START opens the menu over the running world (no progress mask, no still copy, clocks on)",
+                len(menu) >= 2 and all(d["prevent"] == "#f" and d["menu"] == "#f" for d in menu)
+                and menu[-1]["target"] > menu[0]["target"], f"{[(d['prevent'], d['menu'], d['target']) for d in menu]}")
+        me = grab(host, r"\] me (\S+) \S+ (\S+) speed")
+        c.check(scenario, "the stick pushed while the menu is open does not move the player",
+                len(me) >= 3 and me[1] == me[2] and menu and menu[-1]["pads"] > 0, f"{me[:3]}, pad frames hidden {menu[-1:] and menu[-1]['pads']}")
+        before = [d for d in gp if d["world"] == "#f"][:2]
+        moved = [int(n) for (n,) in grab(client, r"\] motion own \d+ moved \d+ copies \d+ moved (\d+)")]
+        c.check(scenario, "the guest is not paused by the host's menu, the host's NPCs move there",
+                len(before) == 2 and all(d["master"] == "game" for d in before) and any(n > 0 for n in moved),
+                f"{[d['master'] for d in before]}, copies moved {moved}")
+        paused = [d for d in gp if d["applied"] == "#t" and d["resume"] == 0]
+        c.check(scenario, "the host's SELECT pauses the guest (stock pause, its clocks stopped, START refused)",
+                len(paused) >= 2 and all(d["master"] == "pause" for d in paused) and paused[0]["target"] == paused[-1]["target"]
+                and bool(grab(host, r"the host pauses the game for everyone")), f"{[(d['master'], d['target']) for d in paused]}")
+        resuming = [d["resume"] for d in gp if d["resume"] > 0]
+        after = [d for d in gp if d["world"] == "#f" and d["master"] in ("game", "progress")][2:]
+        c.check(scenario, "SELECT again: everyone sees the 3 s countdown, then plays on",
+                bool(resuming) and 0 < resuming[0] <= 3000 and bool(after) and bool(grab(host, r"the game resumes(?! in)")),
+                f"resume ms {resuming}, then {[d['master'] for d in after]}")
+        held = [d for d in hp if d["list"] == "#t"]
+        c.check(scenario, "SELECT held shows the player list without pausing",
+                bool(held) and all(d["world"] == "#f" and d["master"] == "game" for d in held), f"{[(d['list'], d['world']) for d in held]}")
+        gmenu = [d for d in gp if d["master"] == "progress" and d["live"] == "#t"]
+        c.check(scenario, "the guest's own START menu runs over its world and does not pause the host",
+                bool(gmenu) and gmenu[0]["prevent"] == "#f" and all(d["master"] != "pause" for d in hp[-3:]),
+                f"guest {[(d['master'], d['prevent']) for d in gmenu]}, host {[d['master'] for d in hp[-3:]]}")
 
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")

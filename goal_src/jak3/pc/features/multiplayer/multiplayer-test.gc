@@ -15,6 +15,7 @@
 ;;   address <ip:port> | log-lobby                           server address field only; menu page, title entries, lobby
 ;;   wait-menu <page>                                        the script waits: the menu shows that page (title...)
 ;;   wait-countdown                                          the script waits: the lobby's start countdown runs
+;;   wait-pause <0|1> | wait-resume                          the script waits: the game paused by the host (or not); its resume countdown
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -46,6 +47,7 @@
 ;;   log-aimable                                             what the area weapons find within 20 m of us
 ;;   log-vehicles                                            every vehicle within 30 m of us, ours and copies
 ;;   log-ping                                                players' round trip to the host and health, list shown, paused
+;;   log-pause                                               the host's pause for everyone, the START menu over the world
 ;;   log-name | log-session                                  name and keyboard; game started (free roam, campaign), unlocks
 ;;   log-anim <daxter|jak> <index>                           the art group entry there (a clip is loaded when shown)
 ;;   log-seat                                                our model as a passenger: root and bones from the seat
@@ -1859,6 +1861,17 @@
          (set! (-> *mp-test-wait* kind) 'countdown)
          (pc-mp-test-pause #t)
          )
+        ((string= cmd "wait-pause")
+         ;; the script waits until the host's pause for everyone is on (1) or off (0) here
+         (set! (-> *mp-test-wait* slot) (mp-test-int))
+         (set! (-> *mp-test-wait* kind) 'pause)
+         (pc-mp-test-pause #t)
+         )
+        ((string= cmd "wait-resume")
+         ;; the script waits until the host's resume countdown runs
+         (set! (-> *mp-test-wait* kind) 'resume)
+         (pc-mp-test-pause #t)
+         )
         ((string= cmd "wait-player")
          ;; the script waits until player <slot> is in game for 2 s
          (set! (-> *mp-test-wait* slot) (mp-test-int))
@@ -2360,6 +2373,21 @@
              )
            )
          )
+        ((string= cmd "log-pause")
+         ;; log-pause: master mode, the host's pause as seen here, the menu over a running world, and
+         ;; the clocks of the target and of the entities (they move when those processes run)
+         (format 0 "[mp-test] pause master ~A applied ~A world ~A resume ~D live ~A~%"
+                 *master-mode* (-> *mp-pause* applied?) (mp-world-paused?) (mp-resume-ms) (-> *mp-pause* live?)
+                 )
+         (format 0 "[mp-test] pause prevent-progress ~A menu-mode ~A~%"
+                 (logtest? (-> *kernel-context* prevent-from-run) (process-mask progress))
+                 (get-menu-mode *blit-displays-work*)
+                 )
+         (format 0 "[mp-test] pause clocks target ~D entity ~D pad-frames ~D pauses ~D list ~A~%"
+                 (-> *display* target-clock frame-counter) (-> *display* entity-clock frame-counter)
+                 (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
+                 )
+         )
         ((string= cmd "log-me")
          ;; one short line: own position, speed and state (fine-grained probes)
          (when *target*
@@ -2417,6 +2445,12 @@
        )
       (('countdown)
        (> (mp-lobby-countdown-ms) 0)
+       )
+      (('pause)
+       (= (mp-world-paused?) (= (-> w slot) 1))
+       )
+      (('resume)
+       (> (mp-resume-ms) 0)
        )
       (('menu)
        (cond
