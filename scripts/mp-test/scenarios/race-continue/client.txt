@@ -1,5 +1,5 @@
-# Race continue points (co-op), guest side: the same continue; the guest is moved 4.5 m aside before
-# its turtle appears, so the two turtles do not stand in each other.
+# Race continue points (co-op), guest side: the same continue; the guest is moved 6 m back before its
+# turtle appears, so the two turtles do not stand in each other.
 1 enable
 1 name Guest
 1 color 2

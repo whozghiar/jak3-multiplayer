@@ -1,0 +1,44 @@
+# The general features from a retail boot (run_mp_test.py --retail: the title screen, no debug
+# segment), three players, host side. Host Game opens the lobby; once both guests are ready, X starts
+# the 10 s countdown and free roam. In game: SELECT pauses everyone, SELECT again resumes 3 s later;
+# START opens the menu over the running world; the first guest's Dark Jak is seen here; the host's
+# outfit (Appearance page) reaches both guests.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 log-lobby
+70 log-lobby
+70.5 press x 100
+71.5 log-lobby
+72 screenshot countdown
+90 wait-player 1
+90.5 wait-player 2
+92 log-session
+93 press select 100
+95 log-pause
+95.5 screenshot paused
+99 press select 100
+100 log-pause
+100.5 screenshot resuming
+104 log-pause
+106 press start 100
+108 log-pause
+108.5 screenshot menu-live
+110 press start 100
+118 log-power
+118.5 look-player 1
+119 screenshot dark-guest
+122 skin 1 ff3010 60
+122.5 skin 5 20ff40 80
+124 skin-page
+126 log-skin
+126.5 screenshot page
+128 press x 100
+130 log-skin
+140 log

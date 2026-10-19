@@ -1,0 +1,40 @@
+# A real race in co-op, guest side: Join Game > Connect, X ready, follows into Kleiver's race as Jak
+# (the co-op offer made it Daxter: character 0 again once joined).
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+63 character 0
+75 log-session
+75.5 log-race
+76 log-skip
+76.5 log-me
+77 screenshot t75
+90 log-race
+90.5 log-skip
+91 log-me
+91.5 screenshot t90
+105 log-race
+105.5 log-skip
+106 log-me
+106.5 log-vehicles
+107 screenshot t105
+120 log-race
+120.5 log-me
+121 screenshot t120
+135 log-race
+135.5 log-me
+136 screenshot t135
+150 log

@@ -730,24 +730,85 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         gm = grab(client, r"\] race me driving (\S+) riding (\S+) perched (\S+) state (\S+)")
         c.check(scenario, "the guest on foot gets a turtle of its own beside the host: the start goes (1)",
                 any("a vehicle for the race start of player 0" in l for l in client) and bool(gm) and gm[0][0] == "#t"
-                and bool(hr) and hr[0][3] == "1", f"guest {gm[:1]}, host {hr[:1]}")
-        c.check(scenario, "riding on the back of the host's turtle counts as aboard: the start goes at once (2)",
-                any(r == "#t" and st == "target-grab-ride" for _, r, _, st in gm) and len(hr) > 2 and hr[2][3] == "1",
-                f"guest {gm}, host {hr[2:3]}")
+                and len(hr) > 1 and hr[1][3] == "1", f"guest {gm[:1]}, host {hr[:2]}")
+        c.check(scenario, "riding on the back of the host's turtle counts as aboard: the countdown runs, then the start (2)",
+                any(r == "#t" and st == "target-grab-ride" for _, r, _, st in gm) and len(hr) > 3
+                and hr[2][0] == "#t" and hr[2][1] == hr[2][2] == "2" and hr[3][3] == "2", f"guest {gm}, host {hr[2:4]}")
         c.check(scenario, "Daxter on foot holds the start (1/2), the host may leave its vehicle meanwhile (3)",
                 any(w == "#t" and a == "1" and p == "2" and e == "#t" for w, a, p, _, _, e in hr), f"{hr}")
         c.check(scenario, "Daxter on the driving host's shoulder: the start goes (3)",
-                bool(gm) and gm[-1][2] == "#t" and hr[-1][3] == "2", f"guest {gm[-1:]}, host {hr[-1:]}")
+                bool(gm) and gm[-1][2] == "#t" and hr[-1][3] == "3", f"guest {gm[-1:]}, host {hr[-1:]}")
 
     elif scenario == "race-continue":
         hm = grab(host, r"\] me " + NUM + " " + NUM + " " + NUM + r" speed \S+ state (\S+)")
         gm = grab(client, r"\] me " + NUM + " " + NUM + " " + NUM + r" speed \S+ state (\S+)")
-        c.check(scenario, "the guest moves aside before its turtle appears",
-                any("race start: our vehicle 4.5 aside" in l for l in client), "")
+        c.check(scenario, "the guest moves back before its turtle appears",
+                any("race start: our vehicle 6.0 behind" in l for l in client), "")
         apart = math.dist((float(hm[-1][0]), float(hm[-1][2])), (float(gm[-1][0]), float(gm[-1][2]))) if hm and gm else 0.0
         c.check(scenario, "each player drives its own turtle, apart from the other's",
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
+
+    elif scenario == "retail-general":
+        viewer = s.get("viewer", (None, []))[1]
+        c.check(scenario, "a retail boot: no debug segment, three players in the host's free roam",
+                grab(host, r"session debug-segment (\S+)")[-1:] == [("#f",)]
+                and grab(host, r"session status .* players (\d+)")[-1:] == [("3",)], "")
+        cd = [[int(ms) for (ms,) in grab(lines, r"\] lobby countdown (\d+) ms") if int(ms) > 0] for lines in (host, client, viewer)]
+        c.check(scenario, "the lobby's countdown on the host and on both guests", all(cd), f"{cd}")
+        ok = True
+        for lines in (client, viewer):
+            p = pause_logs(lines)
+            first = next((i for i, d in enumerate(p) if 0 < d["resume"] <= 3000), None)
+            ok = ok and any(d["applied"] == "#t" and d["master"] == "pause" for d in p) \
+                and first is not None and any(d["master"] == "game" for d in p[first:])
+        c.check(scenario, "the host's SELECT pauses both guests, SELECT again resumes after the 3 s countdown", ok, "")
+        hm = [d for d in pause_logs(host) if d["master"] == "progress"]
+        gm = [d for d in pause_logs(client) if d["master"] == "progress"]
+        c.check(scenario, "START opens the menu over the running world, on the host and on a guest",
+                bool(hm) and bool(gm) and all(d["live"] == "#t" and d["prevent"] == "#f" for d in hm + gm),
+                f"{[(d['live'], d['prevent']) for d in hm + gm]}")
+        dark = [grab(lines, r"power puppet \d+ skin (\d+) own-morph \S+ skin-draws (\d+)") for lines in (host, viewer)]
+        c.check(scenario, "the first guest's Dark Jak skin is drawn on the host and on the other guest",
+                all(any(k == "255" and int(n) > 0 for k, n in d) for d in dark), f"{dark}")
+        seen = [grab(lines, r"\] skin player 0 (.*)") for lines in (client, viewer)]
+        c.check(scenario, "the host's outfit reaches both guests",
+                all(x and x[-1][0].split()[1] == "99ff3010" and x[-1][0].split()[5] == "cc20ff40" for x in seen), f"{seen}")
+
+    elif scenario == "beam-real":
+        hb = grab(host, r"\] beams (\d+) here (\d+)/(\d+) near (\S+) held (\d+)")
+        hs = grab(host, r"\] state task-manager-arena-training (\S+)")
+        c.check(scenario, "the arena training's last step: the host in its beam is held (1/2) while the guest is away",
+                any(h == "1" and p == "2" and int(held) > 0 for _, h, p, _, held in hb) and "done" in [s for (s,) in hs],
+                f"{hb}, states {hs}")
+        c.check(scenario, "the guest comes: every player there (2/2), the mission completes on the host",
+                any("every player at the waypoint (2/2)" in l for l in host) and bool(hs) and hs[-1][0] == "resolution",
+                f"states {hs}")
+        gs = grab(client, r"\] state task-manager-arena-training (\S+)")
+        c.check(scenario, "and on the guest", bool(gs) and gs[-1][0] == "resolution", f"{gs}")
+
+    elif scenario in ("race-real", "race-real-daxter"):
+        held = grab(host, r"\] the race starts \(held " + NUM + " s\\)")
+        c.check(scenario, "Kleiver's race on the host waits while the guest loads its world (1/2)",
+                any("the race start waits for every player aboard (1/2)" in l for l in host), "")
+        c.check(scenario, "the race starts once every player is aboard, after the 10 s countdown",
+                bool(held) and float(held[0][0]) >= 10.0
+                and any("every player aboard (2): the race starts in 10 s" in l for l in host), f"held {held}")
+        gm = grab(client, r"\] race me driving (\S+) riding (\S+) perched (\S+) state (\S+)")
+        gr = grab(client, r"\] race waiting (\S+) aboard (\d+)/(\d+) starts (\d+)")
+        hr = grab(host, r"\] race waiting (\S+) aboard (\d+)/(\d+) starts (\d+)")
+        if scenario == "race-real":
+            c.check(scenario, "each machine's race gives its own turtle, the guest's 6 m back; both drive",
+                    any("race start: our vehicle 6.0 behind" in l for l in client)
+                    and bool(gm) and gm[-1][0] == "#t" and hr[-1:] and hr[-1][3] == "1",
+                    f"guest {gm[-1:]}, host {hr[-1:]}")
+        else:
+            c.check(scenario, "Daxter leaves his turtle during the countdown: the start waits again (1/2)",
+                    any(w == "#t" and a == "1" for w, a, _, _ in gr), f"{gr}")
+            c.check(scenario, "Daxter on the host's shoulder: the countdown starts again, then the race",
+                    sum("every player aboard (2): the race starts in 10 s" in l for l in host) >= 2
+                    and bool(gm) and gm[-1][2] == "#t" and hr[-1:] and hr[-1][3] == "1",
+                    f"guest {gm[-1:]}, host {hr[-1:]}")
 
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")

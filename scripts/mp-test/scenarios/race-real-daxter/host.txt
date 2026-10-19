@@ -1,0 +1,29 @@
+# A real race in co-op with Daxter, host side: as race-real (co-op at Kleiver's race), the guest
+# plays Daxter: it arrives on foot, so the race's start waits (1/2) until it jumps on the driving
+# host's shoulder.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission desert-course-race
+63 press x 100
+90 log-race
+94 log-race
+94.5 screenshot wait-1
+98 log-race
+102 log-race
+102.5 screenshot wait-2
+106 log-race
+110 log-race
+110.5 look-player 1
+111 screenshot daxter-shoulder
+120 log-race
+120.5 log-coop
+121 screenshot racing
+135 log

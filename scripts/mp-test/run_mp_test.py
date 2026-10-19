@@ -11,7 +11,8 @@ goal_src/jak3/pc/features/multiplayer/multiplayer-test.gc.
 Every instance runs `gk -v --game jak3 --config-path <dir> -- -boot -fakeiso -debug` with
 MP_TEST_SCRIPT set, in its own config folder out/mp-test/<scenario>/<instance>/ (a copy of the
 user's Jak 3 saves and settings, small window, side by side, controller ignored when unfocused).
-The debug boot loads save slot 1, so the game starts in game, where the save left it.
+The debug boot loads save slot 1, so the game starts in game, where the save left it. --retail
+boots as `task boot-game-retail` (no -debug): the title screen, without the debug segment.
 
 When the last command of every script is past (plus --extra-seconds), every instance is stopped.
 Output in out/mp-test/<scenario>/:
@@ -93,6 +94,8 @@ def main() -> int:
                         help="percentage of the datagrams each instance receives that are dropped (MP_TEST_LOSS)")
     parser.add_argument("--shot-size", default="",
                         help="screenshot size, '<width>x<height>' (MP_TEST_SHOT_SIZE, default 1280x720)")
+    parser.add_argument("--retail", action="store_true",
+                        help="boot as task boot-game-retail: the title screen, no debug segment")
     args = parser.parse_args()
 
     scenario = SCENARIOS / args.scenario
@@ -125,7 +128,7 @@ def main() -> int:
         env.update(NO_CONTROLLER)
         log = open(folder / "gk.log", "w", encoding="utf-8", errors="replace")
         cmd = [str(GK), "-v", "--game", "jak3", "--config-path", str(folder),
-               "--", "-boot", "-fakeiso", "-debug"]
+               "--", "-boot", "-fakeiso"] + ([] if args.retail else ["-debug"])
         print(f"[run] {name}: {' '.join(cmd)}")
         procs.append((name, folder, log,
                       subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)))
@@ -135,7 +138,8 @@ def main() -> int:
     # a script that waits (wait-joined, wait-player) stops its clock meanwhile: the games run until
     # every script printed that it finished (each game logs it), within a cap
     waits = any("wait-" in s.read_text(encoding="utf-8") for s in scripts)
-    cap = duration + (240.0 if waits else 0.0)
+    # a retail boot plays the intro before the title screen's menu opens (the scripts skip it)
+    cap = duration + (240.0 if waits else 0.0) + (120.0 if args.retail else 0.0)
     print(f"[run] waiting {duration:.0f} s" + (f" plus the scripts' waits (at most {cap:.0f} s)" if waits else ""))
     start = time.time()
     finished_at = None

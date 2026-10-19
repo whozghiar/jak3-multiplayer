@@ -1,0 +1,37 @@
+# A real race in co-op, host side: Host Game, co-op at Kleiver's race (desert-course-race); X starts
+# the countdown once the guest is ready. Both play Jak: each machine's race gives its own turtle, and
+# the race's start waits until both drive.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission desert-course-race
+63 press x 100
+64 log-lobby
+95 log-session
+95.5 log-race
+96 log-skip
+96.5 log-me
+97 screenshot t95
+110 log-race
+110.5 log-skip
+111 log-me
+111.5 screenshot t110
+125 log-race
+125.5 log-skip
+126 log-me
+126.5 log-vehicles
+127 screenshot t125
+140 log-race
+140.5 log-me
+141 screenshot t140
+155 log-race
+155.5 log-me
+156 screenshot t155
+170 log

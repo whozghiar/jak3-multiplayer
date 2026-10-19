@@ -1,0 +1,31 @@
+# A real mission's waypoint in co-op, host side: co-op at the arena's jump training (arena-training-1).
+# Its task manager is taken to its last step (done), whose beam it checks itself with (target-pos 0)
+# within 3 m: the host stands in it, the mission waits (1/2) until the guest comes, then completes.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission arena-training-1
+63 press x 100
+70 wait-player 1
+72 log-state task-manager-arena-training
+72.5 go-state task-manager-arena-training done
+75 log-state task-manager-arena-training
+75.5 log-beams
+76 goto-beam
+78 log-beams
+78.5 log-me
+79 screenshot beam-wait
+84 log-beams
+84.5 log-state task-manager-arena-training
+96 log-beams
+96.5 log-state task-manager-arena-training
+97 log-me
+97.5 screenshot beam-done
+100 log

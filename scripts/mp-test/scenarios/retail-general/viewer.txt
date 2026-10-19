@@ -1,0 +1,33 @@
+# The general features from a retail boot, second guest: joins the same lobby, follows into free
+# roam; paused and resumed with everyone; sees the first guest's Dark Jak; receives the host's outfit.
+1 enable
+1 name Viewer
+1 color 3
+1 character 0
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+41 log-lobby
+50 press x 100
+51 wait-countdown
+52 log-lobby
+53 wait-joined
+55 goto-player 0 -4
+56 face-player 0
+57 wait-pause 1
+58 log-pause
+61 wait-resume
+61.5 log-pause
+62 wait-pause 0
+63 log-pause
+76 log-power
+76.5 look-player 1
+77 screenshot dark-seen
+88 log-skin
+90 log
