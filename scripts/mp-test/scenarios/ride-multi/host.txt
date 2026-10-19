@@ -1,0 +1,13 @@
+# Several passengers, host side: at Haven's port, drives a three-seat hover car (h-car-a) and stays
+# still while both guests ride in it, one per seat (seats 1 and 2).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+45 wait-player 2
+46 zone 0
+70 vehicle 3
+90 log-seat
+91 screenshot driver
+92 log

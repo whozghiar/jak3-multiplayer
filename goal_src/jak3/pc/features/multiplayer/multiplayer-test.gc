@@ -16,6 +16,7 @@
 ;;   wait-menu <page>                                        the script waits: the menu shows that page (title...)
 ;;   wait-countdown                                          the script waits: the lobby's start countdown runs
 ;;   wait-pause <0|1> | wait-resume                          the script waits: the game paused by the host (or not); its resume countdown
+;;   wait-driving <slot>                                     the script waits: that player drives a vehicle (for 2 s)
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -442,7 +443,7 @@
                        )
                )
          (seat (if riding?
-                   (-> driver seat-trans)
+                   (mp-seat-pos driver *mp-ride-seat* (new 'stack-no-clear 'vector))
                    (-> *mp-local* trans)
                    )
                )
@@ -461,6 +462,9 @@
           (vector-! v (-> proc root trans) seat)
           (vector-orient-by-quat! v v inv)
           (format 0 "[mp-test] seat ~A root ~m ~m ~m anim ~D~%" (if riding? 'passenger 'driver) (-> v x) (-> v y) (-> v z) (mp-anim-index proc))
+          (format 0 "[mp-test] seat index ~D of ~D, from the driver's seat ~m~%" (if riding? *mp-ride-seat* 0) (-> driver seat-count)
+                  (vector-vector-distance seat (-> driver veh-trans))
+                  )
           (set-vector! lo 1000000.0 1000000.0 1000000.0 1.0)
           (set-vector! hi -1000000.0 -1000000.0 -1000000.0 1.0)
           (dotimes (i (-> nodes length))
@@ -1889,6 +1893,13 @@
          (set! (-> *mp-test-wait* kind) 'pause)
          (pc-mp-test-pause #t)
          )
+        ((string= cmd "wait-driving")
+         ;; the script waits until player <slot> drives a vehicle, for 2 s
+         (set! (-> *mp-test-wait* slot) (mp-test-int))
+         (set! (-> *mp-test-wait* since) 0)
+         (set! (-> *mp-test-wait* kind) 'driving)
+         (pc-mp-test-pause #t)
+         )
         ((string= cmd "wait-resume")
          ;; the script waits until the host's resume countdown runs
          (set! (-> *mp-test-wait* kind) 'resume)
@@ -2554,6 +2565,23 @@
        )
       (('resume)
        (> (mp-resume-ms) 0)
+       )
+      (('driving)
+       (let ((st (mp-remote-state (-> w slot))))
+         (cond
+           ((not (and st (logtest? (-> st flags) (mp-flag driving))))
+            (set! (-> w since) 0)
+            #f
+            )
+           ((zero? (-> w since))
+            (set! (-> w since) (mp-now))
+            #f
+            )
+           (else
+             (>= (- (mp-now) (-> w since)) (seconds 2))
+             )
+           )
+         )
        )
       (('menu)
        (cond

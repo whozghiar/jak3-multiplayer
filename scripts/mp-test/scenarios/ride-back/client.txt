@@ -1,0 +1,12 @@
+# Riding a one-seat vehicle, guest side: L1 + triangle next to the host's turtle rides on its back
+# (seat 1 is the back of a one-seat vehicle).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+57 goto-player 0 0 3
+58 press l1+triangle 200
+62 log-seat
+62.5 screenshot riding-back
+63 log

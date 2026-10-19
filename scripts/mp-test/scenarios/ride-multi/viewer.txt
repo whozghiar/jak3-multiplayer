@@ -1,0 +1,14 @@
+# Several passengers, second guest: rides in the host's car after the first guest (seat 2), then
+# looks at the car from its seat.
+1 enable
+1 name Third
+1 color 3
+46 join 127.0.0.1:7777
+46.1 wait-joined
+47 zone 0
+72 wait-driving 0
+76 goto-player 0 0 -3
+77 press l1+triangle 200
+80 log-seat
+81 screenshot riding-seat2
+82 log

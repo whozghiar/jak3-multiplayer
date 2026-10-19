@@ -687,6 +687,20 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the guest receives the host's new outfit",
                 bool(gseen) and gseen[-1][0].split()[1] == "68ff3010", f"{gseen[-1:]}")
 
+    elif scenario == "ride-back":
+        g = grab(client, r"\] seat index (\d+) of (\d+), from the driver's seat " + NUM)
+        root = grab(client, r"\] seat passenger root " + NUM + " " + NUM + " " + NUM)
+        c.check(scenario, "the guest rides on the back of a one-seat vehicle (seat 1 of 1), in the seat",
+                bool(g) and g[-1][:2] == ("1", "1") and 0.5 < float(g[-1][2]) < 2.0
+                and bool(root) and all(abs(float(v)) < 0.05 for v in root[-1]), f"{g[-1:]}, root {root[-1:]}")
+
+    elif scenario == "ride-multi":
+        viewer = s.get("viewer", (None, []))[1]
+        a = grab(client, r"\] seat index (\d+) of (\d+)")
+        b = grab(viewer, r"\] seat index (\d+) of (\d+)")
+        c.check(scenario, "two passengers ride the host's three-seat car, each in its own seat (1 and 2)",
+                a[-1:] == [("1", "3")] and b[-1:] == [("2", "3")], f"first {a[-1:]}, second {b[-1:]}")
+
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
         c.check(scenario, "holding SELECT shows the player list without pausing",

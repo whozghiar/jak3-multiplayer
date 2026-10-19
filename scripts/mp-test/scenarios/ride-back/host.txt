@@ -1,0 +1,12 @@
+# Riding a one-seat vehicle, host side: drives a turtle (v-turtle, one seat) and stands still while
+# the guest rides on its back, behind and above the driver's seat.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+52 vehicle 12
+62 log-seat
+64 look-player 1
+65 screenshot back-rider
+66 log

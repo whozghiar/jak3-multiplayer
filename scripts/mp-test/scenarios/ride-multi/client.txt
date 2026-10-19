@@ -1,0 +1,14 @@
+# Several passengers, first guest: goes to Haven's port with the host and rides in its car first
+# (seat 1).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+46 zone 0
+72 wait-driving 0
+73 goto-player 0 0 3
+74 press l1+triangle 200
+80 log-seat
+81 screenshot riding-seat1
+82 log

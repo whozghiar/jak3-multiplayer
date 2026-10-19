@@ -78,7 +78,7 @@ struct PlayerState {
   u32 powers;           // 204 Dark / Light Jak as the model shows them (mp-pack-powers)
   u16 countdown_ms;     // 208 host: ms before the lobby's game starts, 0 = no countdown
   u16 resume_ms;        // 210 host: ms before the paused game resumes, 0 = none
-  u32 pad1[3];          // 212
+  s16 seat_offset[6];   // 212 driver: seats 2 and 3 from the vehicle's root, its frame, in cm
 };
 static_assert(sizeof(PlayerState) == 224, "PlayerState must match mp-player-state");
 

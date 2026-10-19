@@ -51,6 +51,8 @@
   (ready 8)        ;; a guest said it is ready in the lobby (multiplayer-menu.gc)
   (coop 9)         ;; the host's game mode is co-op (read by guests in the lobby, before any world event)
   (paused-all 10)  ;; host: the game is paused for everyone (its resume field counts the restart down)
+  (seat-a 11)      ;; a passenger's seat in its driver's vehicle, bits 11-12 (1-3, mp-state-ride-seat)
+  (seat-b 12)
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -131,7 +133,7 @@
    (powers     uint32)     ;; Dark Jak and Light Jak as the model shows them (mp-pack-powers)
    (countdown  uint16)     ;; host: ms before the lobby's game starts, 0 no countdown (multiplayer-menu.gc)
    (resume     uint16)     ;; host: ms before the paused game resumes, 0 none ("Pause for everyone")
-   (pad1       uint32 3)
+   (seat-offset int16 6)   ;; driver: seats 2 and 3 from the vehicle's root, in its frame, in cm
    )
   :size-assert #xe0
   )
@@ -209,8 +211,9 @@
 (define *mp-invulnerable-applied* #f)
 ;; #t once this guest said it is ready in the lobby; cleared when a session starts or ends.
 (define *mp-lobby-ready* #f)
-;; Slot of the driver this player rides with, -1 when not riding.
+;; Slot of the driver this player rides with, -1 when not riding, and the seat it rides in (1-3).
 (define *mp-ride-slot* -1)
+(define *mp-ride-seat* 1)
 ;; Slot of the remote vehicle the player stands next to (interaction prompt), -1 for none.
 (define *mp-prompt-slot* -1)
 ;; A vehicle taken from another player: that player's slot, and until when the copies of its
@@ -583,6 +586,36 @@
   out
   )
 
+(defun mp-state-ride-seat ((st mp-player-state))
+  "The seat a passenger rides in, in its driver's vehicle (flags bits 11-12), 1 when unset."
+  (max 1 (logand (shr (the-as int (-> st flags)) 11) 3))
+  )
+
+(defun mp-seat-pos ((driver mp-player-state) (seat int) (out vector))
+  "World position of seat `seat` of the vehicle `driver` drives, as its state gives it: seat 1 (or
+   the back of a one-seat vehicle) in seat-trans, seats 2 and 3 from the vehicle's root in
+   seat-offset (cm, in the vehicle's frame)."
+  (cond
+    ((< seat 2)
+     (vector-copy! out (-> driver seat-trans))
+     )
+    (else
+      (let ((i (* 3 (min 1 (+ seat -2)))))
+        (set-vector! out
+                     (* 40.96 (the float (-> driver seat-offset i)))
+                     (* 40.96 (the float (-> driver seat-offset (+ i 1))))
+                     (* 40.96 (the float (-> driver seat-offset (+ i 2))))
+                     1.0
+                     )
+        )
+      (vector-orient-by-quat! out out (-> driver veh-quat))
+      (vector+! out out (-> driver veh-trans))
+      (set! (-> out w) 1.0)
+      )
+    )
+  out
+  )
+
 (defun mp-vehicle-skel ((vtype int))
   "The model of a vehicle type, or #f when its art is not loaded here."
   (when (and (>= vtype 0) (< vtype (-> *mp-vehicle-types* length)))
@@ -863,15 +896,19 @@
     (set! (-> st veh-type) -1)
     (set! (-> st seat-count) 0)
     (set! (-> st ride-slot) *mp-ride-slot*)
+    (dotimes (i 6)
+      (set! (-> st seat-offset i) 0)
+      )
     (if (paused?)
         (logior! (-> st flags) (mp-flag paused))
         )
     (if *mp-invulnerable*
         (logior! (-> st flags) (mp-flag invulnerable))
         )
-    (if (>= *mp-ride-slot* 0)
-        (logior! (-> st flags) (mp-flag riding))
-        )
+    (when (>= *mp-ride-slot* 0)
+      (logior! (-> st flags) (mp-flag riding))
+      (logior! (-> st flags) (the-as mp-flag (shl (logand *mp-ride-seat* 3) 11)))
+      )
     (if *mp-authority*
         (logior! (-> st flags) (mp-flag authority))
         )
@@ -952,10 +989,37 @@
                 (vector-copy! (-> st veh-trans) (-> (the-as process-drawable veh) root trans))
                 (quaternion-copy! (-> st veh-quat) (-> (the-as process-drawable veh) root quat))
                 (set! (-> st seat-count) (mp-vehicle-seat-count veh))
-                (if (> (-> st seat-count) 1)
-                    (mp-vehicle-seat-pos veh 1 (-> st seat-trans))
-                    (vector-copy! (-> st seat-trans) (-> st veh-trans))
+                (cond
+                  ((> (-> st seat-count) 1)
+                   (mp-vehicle-seat-pos veh 1 (-> st seat-trans))
+                   )
+                  (else
+                    ;; one seat: a passenger rides on the back, behind and above the driver's seat
+                    (mp-vehicle-seat-pos veh 0 (-> st seat-trans))
+                    (let ((back (set-vector! (new 'stack-no-clear 'vector) 0.0 (meters 0.45) (meters -0.8) 1.0)))
+                      (vector-orient-by-quat! back back (-> st veh-quat))
+                      (vector+! (-> st seat-trans) (-> st seat-trans) back)
+                      (set! (-> st seat-trans w) 1.0)
+                      )
                     )
+                  )
+                ;; seats 2 and 3 from the vehicle's root, in its frame (cm): more passengers
+                (let ((inv (quaternion-conjugate! (new 'stack-no-clear 'quaternion) (-> st veh-quat)))
+                      (pos (new 'stack-no-clear 'vector))
+                      )
+                  (dotimes (k 2)
+                    (when (< (+ k 2) (-> st seat-count))
+                      (mp-vehicle-seat-pos veh (+ k 2) pos)
+                      (vector-! pos pos (-> st veh-trans))
+                      (vector-orient-by-quat! pos pos inv)
+                      (dotimes (a 3)
+                        (set! (-> st seat-offset (+ (* 3 k) a))
+                              (the int (fmax -32767.0 (fmin 32767.0 (/ (-> pos data a) 40.96))))
+                              )
+                        )
+                      )
+                    )
+                  )
                 )
               )
             )
@@ -1273,7 +1337,7 @@
                      (-> self root)
                      (vector+!
                        (new 'stack-no-clear 'vector)
-                       (-> driver seat-trans)
+                       (mp-seat-pos driver (mp-state-ride-seat st) (new 'stack-no-clear 'vector))
                        (mp-daxter-seat-offset
                          (-> driver veh-type)
                          (-> driver veh-quat)
@@ -1282,7 +1346,7 @@
                          )
                        )
                      )
-                   (move-to-point! (-> self root) (-> driver seat-trans))
+                   (move-to-point! (-> self root) (mp-seat-pos driver (mp-state-ride-seat st) (new 'stack-no-clear 'vector)))
                    )
                (quaternion-copy! (-> self root quat) (-> driver veh-quat))
                )
@@ -1777,12 +1841,12 @@
    with it (Jak's grab-ride follows the seat by itself)."
   (let ((st (mp-remote-state (-> self driver))))
     (when st
-      (vector-copy! (-> self root trans) (-> st seat-trans))
+      (mp-seat-pos st *mp-ride-seat* (-> self root trans))
       (quaternion-copy! (-> self root quat) (-> st veh-quat))
       (when (and *target* (= (mp-target-state-name) 'target-indax-grab))
         (vector+!
           (-> *target* control trans)
-          (-> st seat-trans)
+          (-> self root trans)
           ;; his mode plays Daxter's clips: the target's art group is Daxter's
           (mp-daxter-seat-offset
             (-> st veh-type)
@@ -2944,21 +3008,42 @@
   (none)
   )
 
-(defun mp-seat-free? ((driver int))
-  "#t when the vehicle of `driver` has a passenger seat no other player uses."
+(defun mp-seat-taken-by ((driver int) (seat int))
+  "The lowest slot of another player riding seat `seat` of `driver`'s vehicle, -1 when none."
+  (dotimes (i MP_MAX_PLAYERS)
+    (let ((other (mp-remote-state i)))
+      (if (and other
+               (logtest? (-> other flags) (mp-flag riding))
+               (= (-> other ride-slot) driver)
+               (= (mp-state-ride-seat other) seat)
+               )
+          (return i)
+          )
+      )
+    )
+  -1
+  )
+
+(defun mp-free-seat ((driver int))
+  "The lowest seat of `driver`'s vehicle no other player rides in, -1 when none: seats 1 to
+   seat-count - 1 (3 at most: a city car carries three passengers), or the back of a one-seat
+   vehicle. Seats are reserved as in himstan's Jak and Daxter II Multiplayer
+   (https://github.com/himstan/Jak-And-Daxter-2-Multiplayer,
+   goal_src/jak2/multiplayer/system/traffic/vehicle/mp-vehicle-seat-reservation.gc, ISC): any seat
+   of the vehicle, and when two players took one at the same time, the lowest slot keeps it
+   (mp-update-ride)."
   (let ((st (mp-remote-state driver)))
-    (when (and st (< 1 (-> st seat-count)))
-      (dotimes (i MP_MAX_PLAYERS)
-        (let ((other (mp-remote-state i)))
-          (if (and other (logtest? (-> other flags) (mp-flag riding)) (= (-> other ride-slot) driver))
-              (return #f)
+    (when (and st (logtest? (-> st flags) (mp-flag driving)))
+      (let ((last (max 1 (min 3 (+ (-> st seat-count) -1)))))
+        (dotimes (k last)
+          (if (< (mp-seat-taken-by driver (+ k 1)) 0)
+              (return (+ k 1))
               )
           )
         )
-      (return #t)
       )
     )
-  #f
+  -1
   )
 
 (defbehavior mp-update-ride mp-manager ()
@@ -2972,7 +3057,12 @@
             (set! (-> self ride-want) -1)
             )
            ;; on the ground, standing or crouched (next to a vehicle the player may crouch)
+           ((< (mp-free-seat (-> self ride-want)) 0)
+            (mp-show-message "No free seat in this vehicle")
+            (set! (-> self ride-want) -1)
+            )
            ((and (not (focus-test? *target* in-air hit grabbed pilot dead)) (not (mp-riding-state? state)))
+            (set! *mp-ride-seat* (mp-free-seat (-> self ride-want)))
             (let ((seat (process-spawn mp-seat (-> self ride-want) :name "mp-seat" :to self)))
               (when seat
                 (set! (-> self seat) (ppointer->handle seat))
@@ -2992,7 +3082,19 @@
          )
        )
       ((>= *mp-ride-slot* 0)
-       (let ((st (mp-remote-state *mp-ride-slot*)))
+       (let ((st (mp-remote-state *mp-ride-slot*))
+             (rival (mp-seat-taken-by *mp-ride-slot* *mp-ride-seat*))
+             )
+         ;; two players took this seat at once: the lowest slot keeps it, the other takes the next
+         ;; free one, or gets off when there is none
+         (when (and (>= rival 0) (< rival *mp-local-slot*))
+           (let ((seat (mp-free-seat *mp-ride-slot*)))
+             (if (>= seat 0)
+                 (set! *mp-ride-seat* seat)
+                 (set! st (the-as mp-player-state #f))
+                 )
+             )
+           )
          (if (or (not st)
                  (not (logtest? (-> st flags) (mp-flag driving)))
                  (cpad-pressed? 0 triangle)
@@ -3170,7 +3272,7 @@
         ((cpad-pressed? 0 triangle)
          (cond
            ((cpad-hold? 0 l1)
-            (if (mp-seat-free? best)
+            (if (>= (mp-free-seat best) 0)
                 (set! (-> self ride-want) best)
                 (mp-show-message "No free seat in this vehicle")
                 )
