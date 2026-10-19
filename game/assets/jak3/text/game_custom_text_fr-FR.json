@@ -370,5 +370,6 @@
   "157a": "<PAD_DPAD_UP> <PAD_DPAD_DOWN> Choisir   <PAD_ANALOG_LEFT_RIGHT> Régler   <PAD_L1> <PAD_R1> Plus vite",
   "157b": "<PAD_X> Garder   <PAD_TRIANGLE> Annuler",
   "157c": "<PAD_TRIANGLE> Passer la cinématique (~D/~D)",
-  "157d": "Passer : en attente des autres (~D/~D)"
+  "157d": "Passer : en attente des autres (~D/~D)",
+  "157e": "Joueurs sur place : ~D/~D"
 }

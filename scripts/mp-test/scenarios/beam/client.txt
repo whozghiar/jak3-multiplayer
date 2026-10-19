@@ -1,0 +1,13 @@
+# Waypoints reached together (co-op), guest side: the same beam; the host waits at it (1/2); the
+# guest walks in: both reached.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 beam-at-host 0 10
+58 log-beams
+60 goto-beam
+62 log-beams
+62.3 screenshot beam-all
+64 log

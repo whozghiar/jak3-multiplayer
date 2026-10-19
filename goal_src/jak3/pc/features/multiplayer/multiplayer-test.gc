@@ -18,6 +18,7 @@
 ;;   wait-pause <0|1> | wait-resume                          the script waits: the game paused by the host (or not); its resume countdown
 ;;   wait-driving <slot>                                     the script waits: that player drives a vehicle (for 2 s)
 ;;   wait-scene | log-skip                                   the script waits: a cutscene plays here; the vote to skip it
+;;   beam-at-host <dx> <dz> | goto-beam | log-beams          a test waypoint near the host; stand at it; waypoints held
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -120,6 +121,47 @@
 (defun mp-test-word ()
   "Pop the next word of the command into (-> *mp-test* word). #f when none is left."
   (string-get-arg!! (-> *mp-test* word) (-> *mp-test* line))
+  )
+
+;; A waypoint of a test mission (beam-at-host): its beam, and its own check that we reached it
+;; with (target-pos 0) within 3 m, as missions do (the multiplayer mod holds it in co-op).
+(define *mp-test-beams-reached* 0)
+
+(deftype mp-test-beam (process)
+  ((arrow    handle)
+   (pos      vector :inline)
+   (reached? symbol)
+   )
+  )
+
+(defstate mp-test-beam-active (mp-test-beam)
+  :code (behavior ()
+    (loop
+      (when (and (not (-> self reached?)) (< (vector-vector-xz-distance (target-pos 0) (-> self pos)) (meters 3)))
+        (set! (-> self reached?) #t)
+        (+! *mp-test-beams-reached* 1)
+        (format 0 "[mp-test] beam reached~%")
+        (send-event (handle->process (-> self arrow)) 'leave)
+        )
+      (suspend)
+      )
+    )
+  )
+
+(defbehavior mp-test-beam-init-by-other mp-test-beam ((pos vector))
+  "A beam at `pos`, which this process checks."
+  (vector-copy! (-> self pos) pos)
+  (set! (-> self reached?) #f)
+  (let ((params (new 'stack-no-clear 'task-arrow-params)))
+    (set! (-> params flags) (task-arrow-flags))
+    (set! (-> params map-icon) (the-as uint 12))
+    (vector-copy! (-> params pos) pos)
+    (quaternion-identity! (-> params quat))
+    (let ((arrow (task-arrow-spawn params self)))
+      (set! (-> self arrow) (if arrow (process->handle arrow) (the-as handle #f)))
+      )
+    )
+  (go mp-test-beam-active)
   )
 
 (defun mp-test-hex ((str string))
@@ -1893,6 +1935,39 @@
          (set! (-> *mp-test-wait* slot) (mp-test-int))
          (set! (-> *mp-test-wait* kind) 'pause)
          (pc-mp-test-pause #t)
+         )
+        ((string= cmd "beam-at-host")
+         ;; beam-at-host <dx> <dz>: a waypoint beam dx, dz meters from the host, whose process checks
+         ;; that we are within 3 m of it with (target-pos 0), as missions do
+         (let* ((host (if (= *mp-mode* (mp-mode host)) *mp-local* (mp-remote-state 0)))
+                (pos (new 'stack-no-clear 'vector))
+                )
+           (when host
+             (vector-copy! pos (-> host trans))
+             (+! (-> pos x) (meters (the float (mp-test-int))))
+             (+! (-> pos z) (meters (the float (mp-test-int))))
+             (process-spawn mp-test-beam pos :name "mp-test-beam" :to *default-pool* :stack-size #x4000)
+             )
+           )
+         )
+        ((string= cmd "goto-beam")
+         ;; goto-beam: stand at the nearest waypoint beam
+         (when (and *target* (> (-> *mp-beams* count) 0))
+           (move-to-point! (-> *target* control) (-> *mp-beams* pos 0))
+           (vector-reset! (-> *target* control transv))
+           )
+         )
+        ((string= cmd "log-beams")
+         ;; log-beams: the beams shown, how far their owner sees us, the count, the test beam reached
+         (format 0 "[mp-test] beams ~D here ~D/~D near ~A held ~D reached ~D~%" (-> *mp-beams* count) (-> *mp-beams* here)
+                 (-> *mp-beams* players) (-> *mp-beams* near?) (-> *mp-beams* held) *mp-test-beams-reached*
+                 )
+         (dotimes (i (-> *mp-beams* count))
+           (format 0 "[mp-test] beam ~D at ~m from us, hold ~m~%" i
+                   (vector-vector-xz-distance (-> *mp-beams* pos i) (if *target* (-> *target* control trans) (math-camera-pos)))
+                   (-> *mp-beams* hold i)
+                   )
+           )
          )
         ((string= cmd "wait-scene")
          ;; the script waits until a cutscene that can be skipped plays here

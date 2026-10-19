@@ -714,6 +714,17 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hs) and bool(gs) and hs[-1][0] == "none" and hs[-1][4] == "1" and gs[-1][0] == "none" and gs[-1][4] == "1",
                 f"host {hs[-1:]}, guest {gs[-1:]}")
 
+    elif scenario == "beam":
+        hb = grab(host, r"\] beams (\d+) here (\d+)/(\d+) near (\S+) held (\d+) reached (\d+)")
+        hd = [float(d) for d, _ in grab(host, r"\] beam 0 at " + NUM + " from us, hold " + NUM)]
+        c.check(scenario, "the host at the beam is not counted arrived while the guest is away (1/2)",
+                any(h == "1" and p == "2" and int(held) > 0 and r == "0" for _, h, p, _, held, r in hb) and any(d < 1.0 for d in hd),
+                f"{hb}, distances {hd}")
+        gb = grab(client, r"\] beams (\d+) here (\d+)/(\d+) near (\S+) held (\d+) reached (\d+)")
+        c.check(scenario, "the guest sees the count, comes, and the mission goes on for both",
+                any(h == "1" and n == "#t" for _, h, _, n, _, _ in gb) and gb[-1:] and gb[-1][5] == "1" and hb[-1][5] == "1",
+                f"guest {gb}, host {hb[-1:]}")
+
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
         c.check(scenario, "holding SELECT shows the player list without pausing",

@@ -1,0 +1,16 @@
+# Waypoints reached together (co-op), host side: a test mission's beam 10 m from the host, whose
+# process checks the arrival within 3 m with (target-pos 0) as missions do. The host stands at it:
+# not reached while the guest is away ("Players here: 1/2"); reached once the guest comes.
+1 enable
+1 name Host
+1 color 1
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 beam-at-host 0 10
+52 log-beams
+54 goto-beam
+56 log-beams
+56.5 screenshot beam-wait
+66 log-beams
+68 log

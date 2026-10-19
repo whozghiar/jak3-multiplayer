@@ -4016,6 +4016,158 @@
   (none)
   )
 
+;; ------------------------------------------------------------------------------------------------
+;; Waypoints reached together (co-op)
+;;
+;; A mission marks where to go with a yellow beam (task-arrow, engine/game/task/task-arrow.gc).
+;; The beam only draws; the process that spawned it (a task manager, an object of the mission)
+;; checks itself, each in its own way, that the player is there, almost always with (target-pos 0)
+;; and a radius of 3 to 40 m. In co-op, until every player stands within 6 m of the beam, target-pos
+;; answers that process (and it alone) with a position as far from the beam as the farthest player,
+;; 45 m at most: the mission goes on once everyone is there. 45 m is above every arrival radius and
+;; below the distances that fail a mission for going too far. "Players here: 1/2" at the bottom.
+;; Missions checking another way (the player's vehicle, a cutscene region) are not held.
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_BEAM_ZONE (meters 6))   ;; a player within that distance of a beam (xz) is there
+(defconstant MP_BEAM_HOLD (meters 45))  ;; the farthest a beam's owner sees us while it waits
+(defconstant MP_BEAM_SHOWN (meters 30)) ;; the count shows within that distance of a beam
+
+(deftype mp-beam-state (structure)
+  ((count   int32)
+   (owner   process 4)        ;; the process that spawned each beam (it checks the arrival)
+   (pos     vector 4 :inline) ;; where the beam stands
+   (hold    float 4)          ;; distance that owner sees for us while a player is missing, 0 none
+   (here    int32)            ;; players within the zone of the nearest beam, and the players
+   (players int32)
+   (near?   symbol)           ;; we stand near a beam: the count shows
+   (held    int32)            ;; calls answered with the far position (test log)
+   (fake    vector :inline)   ;; that position
+   )
+  )
+
+(define *mp-beams* (new 'global 'mp-beam-state))
+(set! (-> *mp-beams* count) 0)
+(set! (-> *mp-beams* near?) #f)
+
+(defun mp-collect-beam ((proc object))
+  "iterate-process-tree callback: note a beam shown (not hidden, taf4) and the process that spawned it."
+  (let ((b *mp-beams*))
+    (when (and (< (-> b count) 4) (type? proc task-arrow))
+      (let ((arrow (the-as task-arrow proc)))
+        (when (and (not (logtest? (-> arrow flags) (task-arrow-flags taf4))) (-> arrow parent))
+          (set! (-> b owner (-> b count)) (the-as process (ppointer->process (-> arrow parent))))
+          (vector-copy! (-> b pos (-> b count)) (-> arrow root trans))
+          (+! (-> b count) 1)
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-update-beams ()
+  "Every frame from the hook: the beams shown, and for each how far its owner must see us while a
+   player is not there yet; the count of the nearest one."
+  (let ((b *mp-beams*)
+        (best (meters 100000))
+        )
+    (set! (-> b count) 0)
+    (set! (-> b near?) #f)
+    (when (and (mp-coop?) *target*)
+      (iterate-process-tree *active-pool* mp-collect-beam *kernel-context*)
+      (dotimes (i (-> b count))
+        (let ((own (vector-vector-xz-distance (-> *target* control trans) (-> b pos i)))
+              (here 0)
+              (players 1)
+              (farthest 0.0)
+              )
+          (if (< own MP_BEAM_ZONE)
+              (+! here 1)
+              )
+          (dotimes (slot MP_MAX_PLAYERS)
+            (let ((st (mp-remote-state slot)))
+              (when (and st (not (logtest? (-> st flags) (mp-flag hidden))))
+                (let ((d (vector-vector-xz-distance (-> st trans) (-> b pos i))))
+                  (+! players 1)
+                  (if (< d MP_BEAM_ZONE)
+                      (+! here 1)
+                      )
+                  (set! farthest (fmax farthest d))
+                  )
+                )
+              )
+            )
+          ;; held while someone is missing (a player far away counts as 45 m)
+          (set! (-> b hold i) (if (and (< here players) (< own (fmin farthest MP_BEAM_HOLD)))
+                                  (fmin farthest MP_BEAM_HOLD)
+                                  0.0
+                                  )
+                )
+          (when (< own best)
+            (set! best own)
+            (set! (-> b here) here)
+            (set! (-> b players) players)
+            (set! (-> b near?) (and (> players 1) (or (< own MP_BEAM_SHOWN) (> here 0))))
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(define-perm *mp-stock-target-pos* (function int vector) target-pos)
+
+(defun target-pos ((arg0 int))
+  "Stock, except for the process that spawned a waypoint beam in a co-op game while a player is not
+   at it yet: our position pushed away from the beam, as far as the farthest player (see above)."
+  (with-pp
+    (let ((b *mp-beams*))
+      (when (and (zero? arg0) (> (-> b count) 0) *target*)
+        (dotimes (i (-> b count))
+          (when (and (= (-> b owner i) pp) (< 0.0 (-> b hold i)))
+            (let ((fake (-> b fake))
+                  (real (-> *target* control trans))
+                  )
+              (vector-! fake real (-> b pos i))
+              (set! (-> fake y) 0.0)
+              (if (< (vector-length fake) 40.96)
+                  (set-vector! fake 1.0 0.0 0.0 1.0)
+                  )
+              (vector-normalize! fake (-> b hold i))
+              (vector+! fake fake (-> b pos i))
+              (set! (-> fake y) (-> real y))
+              (set! (-> fake w) 1.0)
+              (+! (-> b held) 1)
+              (return fake)
+              )
+            )
+          )
+        )
+      )
+    )
+  (*mp-stock-target-pos* arg0)
+  )
+
+(define *mp-beam-line* (new 'global 'string 64 (the-as string #f)))
+
+(defun mp-draw-beam-count ()
+  "Players at the waypoint near us, at the bottom of the screen."
+  (let ((b *mp-beams*))
+    (when (-> b near?)
+      (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 372 0.0 (font-color default) (font-flags shadow kerning middle large))))
+        (set-width! ctx 512)
+        (set-height! ctx 40)
+        (set! (-> ctx scale) 0.55)
+        (format (clear *mp-beam-line*) (lookup-text! *common-text* (text-id progress-mp-beam-here) #f) (-> b here) (-> b players))
+        (print-game-text *mp-beam-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        )
+      )
+    )
+  (none)
+  )
+
 ;; MOD multiplayer -- the START menu takes a still copy of the screen and stops drawing the world
 ;; (engine/gfx/blit-displays.gc): while the world runs under the menu, the live game shows instead.
 (define-perm *mp-stock-set-menu-mode* (function blit-displays-work symbol symbol)
@@ -4244,8 +4396,9 @@
           )
       (mp-draw-daxter-gun buf)
       )
-    ;; prompts with their button icon, as the game draws its own (outside the bucket above: they
-    ;; fill their own DMA)
+    ;; the players at the waypoint near us, and the prompts with their button icon, as the game
+    ;; draws its own (outside the bucket above: they fill their own DMA)
+    (mp-draw-beam-count)
     (cond
       ((>= *mp-prompt-slot* 0)
        (mp-draw-prompt (text-id progress-mp-prompt-steal))
@@ -4475,6 +4628,7 @@
      (mp-draw-pause)
      (mp-update-scene-skip)
      (mp-draw-scene-skip)
+     (mp-update-beams)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)
