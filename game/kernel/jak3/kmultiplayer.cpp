@@ -25,12 +25,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <random>
+#include <set>
 
 #include "kmultiplayer.h"
 
 #include "common/log/log.h"
 #include "common/symbols.h"
 #include "common/util/FileUtil.h"
+#include "common/util/json_util.h"
 #include "common/util/string_util.h"
 
 #include "game/graphics/screenshot.h"
@@ -127,7 +131,7 @@ constexpr size_t kReliableWindow = 256;  // reliable fragments in flight per pee
 constexpr size_t kMaxWaiting = 8192;     // reliable fragments queued: a peer this far behind is dropped
 
 enum Msg : u8 {
-  MSG_HELLO = 1,    // client -> host: u32 protocol version
+  MSG_HELLO = 1,    // client -> host: u32 protocol version, u64 the player's secret id
   MSG_WELCOME = 2,  // host -> client: u8 slot given to the client
   MSG_REJECT = 3,   // host -> client: reason text (refused, kicked, banned, server closed)
   MSG_STATE = 4,    // both ways: u8 slot + PlayerState
@@ -211,6 +215,7 @@ struct Session::Peer {
   std::string ip;
   u32 conn = 0;           // connection id drawn by the client (datagram header)
   int slot = -1;          // host side: -1 until the HELLO is accepted
+  u64 uid = 0;            // host side: the guest's secret id, from its HELLO (economy account)
   double last_recv = 0;
   bool dead = false;
   std::string dead_reason;
@@ -715,7 +720,11 @@ bool Session::join(const std::string& address, double now) {
   p->last_recv = now;
   // a new id for every connection: the host tells it from an older one of this address
   p->conn = (u32)std::chrono::steady_clock::now().time_since_epoch().count() ^ ((u32)std::rand() << 16);
-  p->queue(MSG_HELLO, &kProtocolVersion, 4);
+  u8 hello[12];
+  u64 uid = player_uid();
+  memcpy(hello, &kProtocolVersion, 4);
+  memcpy(hello + 4, &uid, 8);
+  p->queue(MSG_HELLO, hello, 12);
   m_peers.push_back(p);
   m_sock = (u64)s;
   m_mode = Mode::Connecting;
@@ -797,11 +806,14 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
   if (m_mode == Mode::Host) {
     switch (type) {
       case MSG_HELLO: {
-        if (p.slot >= 0 || len != 4) {
+        if (p.slot >= 0 || len < 4) {
           return;
         }
         u32 version;
         memcpy(&version, data, 4);
+        if (len >= 12) {
+          memcpy(&p.uid, data + 4, 8);
+        }
         const char* reason = nullptr;
         int slot = -1;
         for (int i = 1; i < m_max_players && slot < 0; i++) {
@@ -1775,6 +1787,181 @@ Session& session() {
   return s;
 }
 
+u64 Session::slot_uid(int slot) const {
+  if (slot == m_local_slot) {
+    return player_uid();
+  }
+  for (auto* p : m_peers) {
+    if (p->slot == slot) {
+      return p->uid;
+    }
+  }
+  return 0;
+}
+
+// The player's secret id: read from multiplayer.cfg (uid=), drawn once when there is none, written
+// by every config save. A host keeps each guest's money under it: only that player knows it.
+static u64 g_player_uid = 0;
+
+u64 player_uid() {
+  if (!g_player_uid) {
+    std::random_device rd;
+    g_player_uid = ((u64)rd() << 32) ^ (u64)rd() ^ (u64)std::chrono::steady_clock::now().time_since_epoch().count();
+    if (!g_player_uid) {
+      g_player_uid = 1;
+    }
+  }
+  return g_player_uid;
+}
+
+void set_player_uid(u64 uid) {
+  g_player_uid = uid;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Economy: every player's precursor orbs and Metal Head trophies, kept by the server (the host)
+// alone. The host's GOAL code credits what it validated (an orb that is in its world, that player
+// seen at it, never credited in this session; a Metal Head its world saw that player kill) and
+// debits purchases; the guests only show what the host sends them. Accounts are kept per session
+// key ("campaign", "free"...) in <settings>/multiplayer-economy.json, under each player's secret id,
+// with the orb entities credited in that session (each orb pays once, whoever took it, whenever):
+// saved every minute when something changed and when the session closes; each closing is recorded
+// in <settings>/multiplayer-sessions.log.
+// ---------------------------------------------------------------------------------------------
+
+struct EconAccount {
+  std::string name;
+  s64 orbs = 0;
+  s64 trophies = 0;
+  u32 items = 0;  // one bit per item bought
+};
+
+struct Economy {
+  std::string key;
+  std::map<u64, EconAccount> accounts;
+  std::set<u32> orbs_taken;  // the orb entities (aid) credited in this session, ever
+  bool open = false;
+  bool dirty = false;
+  double last_save = 0;
+  double opened_at = 0;
+  // a guest: its own balances as the host last sent them
+  s64 own_orbs = 0;
+  s64 own_trophies = 0;
+  u32 own_items = 0;
+  int saves = 0;  // saves written (test log)
+};
+
+static Economy g_econ;
+
+static fs::path econ_path() {
+  return file_util::get_user_settings_dir(g_game_version) / "multiplayer-economy.json";
+}
+
+static fs::path econ_log_path() {
+  return file_util::get_user_settings_dir(g_game_version) / "multiplayer-sessions.log";
+}
+
+static nlohmann::json econ_read_all() {
+  try {
+    if (fs::exists(econ_path())) {
+      return nlohmann::json::parse(file_util::read_text_file(econ_path()));
+    }
+  } catch (...) {
+    lg::warn("[multiplayer] {} unreadable: the economy starts from it empty", econ_path().string());
+  }
+  return nlohmann::json::object();
+}
+
+void econ_save(double now) {
+  if (!g_econ.open) {
+    return;
+  }
+  auto all = econ_read_all();
+  nlohmann::json accounts = nlohmann::json::object();
+  for (auto& [uid, a] : g_econ.accounts) {
+    accounts[fmt::format("{:016x}", uid)] = {
+        {"name", a.name}, {"orbs", a.orbs}, {"trophies", a.trophies}, {"items", a.items}};
+  }
+  all[g_econ.key] = {{"accounts", accounts}, {"orbs_taken", g_econ.orbs_taken}};
+  file_util::create_dir_if_needed_for_file(econ_path());
+  file_util::write_text_file(econ_path(), all.dump(2));
+  g_econ.dirty = false;
+  g_econ.last_save = now;
+  g_econ.saves++;
+}
+
+void econ_open(const std::string& key, double now) {
+  g_econ.key = key.empty() ? "world" : key;
+  g_econ.accounts.clear();
+  g_econ.orbs_taken.clear();
+  auto all = econ_read_all();
+  if (all.contains(g_econ.key) && all[g_econ.key].is_object()) {
+    auto& session = all[g_econ.key];
+    if (session.contains("orbs_taken") && session["orbs_taken"].is_array()) {
+      for (auto& aid : session["orbs_taken"]) {
+        if (aid.is_number_unsigned()) {
+          g_econ.orbs_taken.insert(aid.get<u32>());
+        }
+      }
+    }
+    // a local: items() of the temporary value() returns would outlive it
+    auto accounts = session.value("accounts", nlohmann::json::object());
+    for (auto& [hex, v] : accounts.items()) {
+      try {
+        EconAccount a;
+        a.name = v.value("name", "");
+        a.orbs = v.value("orbs", (s64)0);
+        a.trophies = v.value("trophies", (s64)0);
+        a.items = v.value("items", (u32)0);
+        g_econ.accounts[std::stoull(hex, nullptr, 16)] = a;
+      } catch (...) {
+      }
+    }
+  }
+  g_econ.open = true;
+  g_econ.dirty = false;
+  g_econ.last_save = now;
+  g_econ.opened_at = now;
+  lg::info("[multiplayer] economy \"{}\": {} account(s) and {} orb(s) taken loaded", g_econ.key,
+           g_econ.accounts.size(), g_econ.orbs_taken.size());
+}
+
+void econ_close(double now) {
+  if (!g_econ.open) {
+    return;
+  }
+  econ_save(now);
+  // the record of this session's closing: when, how long, every account's balances
+  std::time_t t = std::time(nullptr);
+  char when[32];
+  std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+  std::string line = fmt::format("{} session \"{}\" closed after {:.0f} s:", when, g_econ.key,
+                                 (now - g_econ.opened_at) / 1000.0);
+  for (auto& [uid, a] : g_econ.accounts) {
+    line += fmt::format(" [{} orbs {} trophies {} items {:x}]", a.name, a.orbs, a.trophies, a.items);
+  }
+  file_util::create_dir_if_needed_for_file(econ_log_path());
+  std::string prev = fs::exists(econ_log_path()) ? file_util::read_text_file(econ_log_path()) : "";
+  file_util::write_text_file(econ_log_path(), prev + line + "\n");
+  lg::info("[multiplayer] economy \"{}\" closed and recorded", g_econ.key);
+  g_econ.open = false;
+}
+
+// Every frame (host): the accounts saved once a minute when something changed.
+void econ_update(double now) {
+  if (g_econ.open && g_econ.dirty && now - g_econ.last_save >= 60000.0) {
+    econ_save(now);
+  }
+}
+
+static EconAccount* econ_account(int slot) {
+  u64 uid = session().slot_uid(slot);
+  if (!g_econ.open || !uid) {
+    return nullptr;
+  }
+  return &g_econ.accounts[uid];
+}
+
 TestPad g_test_pad;
 
 // ---------------------------------------------------------------------------------------------
@@ -1894,7 +2081,83 @@ u64 pc_mp_update(u32 state) {
   if (state) {
     s.update(*Ptr<mp::PlayerState>(state).c(), mp::now_ms());
   }
+  mp::econ_update(mp::now_ms());
   return (u64)(s64)s.mode();
+}
+
+// Economy (see mp::Economy). kind: 0 precursor orbs, 1 Metal Head trophies.
+// (pc-mp-econ-open key): host, a session starts: its accounts loaded.
+void pc_mp_econ_open(u32 key) {
+  mp::econ_open(goal_string(key), mp::now_ms());
+}
+
+// (pc-mp-econ-close): host, the session ends: accounts saved, the closing recorded.
+void pc_mp_econ_close() {
+  mp::econ_close(mp::now_ms());
+}
+
+// (pc-mp-econ-credit slot kind amount name) -> the new balance (host): what the host validated.
+u64 pc_mp_econ_credit(u32 slot, u32 kind, u32 amount, u32 name) {
+  auto* a = mp::econ_account((int)slot);
+  if (!a) {
+    return 0;
+  }
+  if (name) {
+    a->name = goal_string(name);
+  }
+  s64& v = kind ? a->trophies : a->orbs;
+  v += (s64)(s32)amount;
+  mp::g_econ.dirty = true;
+  return (u64)v;
+}
+
+// (pc-mp-econ-buy slot item cost) -> #t when player `slot` had the orbs and did not own the item:
+// the orbs paid, the item owned (host).
+u64 pc_mp_econ_buy(u32 slot, u32 item, u32 cost) {
+  auto* a = mp::econ_account((int)slot);
+  if (!a || item >= 32 || (a->items & (1u << item)) || a->orbs < (s64)cost) {
+    return to_symbol(false);
+  }
+  a->orbs -= cost;
+  a->items |= 1u << item;
+  mp::g_econ.dirty = true;
+  return to_symbol(true);
+}
+
+// (pc-mp-econ-get slot kind) -> a balance (kind 0 orbs, 1 trophies, 2 items owned): the host reads
+// the account; a guest its own, as the host last sent it (slot ignored).
+u64 pc_mp_econ_get(u32 slot, u32 kind) {
+  if (mp::session().mode() == mp::Mode::Host) {
+    auto* a = mp::econ_account((int)slot);
+    if (!a) {
+      return 0;
+    }
+    return kind == 0 ? (u64)a->orbs : kind == 1 ? (u64)a->trophies : (u64)a->items;
+  }
+  return kind == 0 ? (u64)mp::g_econ.own_orbs : kind == 1 ? (u64)mp::g_econ.own_trophies
+                                                            : (u64)mp::g_econ.own_items;
+}
+
+// (pc-mp-econ-set-own orbs trophies items): a guest, its balances as the host sent them.
+void pc_mp_econ_set_own(u32 orbs, u32 trophies, u32 items) {
+  mp::g_econ.own_orbs = (s32)orbs;
+  mp::g_econ.own_trophies = (s32)trophies;
+  mp::g_econ.own_items = items;
+}
+
+// (pc-mp-econ-take-orb aid) -> #t when the orb of entity `aid` was never credited in this session
+// (host): it is now, for good (an orb pays once).
+u64 pc_mp_econ_take_orb(u32 aid) {
+  if (!mp::g_econ.open || !mp::g_econ.orbs_taken.insert(aid).second) {
+    return to_symbol(false);
+  }
+  mp::g_econ.dirty = true;
+  return to_symbol(true);
+}
+
+// (pc-mp-econ-saves) -> saves of the economy file written since boot (test log).
+u64 pc_mp_econ_saves() {
+  return (u64)mp::g_econ.saves;
 }
 
 // (pc-mp-get-player slot dest) fills dest with the interpolated state of a remote player.
@@ -1988,6 +2251,8 @@ u64 pc_mp_config_load(u32 dest) {
         cfg->enabled = std::stoi(val);
       } else if (key == "mode") {
         cfg->mode = std::stoi(val);
+      } else if (key == "uid") {
+        mp::set_player_uid(std::stoull(val, nullptr, 16));
       } else if (key == "skin") {
         // the outfit: one hex value per group, comma separated
         auto parts = str_util::split_string(val, ",");
@@ -2017,8 +2282,9 @@ void pc_mp_config_save(u32 src) {
   }
   file_util::write_text_file(
       config_path(),
-      fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\nskin={}\n",
-                  name, address, cfg->character, cfg->color, cfg->enabled, cfg->mode, skin));
+      fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\nskin={}\nuid={:x}\n",
+                  name, address, cfg->character, cfg->color, cfg->enabled, cfg->mode, skin,
+                  mp::player_uid()));
 }
 
 // (pc-mp-send-actors states count): send the `count` mp-actor-state this player simulates.
@@ -2508,6 +2774,14 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-outline-pixels", (void*)pc_mp_outline_pixels);
   make_function_symbol_from_c("pc-mp-dark-skin-draws", (void*)pc_mp_dark_skin_draws);
   make_function_symbol_from_c("pc-mp-skin-draws", (void*)pc_mp_skin_draws);
+  make_function_symbol_from_c("pc-mp-econ-open", (void*)pc_mp_econ_open);
+  make_function_symbol_from_c("pc-mp-econ-close", (void*)pc_mp_econ_close);
+  make_function_symbol_from_c("pc-mp-econ-credit", (void*)pc_mp_econ_credit);
+  make_function_symbol_from_c("pc-mp-econ-buy", (void*)pc_mp_econ_buy);
+  make_function_symbol_from_c("pc-mp-econ-get", (void*)pc_mp_econ_get);
+  make_function_symbol_from_c("pc-mp-econ-set-own", (void*)pc_mp_econ_set_own);
+  make_function_symbol_from_c("pc-mp-econ-saves", (void*)pc_mp_econ_saves);
+  make_function_symbol_from_c("pc-mp-econ-take-orb", (void*)pc_mp_econ_take_orb);
   make_function_symbol_from_c("pc-mp-campaign-write", (void*)pc_mp_campaign_write);
   make_function_symbol_from_c("pc-mp-campaign-read", (void*)pc_mp_campaign_read);
   make_function_symbol_from_c("pc-mp-set-max-players", (void*)pc_mp_set_max_players);

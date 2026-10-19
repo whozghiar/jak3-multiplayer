@@ -1863,6 +1863,124 @@
   dst
   )
 
+;; ------------------------------------------------------------------------------------------------
+;; Kleiver's shop (page 'mp-shop, opened at his spot in Spargus: mp-update-merchant, multiplayer.gc)
+;;
+;; The only page trading for precursor orbs: the shop's items (outfits for now) with their price,
+;; our orbs and Metal Head trophies as the host keeps them. Up / down pick an item; X buys it (the
+;; host decides: "Economy", multiplayer.gc) or, owned, wears it; triangle leaves.
+;; ------------------------------------------------------------------------------------------------
+
+(deftype menu-mp-shop-option (menu-option)
+  ((selected int32)
+   )
+  )
+
+(define *mp-shop-options*
+  (new 'static 'menu-option-list
+    :y-center #xc6
+    :y-space 15
+    :scale 0.82
+    :options (new 'static 'boxed-array :type menu-option
+      (new 'static 'menu-mp-shop-option :name (text-id progress-mp-shop))
+      )
+    )
+  )
+
+(defmethod respond-progress ((this menu-mp-shop-option) (progress progress) (selected? symbol))
+  "Up / down: the item; X: buy it, or wear it when owned. Triangle is left to the stock (leaves)."
+  (let ((n MP_SHOP_ITEMS))
+    (set! (-> this selected) (max 0 (min (-> this selected) (+ n -1))))
+    (cond
+      ((cpad-pressed? 0 up l-analog-up)
+       (cpad-clear! 0 up l-analog-up)
+       (set! (-> this selected) (mod (+ (-> this selected) n -1) n))
+       (sound-play "roll-over")
+       )
+      ((cpad-pressed? 0 down l-analog-down)
+       (cpad-clear! 0 down l-analog-down)
+       (set! (-> this selected) (mod (+ (-> this selected) 1) n))
+       (sound-play "roll-over")
+       )
+      ((cpad-pressed? 0 confirm)
+       (cpad-clear! 0 confirm)
+       (if (logtest? (-> *mp-econ* items) (ash 1 (-> this selected)))
+           (mp-econ-equip (-> this selected))
+           (mp-econ-request-buy (-> this selected))
+           )
+       (sound-play "generic-beep")
+       )
+      )
+    )
+  0
+  )
+
+(defmethod draw-option ((this menu-mp-shop-option) (progress progress) (font-ctx font-context) (option-index int) (selected? symbol))
+  "The shop: our orbs and trophies, each item with its price (or owned), the chosen one highlighted,
+   the answer to our last purchase, the keys."
+  (let* ((alpha (fmax 0.0 (* 2.0 (- 0.5 (-> progress menu-transition)))))
+         (wide? (= (get-aspect-ratio) 'aspect16x9))
+         (vis? (-> *pc-settings* use-vis?))
+         (x0 (if wide? 79.0 70.0))
+         (x1 (if wide? 435.0 445.0))
+         (left (+ 8.0 (if vis? x0 (the float (adjust-game-x x0)))))
+         (width (- (if vis? x1 (the float (adjust-game-x x1))) left 8.0))
+         (top (if wide? 86.0 112.0))
+         (bottom (if wide? 362.0 329.0))
+         (e *mp-econ*)
+         )
+    (set! (-> font-ctx alpha) alpha)
+    (draw-page-header font-ctx (text-id progress-mp-shop) alpha)
+    (set-flags! font-ctx (font-flags kerning middle large))
+    (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-shop-balance) #f) (-> e orbs) (-> e trophies))
+    (mp-lobby-print-fit font-ctx *mp-lobby-line* left (+ top 6.0) width 0.45 (font-color font-color-33))
+    ;; the items: name on the left, price or owned on the right
+    (dotimes (i MP_SHOP_ITEMS)
+      (let ((y (+ top 34.0 (* 24.0 (the float i))))
+            (on? (= i (-> this selected)))
+            (owned? (logtest? (-> e items) (ash 1 i)))
+            )
+        (if on?
+            (mp-menu-box (the int (+ left 4.0)) (the int (+ y -3.0)) (the int (+ width -8.0)) 22
+                         (new 'static 'rgba :r #x50 :g #x50 :b #x60 :a #x50)
+                         )
+            )
+        (set-flags! font-ctx (font-flags kerning large))
+        (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (-> *mp-shop-names* i) #f) (+ left 12.0) y (* 0.55 width) 0.45
+                            (if on? (font-color font-color-33) (font-color font-color-32))
+                            )
+        (if owned?
+            (copy-string<-string *mp-lobby-line* (lookup-text! *common-text* (text-id progress-mp-shop-owned) #f))
+            (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-shop-price) #f) (-> *mp-shop-prices* i))
+            )
+        ;; right-aligned text ends at its origin: the frame's right edge
+        (set-flags! font-ctx (font-flags kerning right large))
+        (mp-lobby-print-fit font-ctx *mp-lobby-line* (+ left width -12.0) y (+ (* 0.4 width) -12.0) 0.4
+                            (if owned? (font-color green) (font-color font-color-32))
+                            )
+        )
+      )
+    ;; the answer to our last purchase, for 3 s
+    (set-flags! font-ctx (font-flags kerning middle large))
+    (when (and (nonzero? (-> e result)) (< (- (mp-now) (-> e result-at)) (seconds 3)))
+      (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (case (-> e result)
+                                                                  ((1) (text-id progress-mp-shop-bought))
+                                                                  ((2) (text-id progress-mp-shop-refused))
+                                                                  (else (text-id progress-mp-shop-worn))
+                                                                  )
+                                                 #f
+                                                 )
+                          left (- bottom 50.0) width 0.45 (if (= (-> e result) 2) (font-color red) (font-color green))
+                          )
+      )
+    (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (text-id progress-mp-shop-keys) #f) left (- bottom 26.0) width 0.4
+                        (font-color font-color-32)
+                        )
+    )
+  0
+  (none)
+  )
+
 ;; MOD multiplayer -- route the multiplayer pages (START > Options > Multiplayer, the title screen's
 ;; Host Game and Join Game, the lobby) and let every other page through the stock method
 ;; (pc/progress/progress-pc.gc). define-perm keeps the stock method when this file is reloaded in a
@@ -1909,6 +2027,10 @@
      )
     (('mp-skin)
      (set! (-> this current-options) *mp-skin-options*)
+     0
+     )
+    (('mp-shop)
+     (set! (-> this current-options) *mp-shop-options*)
      0
      )
     (('mp-join-game)

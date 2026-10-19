@@ -378,5 +378,19 @@
   "1582": "Hosting: ~D player(s)",
   "1583": "Connected: ~D player(s)",
   "1584": "Connecting to ~S...",
-  "1585": "Offline"
+  "1585": "Offline",
+  "1586": "Kleiver's shop",
+  "1587": "Precursor orbs: ~D    Metal Head trophies: ~D",
+  "1588": "Gold outfit",
+  "1589": "Shadow outfit",
+  "158a": "Desert outfit",
+  "158b": "Flame Daxter",
+  "158c": "~D orbs",
+  "158d": "Owned: <PAD_X> to wear",
+  "158e": "Bought!",
+  "158f": "Not enough orbs",
+  "1590": "Worn",
+  "1591": "<PAD_X> Buy / wear   <PAD_TRIANGLE> Leave",
+  "1592": "Kleiver: Got orbs? I've got just what you need.",
+  "1593": "Press <PAD_TRIANGLE> to trade"
 }

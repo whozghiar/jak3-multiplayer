@@ -1,0 +1,20 @@
+# Economy, host side (the server keeps the accounts). Takes the nearest precursor orb (credited once
+# its entity is checked), claims an orb it did not take (refused), credits the guest 12 orbs; ends the
+# session (accounts saved, the closing recorded), hosts again: the accounts are loaded back.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-econ
+51 goto-orb
+54 log-econ
+56 econ-claim 12345
+57 log-econ
+60 econ-grant 1 12
+62 log-econ
+95 leave
+97 log-econ
+100 host 0.0.0.0:7777
+103 log-econ
+105 log

@@ -1,0 +1,12 @@
+# Metal Head trophies, guest side: at the volcano; its trophy for the Metal Head its puppet killed on
+# the host comes from the host.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+48 continue volcanoa-start
+62 goto-player 0 3 0
+80 log-econ
+84 log-econ
+86 log

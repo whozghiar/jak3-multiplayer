@@ -28,7 +28,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 8;
+constexpr u32 kProtocolVersion = 9;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -286,6 +286,9 @@ class Session {
   void set_max_players(int max_players);
   // Round trip to the host of player `slot` in ms (0 for the host), -1 while unknown.
   int player_ping(int slot) const;
+  // The secret id of player `slot` (ours for the local slot, the one its HELLO carried for a
+  // guest, host side), 0 unknown. It names the player's account in the economy.
+  u64 slot_uid(int slot) const;
 
   // Time `source`'s objects are drawn at now, in its clock (ms); the local clock for -1.
   double clock_of(int source, double now_ms) const {
@@ -355,6 +358,10 @@ class Session {
 
 // Session used by the kernel functions below.
 Session& session();
+
+// This player's secret id (multiplayer.cfg uid=): its economy account on any host.
+u64 player_uid();
+void set_player_uid(u64 uid);
 
 // Automated tests (MP_TEST_SCRIPT, see scripts/mp-test/): buttons and sticks forced on pad 0
 // while active, read by scePadRead (game/sce/libpad.cpp).

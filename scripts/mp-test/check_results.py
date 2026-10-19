@@ -751,6 +751,29 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "economy":
+        settings = OUT / "economy" / "host" / "OpenGOAL" / "jak3" / "settings"
+        ge = grab(client, r"\] econ orbs (\d+) trophies (\d+) items #x(\w+) result (\d+) near (\S+)")
+        c.check(scenario, "the server credits a precursor orb taken, after checking its entity (host and guest)",
+                any("an orb for player 0" in l for l in host) and any("an orb for player 1" in l for l in host)
+                and any(o == "1" for o, _, _, _, _ in ge), f"guest {ge[:4]}")
+        c.check(scenario, "orbs claimed but not taken are refused (host and guest), one far from the claimant too",
+                any("orb claim of player 0 refused (entity 12345)" in l for l in host)
+                and any("orb claim of player 1 refused (entity 54321)" in l for l in host)
+                and any("orb claim of player 1 refused" in l and "player not seen at the orb" in l for l in host), "")
+        c.check(scenario, "a purchase without the orbs is refused, with them bought (orbs paid, item owned)",
+                any(r == "2" and i == "0" for _, _, i, r, _ in ge) and any(r == "1" and i == "1" and o == "8" for o, _, i, r, _ in ge),
+                f"{ge}")
+        skin = grab(client, r"\] skin own (.*)")
+        c.check(scenario, "at Kleiver's spot the shop opens (triangle); X wears the item bought",
+                any(n == "#t" for _, _, _, _, n in ge) and any("lobby menu mp-shop" in l for l in client)
+                and bool(skin) and skin[-1][0].split()[1] == "c0ffd040" and ge[-1][3] == "3", f"{skin[-1:]}")
+        saved = (settings / "multiplayer-economy.json").read_text(encoding="utf-8") if (settings / "multiplayer-economy.json").exists() else ""
+        record = (settings / "multiplayer-sessions.log").read_text(encoding="utf-8") if (settings / "multiplayer-sessions.log").exists() else ""
+        c.check(scenario, "the session's closing saves the accounts and the orbs credited, and is recorded; hosting it again loads them back",
+                '"orbs": 8' in saved and '"items": 1' in saved and '"orbs_taken"' in saved and 'session "world" closed' in record
+                and any('economy "world": 2 account(s) and 2 orb(s) taken loaded' in l for l in host), f"{record.strip()[-160:]}")
+
     elif scenario == "coop-respawn":
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")
@@ -758,6 +781,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any("back next to player 0" in l for l in client) and gr[:1] == [("1", "target-stance", "8.0")], f"{gr}")
         c.check(scenario, "and the host next to the guest",
                 any("back next to player 1" in l for l in host) and hr[-1:] == [("1", "target-stance", "8.0")], f"{hr}")
+
+    elif scenario == "economy-trophy":
+        c.check(scenario, "a Metal Head killed by the host's blow: a trophy for the host",
+                any("a trophy for player 0" in l for l in host), "")
+        gt = grab(client, r"\] econ orbs \d+ trophies (\d+)")
+        c.check(scenario, "one killed by the guest's (its puppet's) blow: a trophy for the guest, sent to it",
+                any("a trophy for player 1" in l for l in host) and gt[-1:] == [("1",)], f"{gt}")
 
     elif scenario == "scene-skins":
         hs = grab(host, r"\] scene actor (\S+) shirt #x(\w+) fur #x(\w+)")

@@ -1,0 +1,16 @@
+# Metal Head trophies, host side (the server): at the volcano, a lethal blow from the host's character
+# to the nearest Metal Head (an enemy that can carry a skull gem: a mantis), then from the guest's
+# puppet to another (kill-mh): each real death is credited, by the host, to the player whose blow it
+# was.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 continue volcanoa-start
+62 goto-own mantis
+64 kill-mh 0
+68 log-econ
+70 kill-mh 1
+74 log-econ
+78 log

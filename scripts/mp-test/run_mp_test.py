@@ -63,7 +63,7 @@ def prepare_instance(folder: Path, index: int) -> None:
             shutil.copytree(USER_JAK3 / sub, jak3 / sub)
     settings = jak3 / "settings"
     settings.mkdir(parents=True, exist_ok=True)
-    for stale in ("multiplayer.cfg",):
+    for stale in ("multiplayer.cfg", "multiplayer-economy.json", "multiplayer-sessions.log"):
         (settings / stale).unlink(missing_ok=True)
     # each test starts without a multiplayer campaign of the user's
     (jak3 / "saves" / "multiplayer-campaign.bin").unlink(missing_ok=True)

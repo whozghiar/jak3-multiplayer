@@ -91,6 +91,10 @@
                   ;; bits), text = the arc's points (33)
   (skin 20)       ;; the sender's outfit (Appearance page): its tints of groups 0-7 in text (uint32
                   ;; each), 8-11 in iarg 0-3, 12 in pad
+  (econ-pick 21)  ;; to the host: the sender took the precursor orb of entity iarg 0 ("Economy")
+  (econ 22)       ;; host to a player: its orbs, trophies, items owned (iarg 0-2), and the result
+                  ;; of its purchase (iarg 3: 0 none, 1 bought, 2 refused)
+  (econ-buy 23)   ;; to the host: the sender buys shop item iarg 0
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -2015,6 +2019,8 @@
 ;; MOD multiplayer -- wrap the stock enemy death bookkeeping (engine/common-obs/enemy-states.gc) to
 ;; share deaths. Every enemy death goes through it (from on-dying); no enemy class overrides it.
 ;; define-perm keeps the stock method when this file is reloaded in a REPL session.
+(define-extern mp-econ-on-enemy-died (function enemy none)) ;; "Economy", below
+
 (define-perm *mp-stock-mark-as-dead* (function enemy none)
   (the-as (function enemy none) (method-of-type enemy mark-as-dead))
   )
@@ -2023,6 +2029,7 @@
   "Stock behavior, then tell the other players (multiplayer mod, no-op offline)."
   (*mp-stock-mark-as-dead* this)
   (mp-on-enemy-died this)
+  (mp-econ-on-enemy-died this)
   (none)
   )
 
@@ -2601,6 +2608,10 @@
 (define-extern mp-update-race-vehicles (function none :behavior mp-manager)) ;; "Races", below
 (define-extern mp-draw-race-wait (function none))
 (define-extern mp-draw-beam-count (function none)) ;; "Waypoints reached together", below
+(define-extern mp-draw-merchant (function none))
+(define-extern mp-econ-claim-orb (function int uint none))
+(define-extern mp-econ-apply (function mp-event none))
+(define-extern mp-econ-buy (function int int none))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -3064,6 +3075,19 @@
          )
         (((mp-event-kind skin))
          (mp-apply-skin ev)
+         )
+        (((mp-event-kind econ-pick))
+         (if (= *mp-mode* (mp-mode host))
+             (mp-econ-claim-orb (-> ev from) (the-as uint (-> ev iarg 0)))
+             )
+         )
+        (((mp-event-kind econ))
+         (mp-econ-apply ev)
+         )
+        (((mp-event-kind econ-buy))
+         (if (= *mp-mode* (mp-mode host))
+             (mp-econ-buy (-> ev from) (-> ev iarg 0))
+             )
          )
         )
       )
@@ -4854,6 +4878,7 @@
     ;; draws its own (outside the bucket above: they fill their own DMA)
     (mp-draw-beam-count)
     (mp-draw-race-wait)
+    (mp-draw-merchant)
     (cond
       ((>= *mp-prompt-slot* 0)
        (mp-draw-prompt (text-id progress-mp-prompt-steal))
@@ -5173,6 +5198,427 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
+;; Economy
+;;
+;; Every player has precursor orbs and Metal Head trophies, the money of the shop (Kleiver's, in
+;; Spargus, below): the server (the host) alone keeps the accounts (pc-mp-econ-*, kmultiplayer.cpp,
+;; saved in <settings>/multiplayer-economy.json under each player's secret id, per session: a session
+;; hosted again finds its accounts). The host credits only what it checked itself:
+;;   - an orb: a player took a precursor orb (pickup skill, econ-pick from a guest with the aid of its
+;;     entity): the entity is in the host's world, of type skill, the host sees that player within
+;;     8 m of it within 2 s of the claim, and that orb was never credited in this session, this
+;;     time or a time before (the host keeps the orbs credited with the accounts);
+;;   - a trophy: a Metal Head (an enemy that can carry a skull gem: enemy-info gem-joint) died in the
+;;     host's world from that player's blow (its attacker: our player, or a guest's puppet, through
+;;     actor-hit).
+;; Purchases are asked of the host (econ-buy), which checks the price and the account. A guest only
+;; shows what the host sends it (econ): no event of a guest changes an account but these two, which
+;; the host checks. Saved every minute when something changed and when the session closes (each
+;; closing recorded in <settings>/multiplayer-sessions.log).
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_ECON_CLAIMS 8)              ;; orb claims waiting for their player at the orb
+(defconstant MP_ECON_ORB_RANGE (meters 8)) ;; how near the orb the host must see that player
+
+(deftype mp-econ-state (structure)
+  ((open?     symbol)      ;; host: the session's accounts are open
+   (key       string)      ;; host: the session key they are kept under
+   (claims      int32)    ;; host: orb claims waiting (mp-econ-claims-update): player, entity, until
+   (claim-slot  int32 8)
+   (claim-aid   uint32 8)
+   (claim-until time-frame 8)
+   (orbs      int32)       ;; our balances, as the host has them
+   (trophies  int32)
+   (items     uint32)      ;; the shop's items we own, one bit each
+   (credits   int32)       ;; host: orbs and trophies credited, claims refused (test log)
+   (refused   int32)
+   (result    int32)       ;; our last purchase: 0 none, 1 bought, 2 refused, 3 equipped
+   (result-at time-frame)
+   (near?     symbol)      ;; we stand at the merchant
+   )
+  )
+
+(define *mp-econ* (new 'global 'mp-econ-state))
+(set! (-> *mp-econ* open?) #f)
+(set! (-> *mp-econ* near?) #f)
+(set! (-> *mp-econ* key) (new 'global 'string 32 (the-as string #f)))
+(define *mp-econ-name* (new 'global 'string 32 (the-as string #f)))
+
+(define-extern pc-mp-econ-open (function string none))
+(define-extern pc-mp-econ-close (function none))
+(define-extern pc-mp-econ-credit (function int int int string int))
+(define-extern pc-mp-econ-buy (function int int int symbol))
+(define-extern pc-mp-econ-get (function int int int))
+(define-extern pc-mp-econ-set-own (function int int int none))
+(define-extern pc-mp-econ-saves (function int))
+(define-extern pc-mp-econ-take-orb (function uint symbol))
+
+;; The shop: four outfits for now (the future economy adds weapons, vehicles, powers). Each a price in
+;; orbs and the tints it sets (Appearance page groups, 0 keeps that part).
+(define *mp-shop-names* (new 'static 'boxed-array :type text-id
+                          (text-id progress-mp-shop-gold)
+                          (text-id progress-mp-shop-shadow)
+                          (text-id progress-mp-shop-desert)
+                          (text-id progress-mp-shop-flame)
+                          )
+  )
+(defconstant MP_SHOP_ITEMS 4)
+(define *mp-shop-prices* (new 'static 'array int32 4 5 10 8 6))
+(define *mp-shop-skins*
+  (new 'static 'array uint32 64
+    ;; gold: shirt, armor, scarf, gloves
+    0 #xc0ffd040 #xb3e0b030 0 0 #xc0ffe060 0 #x99d0a030 0 0 0 0 0 0 0 0
+    ;; shadow: shirt, armor, pants, scarf, straps
+    0 #xe0302040 #xc0403050 #xd0202028 0 #xe06020a0 #xb0201820 0 0 0 0 0 0 0 0 0
+    ;; desert: shirt, pants, boots, scarf
+    0 #xb3c8a060 0 #xb3a08050 #x99806040 #xc0e0c080 0 0 0 0 0 0 0 0 0 0
+    ;; flame Daxter: fur, light fur, belt
+    0 0 0 0 0 0 0 0 0 0 #xc0ff4020 #xc0ffd040 #x99602010 0 0 0
+    )
+  )
+
+(defun mp-econ-player-name ((slot int))
+  "The name of player `slot` (an account's label), in *mp-econ-name*."
+  (cond
+    ((= slot *mp-local-slot*)
+     (copy-string<-string *mp-econ-name* *mp-name*)
+     )
+    ((mp-remote-state slot)
+     (string<-charp *mp-econ-name* (-> (mp-remote-state slot) name))
+     )
+    (else
+      (format (clear *mp-econ-name*) "player ~D" slot)
+      )
+    )
+  *mp-econ-name*
+  )
+
+(defun mp-econ-send ((slot int) (result int))
+  "Host: player `slot`'s balances to it (ours read at once), with the result of its purchase (0 none,
+   1 bought, 2 refused)."
+  (let ((orbs (pc-mp-econ-get slot 0))
+        (trophies (pc-mp-econ-get slot 1))
+        (items (pc-mp-econ-get slot 2))
+        )
+    (cond
+      ((= slot *mp-local-slot*)
+       (set! (-> *mp-econ* orbs) orbs)
+       (set! (-> *mp-econ* trophies) trophies)
+       (set! (-> *mp-econ* items) (the-as uint items))
+       (when (nonzero? result)
+         (set! (-> *mp-econ* result) result)
+         (set! (-> *mp-econ* result-at) (mp-now))
+         )
+       )
+      (else
+        (let ((ev (new 'stack 'mp-event)))
+          (set! (-> ev kind) (mp-event-kind econ))
+          (set! (-> ev to) slot)
+          (set! (-> ev iarg 0) orbs)
+          (set! (-> ev iarg 1) trophies)
+          (set! (-> ev iarg 2) items)
+          (set! (-> ev iarg 3) result)
+          (pc-mp-send-event ev)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-apply ((ev mp-event))
+  "A guest: its balances as the host sends them (from the host only: nobody else counts)."
+  (when (and (zero? (-> ev from)) (!= *mp-mode* (mp-mode host)))
+    (set! (-> *mp-econ* orbs) (-> ev iarg 0))
+    (set! (-> *mp-econ* trophies) (-> ev iarg 1))
+    (set! (-> *mp-econ* items) (the-as uint (-> ev iarg 2)))
+    (pc-mp-econ-set-own (-> ev iarg 0) (-> ev iarg 1) (-> ev iarg 2))
+    (when (nonzero? (-> ev iarg 3))
+      (set! (-> *mp-econ* result) (-> ev iarg 3))
+      (set! (-> *mp-econ* result-at) (mp-now))
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-refuse ((slot int) (aid uint) (why string))
+  "Host: player `slot`'s claim of the orb of entity `aid` refused, for reason `why` (logged)."
+  (+! (-> *mp-econ* refused) 1)
+  (format 0 "[multiplayer] economy: orb claim of player ~D refused (entity ~D): ~S~%" slot aid why)
+  (none)
+  )
+
+(defun mp-econ-claim-orb ((slot int) (aid uint))
+  "Host: player `slot` says it took the precursor orb of entity `aid`. Refused at once unless that
+   entity is in our world and a precursor orb (type skill); otherwise held until we see that player
+   at the orb (mp-econ-claims-update)."
+  (let* ((e *mp-econ*)
+         (ent (if (nonzero? aid) (entity-by-aid aid)))
+         )
+    (cond
+      ((not (and (-> e open?) ent (= (-> (the-as entity-actor ent) etype symbol) 'skill)))
+       (mp-econ-refuse slot aid "no such orb")
+       )
+      ((>= (-> e claims) MP_ECON_CLAIMS)
+       (mp-econ-refuse slot aid "too many claims")
+       )
+      (else
+        (let ((i (-> e claims)))
+          (set! (-> e claim-slot i) slot)
+          (set! (-> e claim-aid i) aid)
+          (set! (-> e claim-until i) (+ (mp-now) (seconds 2)))
+          (+! (-> e claims) 1)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-claims-update ()
+  "Host, every frame: an orb claim waiting is credited once we see its player within 8 m of the orb
+   (we see a guest a little late: its claim can come first), if that orb was never credited in this
+   session (pc-mp-econ-take-orb: the orbs credited are kept with the accounts); refused when that
+   orb was, or when we have not seen the player there within 2 s. A claim done gives its place to the
+   last one."
+  (let ((e *mp-econ*)
+        (i 0)
+        )
+    (while (< i (-> e claims))
+      (let* ((slot (-> e claim-slot i))
+             (aid (-> e claim-aid i))
+             (ent (entity-by-aid aid))
+             (at (the-as vector (cond
+                                  ((= slot *mp-local-slot*)
+                                   (if *target* (-> *target* control trans))
+                                   )
+                                  ((mp-remote-state slot)
+                                   (-> (mp-remote-state slot) trans)
+                                   )
+                                  )
+                         )
+                 )
+             (near? (and ent at (< (vector-vector-distance at (-> ent trans)) MP_ECON_ORB_RANGE)))
+             (done? #t)
+             )
+        (cond
+          ((and near? (pc-mp-econ-take-orb aid))
+           (+! (-> e credits) 1)
+           (pc-mp-econ-credit slot 0 1 (mp-econ-player-name slot))
+           (format 0 "[multiplayer] economy: an orb for player ~D (entity ~D)~%" slot aid)
+           (mp-econ-send slot 0)
+           )
+          (near?
+           (mp-econ-refuse slot aid "already credited")
+           )
+          ((< (mp-now) (-> e claim-until i))
+           (set! done? #f)
+           )
+          (else
+            (mp-econ-refuse slot aid "player not seen at the orb")
+            )
+          )
+        (cond
+          (done?
+           (+! (-> e claims) -1)
+           (let ((last (-> e claims)))
+             (set! (-> e claim-slot i) (-> e claim-slot last))
+             (set! (-> e claim-aid i) (-> e claim-aid last))
+             (set! (-> e claim-until i) (-> e claim-until last))
+             )
+           )
+          (else
+            (+! i 1)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-on-enemy-died ((this enemy))
+  "Host: a Metal Head (it can carry a skull gem) died here from a player's blow: a trophy for that
+   player (our player and what it fired or drives, or a guest's puppet hitting it through actor-hit)."
+  (when (and (-> *mp-econ* open?) (> (-> this enemy-info gem-joint) 0))
+    (let* ((by (handle->process (-> this incoming attacker-handle)))
+           (slot (cond
+                   ((and by (type? by mp-puppet))
+                    (-> (the-as mp-puppet by) slot)
+                    )
+                   ((and by (mp-from-local-player? by))
+                    *mp-local-slot*
+                    )
+                   (else
+                     -1
+                     )
+                   )
+                 )
+           )
+      (when (>= slot 0)
+        (+! (-> *mp-econ* credits) 1)
+        (pc-mp-econ-credit slot 1 1 (mp-econ-player-name slot))
+        (format 0 "[multiplayer] economy: a trophy for player ~D (~A)~%" slot (-> this type symbol))
+        (mp-econ-send slot 0)
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-buy ((slot int) (item int))
+  "Host: player `slot` buys shop item `item`: paid and owned when its account has the orbs and does
+   not own it yet; the answer sent back."
+  (let ((ok? (and (-> *mp-econ* open?)
+                  (>= item 0)
+                  (< item MP_SHOP_ITEMS)
+                  (pc-mp-econ-buy slot item (-> *mp-shop-prices* item))
+                  )
+             )
+        )
+    (format 0 "[multiplayer] economy: player ~D buys item ~D: ~A~%" slot item (if ok? 'bought 'refused))
+    (mp-econ-send slot (if ok? 1 2))
+    )
+  (none)
+  )
+
+(defun mp-econ-request-buy ((item int))
+  "Buy shop item `item`: the host decides (ours at once when we are the host)."
+  (if (= *mp-mode* (mp-mode host))
+      (mp-econ-buy *mp-local-slot* item)
+      (mp-send-event (mp-event-kind econ-buy) 0 item 0.0)
+      )
+  (none)
+  )
+
+(defun mp-econ-equip ((item int))
+  "Wear shop item `item` (owned): its tints over our outfit, saved and sent."
+  (when (logtest? (-> *mp-econ* items) (ash 1 item))
+    (dotimes (i 16)
+      (let ((v (-> *mp-shop-skins* (+ (* item 16) i))))
+        (if (nonzero? v)
+            (set! (-> *mp-config* skin i) v)
+            )
+        )
+      )
+    (mp-config-save!)
+    (mp-send-skin -1)
+    (set! (-> *mp-econ* result) 3)
+    (set! (-> *mp-econ* result-at) (mp-now))
+    )
+  (none)
+  )
+
+(defun mp-econ-update ()
+  "Every frame from the hook. Host in game: the session's accounts open (key: the campaign, free
+   roam, or the world hosted), closed (saved and recorded) when it stops hosting; while open, the
+   orb claims waiting are checked."
+  (let ((e *mp-econ*))
+    (cond
+      ((and (= *mp-mode* (mp-mode host)) (mp-in-game?) (not (-> e open?)))
+       (copy-string<-string (-> e key) (case (-> *mp-session* kind)
+                                         (('campaign) "campaign")
+                                         (('free) "free")
+                                         (else "world")
+                                         )
+                            )
+       (pc-mp-econ-open (-> e key))
+       (set! (-> e open?) #t)
+       (set! (-> e claims) 0)
+       (mp-econ-send *mp-local-slot* 0)
+       (dotimes (i MP_MAX_PLAYERS)
+         (if (mp-remote-state i)
+             (mp-econ-send i 0)
+             )
+         )
+       )
+      ((and (-> e open?) (!= *mp-mode* (mp-mode host)))
+       (pc-mp-econ-close)
+       (set! (-> e open?) #f)
+       )
+      )
+    (if (-> e open?)
+        (mp-econ-claims-update)
+        )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- every precursor orb taken goes through game-info's give (engine/game/game-info.gc,
+;; 'skill, with the pickup's handle): claimed to the host for our account.
+(define-perm *mp-stock-give* (function game-info symbol float handle float) (method-of-type game-info give))
+
+(defmethod give ((this game-info) (arg0 symbol) (arg1 float) (arg2 handle))
+  "Stock; online, a precursor orb taken by our player is claimed for our account (the host checks
+   its entity: \"Economy\")."
+  (let ((ret (*mp-stock-give* this arg0 arg1 arg2)))
+    (when (and (= arg0 'skill) (< 0.0 arg1) (mp-online?))
+      (let* ((proc (handle->process arg2))
+             (aid (if (and proc (-> proc entity)) (-> proc entity aid) (the-as uint 0)))
+             )
+        (if (= *mp-mode* (mp-mode host))
+            (mp-econ-claim-orb *mp-local-slot* aid)
+            (mp-send-event (mp-event-kind econ-pick) 0 (the-as int aid) arg1)
+            )
+        )
+      )
+    ret
+    )
+  )
+
+;; Kleiver's shop, in Spargus: at his garage, a line of his and a prompt; triangle opens the START
+;; menu on the shop's page (multiplayer-menu.gc, 'mp-shop), the only page offering trades for orbs.
+(define *mp-merchant-pos* (new 'static 'vector :x 9306030.0 :y 125214.7 :z 686858.2 :w 1.0)) ;; 2271.98 30.57 167.69 m
+(defconstant MP_MERCHANT_RANGE (meters 4))
+
+(defun mp-update-merchant ()
+  "In game online, on foot within 4 m of Kleiver's spot (on the ground, 4 m above or below): his
+   line shows; triangle opens the shop."
+  (let ((e *mp-econ*))
+    (set! (-> e near?) (if (and (mp-online?)
+                            *target*
+                            (mp-in-game?)
+                            (not *progress-process*)
+                            (not (focus-test? *target* pilot grabbed dead))
+                            (< (vector-vector-xz-distance (-> *target* control trans) *mp-merchant-pos*) MP_MERCHANT_RANGE)
+                            (< (fabs (- (-> *target* control trans y) (-> *mp-merchant-pos* y))) (meters 4))
+                            )
+                           #t
+                           #f
+                           )
+          )
+    (when (and (-> e near?) (cpad-pressed? 0 triangle))
+      (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons triangle))
+      (format 0 "[multiplayer] Kleiver's shop opens~%")
+      (activate-progress *dproc* 'mp-shop)
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-merchant ()
+  "Kleiver's line and the shop's prompt, at the bottom of the screen while we stand at his spot."
+  (when (-> *mp-econ* near?)
+    ;; centered left of the minimap, smaller when too long for that width
+    (let ((ctx (new 'stack 'font-context *font-default-matrix* 16 296 0.0 (font-color yellow) (font-flags shadow kerning middle large)))
+          (line (lookup-text! *common-text* (text-id progress-mp-shop-line) #f))
+          )
+      (set-width! ctx 384)
+      (set-height! ctx 40)
+      (set! (-> ctx scale) 0.45)
+      (let ((w (-> (get-string-length line ctx) length)))
+        (if (< 376.0 w)
+            (set! (-> ctx scale) (/ (* 0.45 376.0) w))
+            )
+        )
+      (print-game-text line ctx #f 44 (bucket-id hud-draw-hud-alpha))
+      )
+    (mp-draw-prompt (text-id progress-mp-shop-prompt))
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
 ;; Per-frame hook
 ;; ------------------------------------------------------------------------------------------------
 
@@ -5256,6 +5702,8 @@
      (mp-draw-scene-skip)
      (mp-update-beams)
      (mp-update-race)
+     (mp-econ-update)
+     (mp-update-merchant)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)

@@ -63,6 +63,10 @@
 ;;   log-state <type>                                        the state of the first process of that type
 ;;   log-end                                                 a session ended without us: the note, where we are
 ;;   log-scene-skins                                         the cutscene's Jak and Daxter actors and their outfit tints
+;;   log-econ | goto-merchant | goto-orb                     balances; stand at Kleiver's shop; take the nearest orb
+;;   econ-claim <aid> | shop-buy <item>                      claim an orb not taken (0: the nearest; refused); buy a shop item
+;;   econ-grant <slot> <orbs>                                the host credits a player (test of the server's accounts)
+;;   kill-mh <slot>                                          host: a lethal blow from player slot to the nearest Metal Head
 ;;   die | log-respawn                                       kill our player; co-op respawns next to a teammate
 ;;   log-outline                                             outlined players drawn through walls (renderer count, table)
 ;;   spawn-vehicle <type>                                    an empty vehicle 3 m in front of us
@@ -1344,6 +1348,39 @@
   #f
   )
 
+(defun mp-test-orb-scan ((proc process-drawable))
+  "iterate-process-tree callback: keep the nearest precursor orb (a collectable whose entity is of
+   type skill) to the player."
+  (when (and (type? proc collectable) *target* (nonzero? (-> proc root)) (-> proc entity)
+             (= (-> (the-as entity-actor (-> proc entity)) etype symbol) 'skill)
+             )
+    (let ((d (vector-vector-distance (-> proc root trans) (-> *target* control trans))))
+      (when (or (not *mp-test-nearest*) (< d *mp-test-nearest-dist*))
+        (set! *mp-test-nearest* proc)
+        (set! *mp-test-nearest-dist* d)
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-test-mh-scan ((proc process-drawable))
+  "iterate-process-tree callback: keep the nearest living Metal Head (an enemy that can carry a skull
+   gem) to the player."
+  (when (and (type? proc enemy) *target* (nonzero? (-> proc root))
+             (> (-> (the-as enemy proc) enemy-info gem-joint) 0)
+             (not (focus-test? (the-as enemy proc) dead))
+             )
+    (let ((d (vector-vector-distance (-> proc root trans) (-> *target* control trans))))
+      (when (or (not *mp-test-nearest*) (< d *mp-test-nearest-dist*))
+        (set! *mp-test-nearest* proc)
+        (set! *mp-test-nearest-dist* d)
+        )
+      )
+    )
+  #f
+  )
+
 (defun mp-test-crates ()
   "Count the live crates (and find the nearest)."
   (set! *mp-test-crates* 0)
@@ -1543,6 +1580,101 @@
              )
            )
          )
+        ((string= cmd "log-econ")
+         ;; log-econ: our balances as the host has them, the shop's answer, the host's accounts state
+         (format 0 "[mp-test] econ orbs ~D trophies ~D items #x~X result ~D near ~A open ~A~%"
+                 (-> *mp-econ* orbs) (-> *mp-econ* trophies) (-> *mp-econ* items) (-> *mp-econ* result) (-> *mp-econ* near?)
+                 (-> *mp-econ* open?)
+                 )
+         (format 0 "[mp-test] econ host key ~S credits ~D refused ~D saves ~D game skill ~f~%" (-> *mp-econ* key)
+                 (-> *mp-econ* credits) (-> *mp-econ* refused) (pc-mp-econ-saves) (-> *game-info* skill)
+                 )
+         )
+        ((string= cmd "goto-merchant")
+         ;; goto-merchant: stand at Kleiver's spot in Spargus (his shop)
+         (when *target*
+           (move-to-point! (-> *target* control) *mp-merchant-pos*)
+           (vector-reset! (-> *target* control transv))
+           )
+         )
+        ((string= cmd "goto-orb")
+         ;; goto-orb: stand on the nearest precursor orb (a skill pickup with its entity): it is taken
+         (set! *mp-test-nearest* #f)
+         (iterate-process-tree *active-pool* (the-as (function object object) mp-test-orb-scan) *null-kernel-context*)
+         (cond
+           ((and *mp-test-nearest* *target*)
+            (format 0 "[mp-test] orb entity ~D at ~m~%" (-> *mp-test-nearest* entity aid) *mp-test-nearest-dist*)
+            (move-to-point! (-> *target* control) (-> *mp-test-nearest* root trans))
+            (vector-reset! (-> *target* control transv))
+            )
+           (else
+             (format 0 "[mp-test] orb none~%")
+             )
+           )
+         )
+        ((string= cmd "econ-claim")
+         ;; econ-claim <aid>: claim an orb of entity aid we did not take (a cheat the host must refuse);
+         ;; aid 0: the nearest orb, claimed from where we stand
+         (let ((aid (mp-test-int)))
+           (when (zero? aid)
+             (set! *mp-test-nearest* #f)
+             (iterate-process-tree *active-pool* (the-as (function object object) mp-test-orb-scan) *null-kernel-context*)
+             (if *mp-test-nearest*
+                 (set! aid (the-as int (-> *mp-test-nearest* entity aid)))
+                 )
+             )
+           (if (= *mp-mode* (mp-mode host))
+               (mp-econ-claim-orb *mp-local-slot* (the-as uint aid))
+               (mp-send-event (mp-event-kind econ-pick) 0 aid 1.0)
+               )
+           )
+         )
+        ((string= cmd "econ-grant")
+         ;; econ-grant <slot> <orbs>: the host credits a player (a test of the server's own accounts;
+         ;; a guest's command does nothing: only the host keeps accounts)
+         (let ((slot (mp-test-int))
+               (n (mp-test-int))
+               )
+           (when (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))
+             (pc-mp-econ-credit slot 0 n (mp-econ-player-name slot))
+             (mp-econ-send slot 0)
+             )
+           )
+         )
+        ((string= cmd "kill-mh")
+         ;; kill-mh <slot>: on the host, a lethal blow to the nearest Metal Head (an enemy that can
+         ;; carry a skull gem) from player slot's character (ours, or its puppet): its real death,
+         ;; credited by the economy to the player whose blow it was
+         (let ((slot (mp-test-int))
+               (manager (the-as mp-manager (handle->process (-> *mp-globals* manager))))
+               )
+           (set! *mp-test-nearest* #f)
+           (iterate-process-tree *active-pool* (the-as (function object object) mp-test-mh-scan) *null-kernel-context*)
+           (let ((attacker (if (= slot *mp-local-slot*)
+                               (the-as process *target*)
+                               (if manager (handle->process (-> manager puppets slot)))
+                               )
+                           )
+                 (mh *mp-test-nearest*)
+                 )
+             (cond
+               ((and mh attacker)
+                (format 0 "[mp-test] kill-mh ~A at ~m by player ~D~%" (-> mh type symbol) *mp-test-nearest-dist* slot)
+                (send-event mh 'attack :from attacker #f
+                            (static-attack-info :mask (vehicle-impulse-factor)
+                              ((id (new-attack-id)) (mode 'generic) (damage 1000.0) (attacker (process->handle attacker))
+                               (vehicle-damage-factor 1.0) (vehicle-impulse-factor 1.0)
+                               )
+                              )
+                            )
+                )
+               (else
+                 (format 0 "[mp-test] kill-mh none (metal head ~A, attacker ~A)~%" mh attacker)
+                 )
+               )
+             )
+           )
+         )
         ((string= cmd "die")
          ;; die: a blow that kills our player (co-op: back next to a living teammate)
          (when *target*
@@ -1560,6 +1692,10 @@
          (format 0 "[mp-test] respawn ~D state ~A health ~,,1f teammate ~D~%" *mp-respawns* (mp-target-state-name)
                  (if *target* (-> *target* fact health) 0.0) (mp-living-teammate)
                  )
+         )
+        ((string= cmd "shop-buy")
+         ;; shop-buy <item>: buy shop item n, as the shop page's X does
+         (mp-econ-request-buy (mp-test-int))
          )
         ((string= cmd "log-scene-skins")
          ;; log-scene-skins: each Jak or Daxter actor of the cutscene playing here, and the shirt and fur
