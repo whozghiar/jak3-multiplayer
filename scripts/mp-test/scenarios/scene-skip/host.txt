@@ -1,0 +1,16 @@
+# Skipping a cutscene together, host side: starts a Spargus cutscene (the guest next to it watches it
+# too), presses triangle: it asks to skip it and the cutscene goes on (1/2); once the guest asked too
+# it is skipped on both machines.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55 scene wascity-pre-game-intro
+58 log-skip
+59 press triangle 100
+60 log-skip
+60.5 screenshot vote-host
+63 log-skip
+70 log-skip
+72 log

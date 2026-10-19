@@ -1,0 +1,14 @@
+# Skipping a cutscene together, guest side: watches the host's cutscene, sees the host's vote (1/2),
+# presses triangle: every player asked, the cutscene is skipped.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 wait-scene
+51 log-skip
+55.5 log-skip
+55.7 screenshot vote-guest
+56.5 press triangle 100
+58 log-skip
+60 log

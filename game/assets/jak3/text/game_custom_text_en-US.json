@@ -368,5 +368,7 @@
   "1578": "stock",
   "1579": "<PAD_L2> <PAD_R2> Part   <PAD_CIRCLE> Jak / Daxter",
   "157a": "<PAD_DPAD_UP> <PAD_DPAD_DOWN> Choose   <PAD_ANALOG_LEFT_RIGHT> Adjust   <PAD_L1> <PAD_R1> Faster",
-  "157b": "<PAD_X> Keep   <PAD_TRIANGLE> Cancel"
+  "157b": "<PAD_X> Keep   <PAD_TRIANGLE> Cancel",
+  "157c": "<PAD_TRIANGLE> Skip the cutscene (~D/~D)",
+  "157d": "Skip: waiting for the others (~D/~D)"
 }

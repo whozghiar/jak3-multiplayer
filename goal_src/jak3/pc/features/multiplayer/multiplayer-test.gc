@@ -17,6 +17,7 @@
 ;;   wait-countdown                                          the script waits: the lobby's start countdown runs
 ;;   wait-pause <0|1> | wait-resume                          the script waits: the game paused by the host (or not); its resume countdown
 ;;   wait-driving <slot>                                     the script waits: that player drives a vehicle (for 2 s)
+;;   wait-scene | log-skip                                   the script waits: a cutscene plays here; the vote to skip it
 ;;   continue <continue-point>                               go to a continue point
 ;;   press <button> <ms> [lx ly] | stick <lx> <ly> <ms>      force pad 0 (0-255, 128 = center)
 ;;   stick-r <rx> <ry> <ms>                                  the right stick (camera)
@@ -1893,6 +1894,20 @@
          (set! (-> *mp-test-wait* kind) 'pause)
          (pc-mp-test-pause #t)
          )
+        ((string= cmd "wait-scene")
+         ;; the script waits until a cutscene that can be skipped plays here
+         (set! (-> *mp-test-wait* kind) 'scene)
+         (pc-mp-test-pause #t)
+         )
+        ((string= cmd "log-skip")
+         ;; log-skip: the cutscene playing here, our vote, the votes and the players watching
+         (let ((sp (mp-skippable-scene)))
+           (format 0 "[mp-test] skip scene ~A voted ~A votes ~D viewers ~D skips ~D~%"
+                   (if sp (-> sp scene name) 'none) (-> *mp-skip* voted?) (-> *mp-skip* votes) (-> *mp-skip* viewers)
+                   (-> *mp-skip* skips)
+                   )
+           )
+         )
         ((string= cmd "wait-driving")
          ;; the script waits until player <slot> drives a vehicle, for 2 s
          (set! (-> *mp-test-wait* slot) (mp-test-int))
@@ -2565,6 +2580,9 @@
        )
       (('resume)
        (> (mp-resume-ms) 0)
+       )
+      (('scene)
+       (if (mp-skippable-scene) #t #f)
        )
       (('driving)
        (let ((st (mp-remote-state (-> w slot))))

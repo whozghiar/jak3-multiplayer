@@ -701,6 +701,19 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "two passengers ride the host's three-seat car, each in its own seat (1 and 2)",
                 a[-1:] == [("1", "3")] and b[-1:] == [("2", "3")], f"first {a[-1:]}, second {b[-1:]}")
 
+    elif scenario == "scene-skip":
+        hs = grab(host, r"\] skip scene (\S+) voted (\S+) votes (\d+) viewers (\d+) skips (\d+)")
+        gs = grab(client, r"\] skip scene (\S+) voted (\S+) votes (\d+) viewers (\d+) skips (\d+)")
+        c.check(scenario, "the guest watches the host's cutscene too (2 viewers)",
+                any(v == "2" for _, _, _, v, _ in gs) and any(v == "2" for _, _, _, v, _ in hs), f"host {hs[:1]}, guest {gs[:1]}")
+        c.check(scenario, "the host's triangle asks (1/2): the cutscene goes on",
+                any(n != "none" and vo == "#t" and v == "1" and w == "2" for n, vo, v, w, _ in hs), f"{hs}")
+        c.check(scenario, "the guest sees the host's vote before voting",
+                any(n != "none" and vo == "#f" and v == "1" for n, vo, v, _, _ in gs), f"{gs}")
+        c.check(scenario, "once both asked, the cutscene is skipped on both machines",
+                bool(hs) and bool(gs) and hs[-1][0] == "none" and hs[-1][4] == "1" and gs[-1][0] == "none" and gs[-1][4] == "1",
+                f"host {hs[-1:]}, guest {gs[-1:]}")
+
     elif scenario == "player-list":
         own = grab(client, r"\] ping own (-?\d+) list (\S+) paused (\S+)")
         c.check(scenario, "holding SELECT shows the player list without pausing",

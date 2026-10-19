@@ -1720,6 +1720,8 @@
   (progress-mp-skin-keys #x1579)
   (progress-mp-skin-keys-2 #x157a)
   (progress-mp-skin-keys-3 #x157b)
+  (progress-mp-skip-ask #x157c)
+  (progress-mp-skip-wait #x157d)
   )
 ;; ---text-id
 

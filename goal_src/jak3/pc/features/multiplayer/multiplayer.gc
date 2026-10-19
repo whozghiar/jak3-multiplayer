@@ -53,6 +53,8 @@
   (paused-all 10)  ;; host: the game is paused for everyone (its resume field counts the restart down)
   (seat-a 11)      ;; a passenger's seat in its driver's vehicle, bits 11-12 (1-3, mp-state-ride-seat)
   (seat-b 12)
+  (in-scene 13)    ;; watches a cutscene that can be skipped ("Skipping a cutscene")
+  (skip-vote 14)   ;; ... and asks to skip it
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -265,6 +267,21 @@
 (define *mp-skins* (new 'global 'mp-skin-table))
 (set! (-> *mp-skins* editing?) #f)
 (set! (-> *mp-skins* preview) (the-as handle #f))
+
+;; Skipping a cutscene together ("Skipping a cutscene", below). In a structure: a global symbol
+;; holds 32 bits.
+(deftype mp-skip-state (structure)
+  ((voted?  symbol) ;; we asked to skip the cutscene we watch
+   (votes   int32)  ;; players watching it who asked to skip it, and players watching it (us included)
+   (viewers int32)
+   (skips   int32)  ;; cutscenes skipped together (test log)
+   )
+  )
+
+(define *mp-skip* (new 'global 'mp-skip-state))
+(set! (-> *mp-skip* voted?) #f)
+;; the vote's line (an encoded button icon and accents take room)
+(define *mp-skip-line* (new 'global 'string 128 (the-as string #f)))
 
 ;; The host's pause for everyone, and the START menu over a running world ("Pause for everyone",
 ;; below). In a structure: a time-frame or a handle is 64 bits, a global symbol holds 32.
@@ -885,6 +902,20 @@
     )
   )
 
+(defun mp-skippable-scene ()
+  "The cutscene playing here, when it can be skipped (scene-flags scf1, nearly every cutscene), else #f."
+  (let ((sp (if *scene-player*
+                (the-as scene-player (ppointer->process *scene-player*))
+                )
+            )
+        )
+    (if (and sp (-> sp scene) (logtest? (-> sp scene scene-flags) (scene-flags scf1)))
+        sp
+        (the-as scene-player #f)
+        )
+    )
+  )
+
 (defun mp-build-local-state ()
   "Describe the local player in *mp-local*. Runs every frame from the hook, even paused."
   (let ((st *mp-local*))
@@ -919,6 +950,13 @@
     (if (and (= *mp-mode* (mp-mode host)) (logtest? *mp-world* (mp-world-flag coop)))
         (logior! (-> st flags) (mp-flag coop))
         )
+    ;; a cutscene we watch, and our vote to skip it
+    (when (mp-skippable-scene)
+      (logior! (-> st flags) (mp-flag in-scene))
+      (if (-> *mp-skip* voted?)
+          (logior! (-> st flags) (mp-flag skip-vote))
+          )
+      )
     ;; the host's pause for everyone, and the time left before it resumes
     (if (and (= *mp-mode* (mp-mode host)) (-> *mp-pause* paused?))
         (logior! (-> st flags) (mp-flag paused-all))
@@ -4004,10 +4042,108 @@
   ()
   )
 
+;; ------------------------------------------------------------------------------------------------
+;; Skipping a cutscene together
+;;
+;; Cutscenes are shared within a region (multiplayer-world.gc, mp-apply-scene). While another player
+;; watches the same one, triangle no longer skips it at once as the stock does (scene.gc, scf1): it
+;; asks to skip it, "Skip the cutscene (1/2)" at the bottom, and once every player watching it asked,
+;; each machine skips it (the scene-player's 'abort). Each player's state says it watches a cutscene
+;; that can be skipped (in-scene) and whether it asked (skip-vote). Alone, triangle skips at once.
+;; ------------------------------------------------------------------------------------------------
+
+(defun mp-count-skip-votes ()
+  "Players watching a cutscene that can be skipped (us when we do), and those who asked to skip it."
+  (let ((sk *mp-skip*)
+        (viewers 0)
+        (votes 0)
+        )
+    (when (mp-skippable-scene)
+      (+! viewers 1)
+      (if (-> sk voted?)
+          (+! votes 1)
+          )
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (when (and st (logtest? (-> st flags) (mp-flag in-scene)))
+            (+! viewers 1)
+            (if (logtest? (-> st flags) (mp-flag skip-vote))
+                (+! votes 1)
+                )
+            )
+          )
+        )
+      )
+    (set! (-> sk viewers) viewers)
+    (set! (-> sk votes) votes)
+    )
+  (none)
+  )
+
+(defun mp-skip-input ()
+  "First thing every frame (mp-input): while another player watches the cutscene with us, triangle
+   asks to skip it and the stock skip does not see it."
+  (when (and (mp-online?) (mp-skippable-scene) (> (-> *mp-skip* viewers) 1) (cpad-pressed? 0 triangle))
+    (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons triangle))
+    (logclear! (-> *cpad-list* cpads 0 button0-abs 0) (pad-buttons triangle))
+    (when (not (-> *mp-skip* voted?))
+      (set! (-> *mp-skip* voted?) #t)
+      (format 0 "[multiplayer] we ask to skip the cutscene~%")
+      (sound-play "generic-beep")
+      )
+    )
+  (none)
+  )
+
+(defun mp-update-scene-skip ()
+  "Every frame from the hook: the votes counted; every player watching asked: the cutscene skipped
+   here (each machine skips its own); no cutscene: no vote left."
+  (mp-count-skip-votes)
+  (let ((sk *mp-skip*)
+        (sp (mp-skippable-scene))
+        )
+    (cond
+      ((not sp)
+       (set! (-> sk voted?) #f)
+       )
+      ((and (-> sk voted?) (> (-> sk viewers) 1) (= (-> sk votes) (-> sk viewers)))
+       (when (not (-> sp aborted?))
+         (+! (-> sk skips) 1)
+         (format 0 "[multiplayer] every player asked: the cutscene is skipped~%")
+         )
+       (send-event sp 'abort)
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-scene-skip ()
+  "The vote, at the bottom of the cutscene while another player watches it too."
+  (let ((sk *mp-skip*))
+    (when (and (mp-online?) (mp-skippable-scene) (> (-> sk viewers) 1))
+      (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 372 0.0 (font-color default) (font-flags shadow kerning middle large))))
+        (set-width! ctx 512)
+        (set-height! ctx 40)
+        (set! (-> ctx scale) 0.5)
+        (format (clear *mp-skip-line*)
+                (lookup-text! *common-text* (if (-> sk voted?) (text-id progress-mp-skip-wait) (text-id progress-mp-skip-ask)) #f)
+                (-> sk votes)
+                (-> sk viewers)
+                )
+        (print-game-text *mp-skip-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-input-update ()
   "Run first every frame: while our START menu is open over the running world, pad 0 is kept in
    *mp-pad-backup* and hidden from what runs next (no button, sticks centered); the hook gives it
-   back before the menu reads it."
+   back before the menu reads it. And triangle during a cutscene another player watches
+   (mp-skip-input)."
+  (mp-skip-input)
   (when (and (-> *mp-pause* live?) (= *master-mode* 'progress) *progress-process*)
     (let ((pad (-> *cpad-list* cpads 0)))
       (mem-copy! (the-as pointer (&-> *mp-pad-backup* type)) (the-as pointer (&-> pad type)) (the-as int (size-of cpad-info)))
@@ -4337,6 +4473,8 @@
        )
      (mp-draw-overlay)
      (mp-draw-pause)
+     (mp-update-scene-skip)
+     (mp-draw-scene-skip)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)
