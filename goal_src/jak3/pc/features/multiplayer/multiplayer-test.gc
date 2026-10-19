@@ -71,6 +71,7 @@
 ;;   net <ms> <jitter> <loss %> | log-net                    the test network from now on; each peer's network pressure
 ;;   open-menu <page> | econ-grant-self <0|1>                a START page; the host's +100 orbs / trophies
 ;;   log-eyes                                                the remote puppets' eye slots and their last writer
+;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   log-outline                                             outlined players drawn through walls (renderer count, table)
 ;;   spawn-vehicle <type>                                    an empty vehicle 3 m in front of us
 ;;   power <dark|light> | log-power                          Dark / Light Jak on; ours and what puppets show
@@ -2563,6 +2564,16 @@
                )
            )
          )
+        ((string= cmd "dark-bomb")
+         ;; dark-bomb: our Dark Jak (power dark) can do the dark bomb and the dark blast, as at the end of
+         ;; the game: their features and stages on, its eco full; a dive attack (jump, then square) sets
+         ;; the bomb off (target-flop), an uppercut (L1 held, square) the blast (target-attack-uppercut)
+         (when (and *target* (nonzero? (-> *target* darkjak)))
+           (logior! (-> *game-info* features) (game-feature darkjak-bomb0 darkjak-bomb1))
+           (logior! (-> *target* darkjak stage) (darkjak-stage bomb0 bomb1))
+           (set! (-> *game-info* eco-pill-dark) (-> *FACT-bank* eco-pill-dark-max-default))
+           )
+         )
         ((string= cmd "log-power")
          ;; log-power: our Dark / Light Jak, and what each puppet shows of another player's
          (when *target*
@@ -2591,9 +2602,11 @@
            )
          )
         ((string= cmd "log-weapons")
-         (format 0 "[mp-test] weapons shown red2 ~D dark2 ~D arc ~D blue3 ~D~%" (-> *mp-weapons-shown* 0)
-                 (-> *mp-weapons-shown* 1) (-> *mp-weapons-shown* 2) (-> *mp-weapons-shown* 3)
+         (format 0 "[mp-test] weapons shown red2 ~D dark2 ~D arc ~D blue3 ~D yellow2 ~D red3 ~D~%" (-> *mp-weapons-shown* 0)
+                 (-> *mp-weapons-shown* 1) (-> *mp-weapons-shown* 2) (-> *mp-weapons-shown* 3) (-> *mp-weapons-shown* 4)
+                 (-> *mp-weapons-shown* 5)
                  )
+         (format 0 "[mp-test] weapons effects past a copy's joints ~D~%" *mp-fx-joint-clamped*)
          ;; and each player's arc as received here: points, its tracker, its bolts' state
          (dotimes (slot 8)
            (let ((arc (-> *mp-arcs* arc slot)))

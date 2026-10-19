@@ -1,0 +1,22 @@
+# Weapons' visuals, guest side: 8 m from the host, looking at it: the yellow 2 shots' trail, the red 3
+# grenade's trail, then the host's dark blast (it crashed the others' games).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 goto-player 0 8 0
+51 look-player 0
+52.8 screenshot yellow2
+54.2 screenshot yellow2-b
+57.3 screenshot red3
+60 log-weapons
+66.4 screenshot darkbomb
+67 screenshot darkbomb-b
+70 log-weapons
+72 goto-player 0 2 0
+73 log-me
+74.7 screenshot darkbomb-c
+75.5 log-me
+76.5 log
+78 log

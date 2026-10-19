@@ -1,0 +1,17 @@
+# Dark Jak's blows, host side: in Dark Jak, punches (square) next to the guest: their trail
+# (group-darkjak-smack-trail, a subsampled part group) is replayed on the host's puppet there.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 power dark
+54 press square 100
+54.6 press square 100
+55.2 press square 100
+56 press square 100
+56.6 press square 100
+58 press square 100
+58.6 press square 100
+60 log-me
+64 log

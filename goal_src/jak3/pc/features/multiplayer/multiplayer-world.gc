@@ -1466,6 +1466,10 @@
     )
   )
 
+;; test log (log-weapons): wave concussor and mass inverter copies drawn here, arc frames drawn,
+;; needle lazer, beam reflexor and plasmite RPG trails
+(define *mp-weapons-shown* (new 'static 'boxed-array :type int32 0 0 0 0 0 0))
+
 (defbehavior mp-replica-init-by-other mp-replica ((st mp-actor-state) (sg skeleton-group) (lev level))
   "A replica of the host's NPC `st`, drawn with `sg`, whose art lives in `lev`."
   ;; the art lookup of initialize-skeleton goes through the process's level
@@ -1517,6 +1521,20 @@
   (dotimes (i MP_FX_TRACKERS)
     (set! (-> self fx-group i) -1)
     (set! (-> self fx-tracker i) (the-as handle #f))
+    )
+  ;; the plasmite RPG's (red 3) grenade draws a red light trail behind it (gun-red-shot.gc,
+  ;; init-proj-settings!): not an emitter, so not replayed; the same trail on its copy
+  (when (string= (-> sg name) "skel-gun-red-3-grenade")
+    (+! (-> *mp-weapons-shown* 5) 1)
+    (light-trail-tracker-spawn
+      light-trail-tracker-projectile
+      :to self
+      :param-list ((tracked-obj (process->handle self))
+       (appearance *red-shot-3-trail*)
+       (max-num-crumbs (the int (* 0.5 (the float (-> *red-shot-3-trail* max-age)))))
+       (track-immediately? #t)
+       )
+      )
     )
   (go mp-replica-idle)
   )
@@ -1652,10 +1670,6 @@
     )
   )
 
-;; test log (log-weapons): wave concussor and mass inverter copies drawn here, arc frames drawn,
-;; needle lazer trails
-(define *mp-weapons-shown* (new 'static 'boxed-array :type int32 0 0 0 0))
-
 (defbehavior mp-fx-copy-init-by-other mp-fx-copy ((st mp-actor-state))
   "A copy of shot `st`: an intangible point that plays the owner's emitters and sounds."
   (set! (-> self id) (-> st id))
@@ -1689,6 +1703,20 @@
       :param-list ((tracked-obj (process->handle self))
        (appearance *blue-shot-trail*)
        (max-num-crumbs (the int (* 0.2 (the float (-> *blue-shot-trail* max-age)))))
+       (track-immediately? #t)
+       )
+      )
+    )
+  ;; the beam reflexor's (yellow 2) shot is nothing but its light trail (gun-yellow-shot.gc,
+  ;; init-proj-settings!: its trail is spawned under the shooter's own player): the same trail here
+  (when (string-charp= "gun-yellow-shot-2" (&-> st skel 1))
+    (+! (-> *mp-weapons-shown* 4) 1)
+    (light-trail-tracker-spawn
+      light-trail-tracker-projectile
+      :to self
+      :param-list ((tracked-obj (process->handle self))
+       (appearance *yellow-shot-2-trail*)
+       (max-num-crumbs (the int (* 0.25 (the float (-> *yellow-shot-2-trail* max-age)))))
        (track-immediately? #t)
        )
       )
@@ -2871,6 +2899,8 @@
   (none)
   )
 
+(define *mp-fx-joint-clamped* 0) ;; effects whose joint the copy lacks, played in the world (test log)
+
 (defun mp-replay-effect ((ev mp-event))
   "Start an effect another player saw start, unless an identical one just started here: on the copy
    of what it belongs to (following the same joint), else in the world; never for a player whose
@@ -2893,6 +2923,23 @@
                 )
             )
           (let ((parent (mp-effect-parent (-> ev from) owner)))
+            ;; a joint the copy's skeleton does not have plays in the world: a Daxter player's
+            ;; effects carry the joints of its hidden model of Jak, more than its Daxter copy has
+            ;; (the tracker read past the copy's joints: a crash in the launcher's spawn, seen in a
+            ;; co-op session)
+            (if (and parent
+                     (>= joint 0)
+                     (not (and (type? parent process-drawable)
+                               (nonzero? (-> (the-as process-drawable parent) node-list))
+                               (< joint (-> (the-as process-drawable parent) node-list length))
+                               )
+                          )
+                     )
+                (begin
+                  (+! *mp-fx-joint-clamped* 1)
+                  (set! joint -1)
+                  )
+                )
             ;; a shot's effect (its impact) plays in the world when it can: the shot's copy goes
             ;; 250 ms after the shot, and its effects with it
             (if (and parent

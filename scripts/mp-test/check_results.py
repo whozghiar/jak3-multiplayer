@@ -838,6 +838,17 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the guest playing Daxter: the host's Jak has its eyes from its own clips (its puppet feeds the slot, not our hidden model)",
                 bool(ey) and all(p == "#t" and t == "#f" for _, _, p, t in ey), f"{ey}")
 
+    elif scenario == "weapons-fx":
+        ws = grab(client, r"\] weapons shown red2 (\d+) dark2 (\d+) arc (\d+) blue3 (\d+) yellow2 (\d+) red3 (\d+)")
+        c.check(scenario, "the host's beam reflexor (yellow 2) shots and plasmite RPG (red 3) grenade draw their light trails on the guest",
+                bool(ws) and int(ws[-1][4]) >= 1 and int(ws[-1][5]) >= 1, f"{ws[-1:]}")
+        me = grab(host, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")
+        c.check(scenario, "the host's dark bomb goes off next to the guest, which is hit and does not crash",
+                any(st == "target-darkjak-bomb0" for (st,) in me) and any("pvp hit by player 0" in l for l in client), f"{me}")
+
+    elif scenario == "dark-smack":
+        c.check(scenario, "Dark Jak's blows next to the guest: their trail replayed there, no crash", any("pvp hit by player 0" in l for l in client), "")
+
     elif scenario == "coop-respawn":
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")

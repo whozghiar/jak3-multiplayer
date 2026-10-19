@@ -1,0 +1,32 @@
+# Weapons' visuals, host side: the beam reflexor (yellow 2), then the plasmite RPG (red 3) fired toward
+# the guest; then Dark Jak's dark bomb (dive) and dark blast (uppercut).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 gun 30
+51 face-player 1
+52 press r1 200
+53 press r1 200
+54 press r1 200
+56 gun 28
+56.5 face-player 1
+57 press r1 200
+58.5 press r1 200
+60 log-weapons
+62 power dark
+65.5 dark-bomb
+66 press l1 1200
+66.4 press square 100
+66.2 log-me
+67 log-me
+68.5 log-me
+68 log-power
+70 power dark
+73.5 dark-bomb
+74 press x 100
+74.35 press square 100
+74.6 log-me
+75.5 log-me
+78 log
