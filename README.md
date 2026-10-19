@@ -33,18 +33,20 @@ Daxter co-op duo with its own multiplayer save.
   - **Co-op (2 players):** the story as Jak and Daxter. The host starts a new campaign, continues
     it, or picks any mission of the story (everything before it done). The campaign is saved on
     the host's computer as a multiplayer save of its own, apart from the memory card's save
-    slots. A guest who picks the host's character is offered the other one. When the other
-    player plays Daxter, Jak has no Daxter on his shoulder: Daxter can jump on a crouching Jak's
-    shoulder (triangle) and ride along until he jumps off (X). A cutscene is skipped once both
-    players asked (triangle). A waypoint (the yellow beam) waits for both players to stand on it
+    slots. A guest who picks the host's character is offered the other one. In cutscenes, Jak
+    wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
+    on foot while the other one is alive nearby comes back next to them, and the mission goes on.
+    A cutscene is skipped once both players asked (triangle). A waypoint (the yellow beam) waits for both players to stand on it
     ("Players here: 1/2"). A race gives each player a vehicle and starts once both are aboard:
     each in their own, riding with the other, or Daxter on Jak's shoulder (triangle next to Jak's
     vehicle). A 10-second countdown then leaves time to change your mind and ride together.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
-- **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere. He
-  fires every gun too: R1 fires the mod chosen with the D-pad, aimed at the nearest enemy ahead,
+- **Play as Jak or Daxter:** Daxter is the game's own playable Daxter, available everywhere. A
+  Jak played online carries no Daxter of the game: Daxter is a player. Next to a crouching Jak, or
+  a Jak driving, Daxter's triangle climbs onto his shoulder with the game's own animation, and he
+  rides there, in vehicles too, until he jumps off (X). He fires every gun too: R1 fires the mod chosen with the D-pad, aimed at the nearest enemy ahead,
   with the mod and its ammo shown at the bottom of the screen. He holds the gun in his hands and
   aims and fires it with the game's own Daxter animations, on every screen. He gets in vehicles
   and drives them as Daxter.
@@ -91,7 +93,13 @@ Daxter co-op duo with its own multiplayer save.
   are in the same place on every screen, and they feel every player's weight.
 - **Administration for the host:** kick or ban a player, teleport players to you, allow or forbid
   cheats for guests and players hitting each other, share story progress and your time of day,
-  stop the server.
+  stop the server. When the host leaves, every player goes back to the title screen with "The
+  host ended the session".
+- **Precursor orbs and Metal Head trophies:** every precursor orb you take and every Metal Head
+  you kill counts for you. The host's game keeps every player's count, saves it every minute
+  and when the session ends, and gives it back when it hosts that session again; each orb counts
+  once. Spend your orbs at **Kleiver's shop** in Spargus, by his garage at the city's doors:
+  stand next to him and press triangle to buy and wear new outfits.
 
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
@@ -122,7 +130,8 @@ Daxter co-op duo with its own multiplayer save.
 | Steal a player's vehicle | Triangle next to it |
 | Ride as passenger | L1 + Triangle next to it |
 | Get off as passenger | Triangle |
-| Co-op, as Daxter: jump on a crouching Jak's shoulder / jump off | Triangle / X |
+| As Daxter: climb onto a crouching or driving Jak's shoulder / jump off | Triangle / X |
+| Kleiver's shop: open / buy or wear / leave | Triangle next to him / X / Triangle |
 
 > [!NOTE]
 > **Playing over the Internet:** the host must open (forward) UDP port 7777, or the port they
@@ -221,8 +230,9 @@ For the complete technical breakdown, architecture, developer notes and change l
 
 ## Credits
 The title screen's Host Game and Join Game, the lobby and its countdown, the SELECT player list,
-the passengers' seats and binding (L1 + triangle), the Appearance page and the Jak and Daxter
-co-op duo follow himstan's
+the passengers' seats and binding (L1 + triangle), the Appearance page, the Jak and Daxter
+co-op duo, Daxter riding on Jak's shoulder, the outfits in cutscenes, the return next to a
+teammate, the session's end screen and the adaptive network delay follow himstan's
 [Jak and Daxter II Multiplayer](https://github.com/himstan/Jak-And-Daxter-2-Multiplayer)
 (ISC license), rewritten for Jak 3.
 

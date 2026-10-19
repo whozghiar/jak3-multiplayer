@@ -11,15 +11,15 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 | Layer | File | Role |
 |---|---|---|
-| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | UDP session (host or client), reliable channel, relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | UDP session (host or client), reliable channel, relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, the economy's accounts (4.20), test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
 | Renderer (C++) | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `shaders/merc2_outline.*` | Other players seen through walls: their models drawn again, at the end of the 3D scene, as an outline in their color where something hides them (4.9). |
 | Renderer (C++) | `TextureAnimator.cpp`, `.h`, `foreground/Merc2.cpp`, `shaders/merc2.vert`, `.frag` | Another player's Dark Jak skin at its own level (4.11); each player's outfit colors (4.12). |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
-| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, per-frame hook. |
+| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, Daxter on a shoulder (4.16), cutscene outfits (4.17), the co-op return next to a teammate (4.19), the economy and Kleiver's spot (4.20), per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
 | GAME | `.../multiplayer-guns.gc` | Every weapon (Mods menu), and Daxter's guns (4.8). |
-| GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby and its game mode, co-op and mission pages, the on-screen keyboard, START > Options > Multiplayer and its administration page, the Mods menu entries. |
+| GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby and its game mode, co-op and mission pages, the on-screen keyboard, START > Options > Multiplayer and its administration page, Kleiver's shop page (4.20), the Mods menu entries. |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
 | Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/`, `compare_poses.py` | Runs several game instances on one PC with a script each, gathers logs and screenshots; compares an owner's bones with its copies'. |
 | Tool | `scripts/mp-test/local_pair.py` | Starts two instances on one PC to play by hand, one with the controller, the other with the keyboard. |
@@ -45,7 +45,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   - `BYE` (sent three times, nothing answers it): the host stopped (with its reason) or a client
     left; the other side drops the connection at once instead of waiting for the timeout.
 
-  Message types: `HELLO` (protocol version, now 8), `WELCOME` (slot), `REJECT` (reason, then
+  Message types: `HELLO` (protocol version, now 9, and the player's secret id, 4.20), `WELCOME` (slot), `REJECT` (reason, then
   close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
   offset][bytes]`, 15000 bytes a message, relayed by the host: the host's world for a guest that
   joins, 1.7), `PING`, `PONG`. A client sees "Connection refused" when the host's machine answers
@@ -63,10 +63,16 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   of object batches and poses is in tenths of a millisecond: the receiver's clock estimate and
   the blend between poses one frame apart lose up to a millisecond otherwise (about 3.5 mm on a
   running citizen).
-- **Interpolation:** everything another player sends is drawn 100 ms in the past, at the same
-  moment for its puppet and its objects (one clock estimate per sender: the fastest delivery of
-  its states and batches alike). An object keeps its last 500 ms of states; a late one goes on
-  along its last velocity for 150 ms, then holds. A shot gone 250 ms without a state is gone.
+- **Interpolation:** everything another player sends is drawn in the past by that sender's
+  delay, at the same moment for its puppet and its objects (one clock estimate per sender: the
+  fastest delivery of its states and batches alike). The delay follows how late its messages come
+  (`Session::delay_of`, after the playout buffer of himstan's snapshot timeline,
+  `game/multiplayer/platform/replication/snapshot_timeline.h`, ISC): the mean lateness of its
+  states and of its object batches behind the fastest delivery (moving average, weight 0.05),
+  delay = 66.7 ms (one 15 Hz batch) + 10 ms + 2.5 times that lateness, 300 ms at most. About 76 ms
+  on a LAN, 95 to 102 ms under 50 ms of delay and 30 of jitter (a fixed 100 ms before; `log-ping`
+  prints it). An object keeps its last 500 ms of states; a late one goes on along its last
+  velocity for 150 ms, then holds. A shot gone 250 ms without a state is gone.
 - **Poses:** `[u8 source][u32 source time][u16 count]` then one entry per object:
   `[u32 id][u16 bones, bit 15 = effects][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
   translation to 1 mm, per-axis scale, relative to the object's frame), each emitter 20 bytes,
@@ -79,7 +85,8 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   hook even while paused, so a paused player does not time out.
 - **Config:** `<settings>/multiplayer.cfg` (`%APPDATA%/OpenGOAL/jak3/settings/` on Windows):
   name, address, character, color, enabled, mode (the game mode when hosting: 0 free roam, 1
-  co-op, 1.7), skin (the outfit's 16 tints in hex, 4.12).
+  co-op, 1.7), skin (the outfit's 16 tints in hex, 4.12), uid (the player's secret id, drawn once:
+  its economy account on any host, 4.20).
 - **The host's lobby choices** travel in its state (`lobby-mode`, `lobby-start`, `lobby-mission`,
   in what was padding): a guest's lobby shows them before any game starts.
 
@@ -112,8 +119,8 @@ A replica is built from the owner's skeleton (`mp-skel-of` finds the skeleton-gr
 process's art group and joint geometry, since a process does not keep it) and plays the owner's
 animation by index, which plays the animation's effects (footsteps, sounds) on the replica
 itself. The owner's full pose then replaces its bones (1.4). Both players and objects are drawn
-100 ms in the past, interpolated with the owner's clock, so props stay on the puppet that carries
-them.
+in the past by their sender's delay (1.1), interpolated with the owner's clock, so props stay on
+the puppet that carries them.
 
 ### 1.3 Who applies damage
 
@@ -251,7 +258,7 @@ the union. Host setting **Share story progress** (on by default).
 - **Cutscenes.** Every cutscene starts in `scene-player-init`, wrapped: its scenes and continue
   point go to the others (`scene` events), and a player of the same region (same NPC authority)
   with no cutscene playing starts the same one, with its commands. Gated by **Share story
-  progress**.
+  progress**. Its Jak wears the host's outfit and its Daxter the Daxter player's (4.17).
 - **Physics objects.** A `rigid-body-object` of the level (not a vehicle) within 300 m of a player
   goes with the authority's batch, named the same on every machine: its entity's aid, plus its
   rank among the objects that entity's process spawned (the volcano's lava platforms are 5
@@ -360,15 +367,8 @@ the union. Host setting **Share story progress** (on by default).
       after a start), ends the campaign.
     - *Roles:* once per session, a guest playing the host's character is switched to the other
       one (`mp-update-coop-roles`); the lobby offers it first.
-    - *Daxter on the shoulder:* while the other player plays Daxter, the Jak player's own Daxter
-      is taken off (`mp-update-session`: the manager holds `(set-setting! 'features 'clear 0
-      #x100000)`, the sidekick bit, as `target-death.gc` does; the game's own features, which
-      are saved, are untouched). A Daxter standing in his mode within 2.5 m of a crouching Jak
-      (`mp-jak-crouching?`: Jak's duck animations 32 to 34, on foot) presses triangle to jump on
-      his shoulder: the stock grab state (`target-indax-grab`), following the puppet's root 1.25
-      m up and 0.22 m to its left (its x axis), drawn there (`mp-update-perch`); X, his death or
-      Jak hidden puts him down. In free roam, where Jak keeps his own Daxter, the perched player
-      is hidden instead (no double).
+    - *Daxter on the shoulder:* a Jak player online carries no Daxter of the game, and a Daxter
+      player climbs onto a Jak's shoulder (4.16).
   Until 2026-10-16 co-op held story steps until every player came (`coop-wait` event, now unused)
   and brought a guest more than 150 m away back to the host; both were removed so that the two
   modes play alike.
@@ -417,6 +417,13 @@ The way into a session follows himstan's Jak and Daxter II Multiplayer
   mode list (host). Circle: the multiplayer options page. Triangle: `mp-leave!`, then the stock
   goes back a page. The page's frame is computed with `adjust-game-x`: this page is handed the
   unadjusted x (70) and width (375), where the frame is drawn squeezed to the screen's ratio.
+- **The host ends the session.** When the host stops its server, leaves its lobby, goes back to
+  the title screen or is lost (its game closed), every guest goes back to the title screen, its
+  menu on the first page, and "The host ended the session" shows at the top for 10 s (text
+  `#x1581`), as himstan's `host-left` page tells its players. A kicked or banned guest goes there too, with
+  that reason. A host back at the title screen after a game ends its session.
+- **Texts that fit.** Names are shortened with "..." where they would run into the next column,
+  and lobby lines shrink to fit (4.18); the session status line is localized.
 - **Differences with himstan's lobby:** square opens the game mode list (his copies an invite),
   guests join by address (no room code, no LAN scan), and the multiplayer options keep this mod's
   settings plus the Appearance page (4.12; no nametag or map marker options). The countdown
@@ -436,6 +443,26 @@ The crashes of the test session were reproduced on `multiplayer-v1.0.0` (bf43da5
 played), its sources put back in the worktree for the run with three test commands and this
 report added (`gun [type]`, `board`, `stick-r`), then the same scripts run on the current version
 (scenarios `v1-*`, 5.2).
+
+### 1.10 Compared with himstan's Jak and Daxter II Multiplayer
+
+The user asked how himstan's Jak 2 mod
+([repository](https://github.com/himstan/Jak-And-Daxter-2-Multiplayer), ISC) synchronizes its
+world and has NPCs react to online players, and to take the best of both. Read in its
+`goal_src/jak2/multiplayer/` and `game/multiplayer/` on 2026-10-19:
+
+| Aspect | himstan's Jak 2 mod | This mod | Taken |
+|---|---|---|---|
+| Who simulates an NPC | Each enemy's combat owner: the player it focuses within 100 m, 2 s hysteresis, the host arbitrating; traffic by bubbles around players | A region's authority: the host for every player near it, a distant guest for itself and the guests near it (1.4) | Kept ours: a region's NPCs run on one machine, so their fights, deaths and scripts stay whole; per-enemy owners need each machine to run every NPC's code |
+| What travels | About 22 bytes per enemy at 20 Hz (position, rotation, health, state id, focus, flags); the receiver drives its own NPC with forced states and plays walk or run itself | Full poses: every bone of each NPC near another player every frame, farther ones at 15 Hz, with its effects and sounds (1.4) | Kept ours: attacks, hit reactions and deaths look as on the owner's machine; it costs more bandwidth (6, about 0.85 MB/s with a crowd) |
+| Playout delay | A C++ buffer whose delay follows the measured jitter | A fixed 100 ms until this round | **Taken:** the delay follows each sender's lateness (1.1) |
+| A player's blow on an NPC | Predicted on the attacker (new health broadcast), knockback seeded alike everywhere | Sent to the authority, applied there on the real NPC; the attacker sees the reaction on the copy one round trip later (1.3) | Not yet: prediction would animate a copy without its code; a candidate for later |
+| NPCs hitting players | Checked on the victim's machine | The same (1.3) | Same |
+| Collectibles | One shared counter; the host deduplicates by entity and broadcasts the count; drops seeded by entity and index | Pickups and crates shared by entity (1.2) | **Taken for the economy:** the host alone credits an orb, once per entity (4.20) |
+| Missions | The host owns the task masks; each machine runs its task managers; a dead player watches a teammate, then comes back near it; a mission fails only when every player is dead | Story nodes shared (1.5); waypoints, races and cutscene skips wait for every player (4.13 to 4.15) | **Taken:** a dead player back next to a living teammate, the mission goes on (4.19) |
+| Daxter riding Jak | The rider hidden; Jak's own Daxter shown in the rider's skin; jump-on animation; stays there in vehicles | A perched Daxter drawn on the puppet's shoulder | **Taken:** the rider hidden, the Jak's own Daxter in the rider's outfit, the stock climb (4.16) |
+| Cutscene actors | Jak and Daxter wear a player's skin | Stock actors | **Taken,** with the host's Jak (4.17) |
+| Sending under pressure | Cadence lowered when the link is loaded; bit-packed values; relayed only to the peers concerned | Everything every frame, relayed to every guest | Not yet: the next step for slow links (6) |
 
 ## 2. Requirements and how they are met
 
@@ -473,6 +500,18 @@ report added (`gun [type]`, `board`, `stick-r`), then the same scripts run on th
 | Co-op: skip a cutscene once every player asked | 4.13. |
 | Co-op: a vehicle for every player in a race, which starts once every player is aboard (driving, riding, on a Jak's shoulder) | 4.15. |
 | Co-op: a waypoint (yellow beam) needs every player on it, "Players here: 1/x" | 4.14. |
+| Menus: no text over another | Names shortened with "...", lines shrunk to fit (4.18). |
+| The Appearance page as ergonomic as himstan's skin editor | The part between L2 and R2, each character back on its last part, held keys repeat (4.12). |
+| Co-op races: a vehicle of one's own or a seat in another player's | Every player gets a vehicle and may leave it to ride with another or on a Jak's shoulder before the start (4.15). |
+| Daxter in a vehicle with a Jak sits on his shoulder | 4.16. |
+| Missions handled as in himstan's mod | Shared story nodes, waypoints, races and skips that wait for every player (1.5, 4.13 to 4.15), a dead player back next to a teammate (4.19). |
+| Cutscenes: the host's Jak; the Daxter player's Daxter, the stock one when every player is a Jak | 4.17. |
+| The host leaving sends every player to the title screen with a message | 1.8. |
+| Daxter climbs onto a shoulder only next to a Jak, with the stock animation | 4.16. |
+| No Jak player carries a Daxter that is not a player | 4.16. |
+| The world's synchronization compared with himstan's, the best of both | 1.10. |
+| Precursor orbs and Metal Head trophies per player, kept by the server alone, saved regularly and at each session's end, reloaded with the session | 4.20. |
+| Kleiver's shop in Spargus, opened from his line, trading orbs | 4.20. |
 
 ## 3. Vanilla touch points
 
@@ -487,9 +526,9 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1580` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page and the co-op lines. |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1593` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status and Kleiver's shop. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
-| `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12). |
+| `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
@@ -500,7 +539,7 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 
 | Function or method | File | Why |
 |---|---|---|
-| `enemy` `mark-as-dead` | `engine/common-obs/enemy-states.gc` | Share enemy deaths. |
+| `enemy` `mark-as-dead` | `engine/common-obs/enemy-states.gc` | Share enemy deaths; a Metal Head's trophy for the player whose blow killed it (4.20). |
 | `progress` `set-menu-options` | `pc/progress/progress-pc.gc` | The `'multiplayer` page, the title screen's Host Game and Join Game pages, the lobby (1.8). |
 | `determine-pause-mode` | `engine/draw/drawable.gc` | Online, SELECT is the host's pause for everyone (a tap) and the player list (held); a guest's SELECT and START do nothing while the host paused (4.7, 4.10). |
 | `blit-displays-work` `set-menu-mode` | `engine/gfx/blit-displays-h.gc` | No still copy of the screen while the world runs under the START menu (4.10). |
@@ -519,7 +558,9 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first; the art heap goes with its host level. |
 | `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world or in free roam; the co-op campaign's saves into its file (1.7). |
 | `target-gun-compute-pos` | `engine/target/target-gun.gc` | Where the gun is drawn: in Daxter's hand, opened to the mod, while he holds it (4.8). |
-| `joint-control-remap!` | `engine/anim/joint.gc` | The sidekick (Daxter's model in his mode) calls it after copying the player's clips: Daxter's clip holding the gun goes on his upper body there (4.8). |
+| `joint-control-remap!` | `engine/anim/joint.gc` | The sidekick (Daxter's model in his mode) calls it after copying the player's clips: Daxter's clip holding the gun goes on his upper body there (4.8); on Jak's shoulder, the climb of a Daxter player (4.16). |
+| `target-death-reset` | `engine/target/target-death.gc` | Co-op: a dead player back next to a living teammate, no task manager told (4.19). |
+| `game-info` `give` | `engine/game/game-info.gc` | A precursor orb taken is claimed from the host for our account (4.20). |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -798,11 +839,13 @@ Inspired by the skin editor of himstan's Jak and Daxter II Multiplayer
 written anew for Jak 3 (`multiplayer-menu.gc`, page `'mp-skin`):
 
 - **Page:** Options > Multiplayer > **Appearance**, also from the lobby's multiplayer options. L2 /
-  R2 pick the part (Jak: shirt, armor, pants, boots, scarf, straps and belts, gloves and wraps,
-  hair, goggles; Daxter: fur, light fur, belt), circle switches between Jak and Daxter; up / down
-  pick a slider (red, green, blue, tint strength, 0-255, "stock" at 0), left / right move it (held:
-  repeats after 0.25 s), L1 / R1 by large steps. A swatch shows the color. X keeps the outfit,
-  triangle puts back the one the page opened with.
+  R2 pick the part, shown between them as in himstan's editor ("<L2>  Jak: Shirt  <R2>"; Jak:
+  shirt, armor, pants, boots, scarf, straps and belts, gloves and wraps, hair, goggles; Daxter:
+  fur, light fur, belt); circle switches between Jak and Daxter, each back on the part last
+  edited of his; up / down pick a slider (red, green, blue, tint strength, 0-255, "stock" at 0;
+  held: repeats), left / right move it (held: repeats after 0.25 s), L1 / R1 by large steps. A
+  swatch beside the sliders shows the color. X keeps the outfit, triangle puts back the one the
+  page opened with; the keys are listed on two lines at the bottom.
 - **Preview:** the character turns in the 3D scene, 2.6 m before the camera (a `manipy` of Jak's
   or Daxter's model under `*mp-input-pool*`, which runs under the menu; the title screen's light;
   no cloth; spawned with `:stack-size #x20000`, the room a puppet has: with `#x10000` Jak's model
@@ -866,6 +909,99 @@ until every connected player is aboard (multiplayer.gc, "Races"):
 - **Daxter and a driving Jak.** In co-op, Daxter's triangle within 5 m of the vehicle a Jak drives
   puts him on that Jak's shoulder (standing or walking); he never robs that vehicle, and its
   steal prompt is not shown. In free roam he may still steal it beyond 3.5 m of Jak.
+
+### 4.16 Daxter on a Jak's shoulder
+
+After the ride-along of himstan's Jak and Daxter II Multiplayer
+(`goal_src/jak2/engine/target/daxter/states/daxter-ride-along.gc`,
+`goal_src/jak2/multiplayer/player/mp-player-visibility.gc`, ISC), multiplayer.gc "Daxter on
+Jak's shoulder":
+
+- **No Daxter of the game on a player Jak.** Online, a Jak player's own Daxter is taken off
+  (`mp-update-session`: the manager holds `(set-setting! 'features 'clear 0 #x100000)`, the
+  sidekick bit, as `target-death.gc` does; the saved features are untouched), in every mode,
+  unless a Daxter player rides on that Jak's shoulder (`mp-rider-on`).
+- **Climbing on.** A Daxter player standing or walking in his mode, on the ground (not in the air,
+  grabbed, hit or dead), presses triangle within 2.5 m of a crouching Jak (`mp-jak-crouching?`:
+  Jak's duck animations 32 to 34, on foot) or 3.5 m of a driving one; in co-op, or with L1 held,
+  within 5 m of the vehicle a Jak drives (4.15). He goes into the stock grab state
+  (`target-indax-grab`), following the puppet's root 1.25 m up and 0.22 m to its left
+  (`mp-update-perch`), hidden: the Jak's own Daxter, shown again and wearing the rider's outfit
+  (`mp-skin-add-copies`, `mp-update-skins`), sits there on every machine, so the camera and the
+  pose are the stock ones. It plays the stock climb: Daxter's clips 420 then 427
+  (`daxter-darkjak-get-off`, `-end`, the climb back onto Jak's shoulder after Dark Jak), forced on
+  the sidekick's channel 0 at each clip's own speed (`mp-climb-anim!`, from the
+  `joint-control-remap!` wrapper; 159 frames), started when a rider appears on a Jak not in a
+  vehicle.
+- **Off.** X, his death or the Jak hidden puts him down next to Jak. A perched Daxter is hidden
+  but present: he counts as there for the players' distances (no longer taken for a player still
+  loading).
+
+### 4.17 Cutscene outfits
+
+After himstan's `goal_src/jak2/multiplayer/player/mp-cutscene-appearance.gc` (ISC), on every
+machine (`mp-scene-skins`, called from `mp-update-skins`): the scene player's actors named
+`jakc-highres`, `jak-highres`, `darkjak-highres` or `jakc-scarf` wear the host's outfit (the host
+is the story's Jak), and `sidekick-highres` the outfit of the player who plays Daxter, or no tint
+(the stock Daxter) when every player is a Jak. The actor's name and handle are checked before
+`handle->process` (a handle of 0 crashed it). The renderer's tint groups list the cutscene
+models' textures too (`Merc2.cpp`: `jakchires-*` in Jak's groups, the high resolution Daxter's in
+his).
+
+### 4.18 Texts that fit
+
+After `fit-overlay-text` of himstan's `goal_src/jak2/multiplayer/ui/lobby-browser.gc` (ISC):
+`mp-fit-text!` (multiplayer.gc) cuts a string to a width with "..." measured with the font
+context it is drawn with. The player list fits each name in 130 px before its health bar; the
+lobby fits a name before its status column and the chosen player's details to their panel;
+`mp-lobby-print-fit` (multiplayer-menu.gc) draws a line of game text smaller, down to 60 %, rather
+than letting it run into the next column. The session status line uses texts `#x1582` to `#x1585`.
+Kleiver's shop right-aligns its prices at the page's right edge.
+
+### 4.19 Co-op: back next to a teammate
+
+After the respawn policy of himstan's mod (`goal_src/jak2/multiplayer/player/mp-respawn-policy.gc`,
+`mp-death-spectate.gc`, ISC), multiplayer.gc "Co-op: back next to a teammate": the end of a
+death, `target-death-reset`, is wrapped. Its stock version tells the task managers ('target 'die,
+which fails a mission that fails on death), then resets the game at the continue point. In co-op,
+a player who dies on foot while a teammate is alive in game within 300 m (`mp-living-teammate`,
+the nearest) comes back 2 m from that teammate, health full, invulnerable for 3 s, in
+`target-stance`, and no task manager is told: a mission goes on while one player lives. Dying
+alone, or in a vehicle, stays the stock (the continue point; the mission fails if it does so).
+
+### 4.20 Economy: orbs, trophies and Kleiver's shop
+
+multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cpp` `mp::Economy`:
+
+- **Accounts.** Every player has precursor orbs and Metal Head trophies, the money of the shop.
+  The host alone keeps the accounts, under each player's secret id (`uid=` in its
+  `multiplayer.cfg`, drawn once, sent in `HELLO`: nobody else knows it, and the same player finds
+  its account on that host whatever its name or slot), per session key: `campaign`, `free` or
+  `world`. A guest only shows what the host sends it (`econ` event); no event of a guest changes
+  an account but an orb claim and a purchase, which the host checks.
+- **Orbs.** Every orb taken goes through `game-info` `give` ('skill, with the pickup's handle),
+  wrapped: the taker claims it from the host with the orb's entity (`econ-pick`). The host refuses
+  a claim whose entity is not a precursor orb (type `skill`) in its world; otherwise it holds it
+  (8 at most) until it sees the claimant within 8 m of the orb (it sees a guest a little late, so
+  the claim can come first), then credits one orb if that orb was never credited in this session
+  (`pc-mp-econ-take-orb`: the orbs credited are saved with the accounts, so each orb pays once,
+  whoever took it, whenever). Not seen there within 2 s: refused. A claim from afar, of an orb
+  not taken or taken before, credits nothing.
+- **Trophies.** A Metal Head (an enemy that can carry a skull gem: `enemy-info` `gem-joint` above
+  0) dying in the host's world from a player's blow (its attacker: the host's player and what it
+  fired or drives, or a guest's puppet hitting it through `actor-hit`) gives that player a trophy
+  (the `mark-as-dead` wrapper).
+- **Saved.** In `<settings>/multiplayer-economy.json` on the host: every minute when something
+  changed, and when the session closes (the host stops hosting); each closing adds a line to
+  `<settings>/multiplayer-sessions.log` (date, session, duration, every account's balances).
+  Hosting the same session again loads them back.
+- **Kleiver's shop.** At Kleiver's garage in Spargus (by the city's doors, continue point
+  `wasdoors-city`), within 4 m: his line ("Kleiver: Got orbs? I've got just what you need.") and
+  "Press triangle to trade". Triangle opens the START menu on one page, the shop
+  (`activate-progress` with `'mp-shop`): the balances, four outfits with their prices (5 to 10
+  orbs; the future economy adds weapons, vehicles and powers), X buys one (asked of the host,
+  which checks the price and the account) or wears one owned (its tints over the outfit, saved
+  and sent), triangle leaves.
 
 ## 5. Testing in game
 
@@ -961,7 +1097,13 @@ A script line is `<seconds> <command>`:
 | `wait-joined`, `wait-player <slot>` | The script's clock stops until this guest is in the host's world (next to it), or until player `slot` is in game for 2 s: the steps after keep their spacing from then. Every scenario's guest waits after `join`, its host before the guest arrives. |
 | `wait-menu <page>`, `address <ip:port>`, `log-lobby` | The script's clock stops until the menu shows that page for 1.5 s (`title`: X is tapped every 2 s until the title screen opens its menu, which waits for a press); the server address field alone; the menu page shown, the title screen's entries, and the lobby as drawn (players, characters, statuses, game mode, ready). |
 | `spawn-vehicle <type>`, `log-vehicles` | An empty vehicle 3 m in front of us (traffic spawn path); every vehicle within 30 m of us, ours and copies (a vehicle shown twice). |
-| `log-ping` | Each player's round trip and health as the player list shows them, the list shown, and whether the game is paused. |
+| `log-ping` | Each player's round trip, health and playout delay (1.1) as the player list shows them, the list shown, and whether the game is paused. |
+| `log-end` | Sessions ended without us, the note for the title screen, whether we are at the title screen and which menu page. |
+| `log-scene-skins` | Each Jak or Daxter actor of the cutscene playing here, with the shirt and fur tints it is drawn with this frame (0: the stock textures). |
+| `log-econ`, `goto-merchant`, `goto-orb` | Our balances as the host sent them, our last purchase's answer, whether we stand at Kleiver's, and on the host its accounts' state; stand at Kleiver's shop; stand on the nearest precursor orb (it is taken). |
+| `econ-claim <aid>`, `econ-grant <slot> <orbs>`, `shop-buy <item>` | Claim the orb of that entity without taking it (0: the nearest, from where we stand), a cheat the host must refuse; the host credits a player (a test of its accounts; nothing on a guest); buy shop item n as the page's X does. |
+| `kill-mh <slot>` | On the host: a lethal blow from player slot's character (ours or its puppet) to the nearest Metal Head, credited by the economy. |
+| `die`, `log-respawn` | A blow that kills our player; the times we came back next to a teammate, our state and health, the teammate found. |
 | `look-player <slot>` | Face that player, the camera put 6 m behind us, 2 m up and 1.5 m aside on the line to it (`'teleport-to-vector-start-string`): a screenshot shows that player ahead. |
 | `log-outline` | Outlined models the renderer drew since boot, the pixels of fill and outline it drew last frame where walls hide players (`pc-mp-outline-pixels`), each player in the outline table with its color. |
 | `cheat weapons`, `daxter-mod <pickup-type>`, `log-daxter-gun` | Every weapon (Mods menu); the mod Daxter fires, as the D-pad sets it; Daxter's gun: out, mod, shots fired, ammo, aim, the features, the gun's scale and state, its model's distance to his right hand, its draw status and clip, his clip holding it (index, frame), `gun-daxter`, the joints selected, the gun's distance to his gun joint; each other player's clip holding the gun as its state says. |
@@ -972,7 +1114,7 @@ A script line is `<seconds> <command>`:
 | `gun [pickup-type]`, `board` | Every gun mod unlocked with ammo, the gun out, the mod `pickup-type` picked (26 red 1 ... 31 yellow 3 ... 35 dark 1 ... 37 dark 3); the hoverboard unlocked with its zap, the player on it. |
 | `mode <0\|1>`, `title` | Game mode when hosting (free roam, co-op); back to the title screen as the pause menu's quit does. |
 | `log-join`, `try-save` | Joining the host's world: stage, world sent or loaded and its size, saves refused, continue point, title screen or in game, language, distance to the host; an auto-save, as a checkpoint asks it. |
-| `log-coop`, `log-weather` | Co-op: the mode, authority, character, the shoulder (player perched on, times), state, distance to the host, the host's animation and flags; the weather (clouds, fog, special, the override). |
+| `log-coop`, `log-weather` | Co-op: the mode, authority, character, the shoulder (player perched on, times), state, distance to the host, the host's animation and flags, and a second line on the shoulder (the rider on ours, the climbs our Daxter played and their frames, his clip, whether he is drawn); the weather (clouds, fog, special, the override). |
 | `log-gone`, `trace-gone` | On the authority: the NPCs it sent, shown, that left the game or were hidden within 40 m of another player without dying (count; each, with why). |
 | `log-vanished`, `trace-vanish` | What vanished on our screen within 40 m while alive: own NPCs put to sleep, copies removed or hidden at once (count; each, with why), and copies that faded out instead; each copy that dies here (`copy died <skeleton> [vehicle]`). |
 | `log-path <skeleton\|shot> <frames>` | An object's root (every shot's, with its id) every frame: on its owner each state it sends, on a viewer each state drawn, stamped with the owner's clock (`compare_poses.py` compares the copy's path with the owner's, shot by shot). |
@@ -1112,6 +1254,27 @@ fix, 10 of 10. The scenarios new or extended in this round:
 Kleiver's race (`race-real`, `race-real-daxter`) and the arena training (`beam-real`) also pass from
 a retail boot (`--retail`, the lobby reached from the title screen): 7, 8 and 8 checks.
 
+Scenarios of the round of 2026-10-19 (late evening) for the user's request on menus, co-op,
+the host leaving, world sync and the economy. Final sweep on its last commit, 16 scenarios (the
+new ones and `smoke`, `daxter-ride`, `ride-seat-daxter`, `race-board`, `race-real-daxter`,
+`beam-real`, `skin`, `lobby`, `drive`; `host-quit` from a retail boot): 130 checks, 129 passed,
+no crash. The failure, `race-board`'s Daxter not getting on the driving host's shoulder, came from
+its script: the guest moved next to the host 5 s before pressing triangle, while the host's
+turtle rolls down the start's slope (6); it now moves there 1 s before: 8 of 8 in both runs since
+(and in one run before that change).
+
+| Scenario | Checks | Result |
+|---|---|---|
+| `host-quit` (`--retail`) | The host ends the session | In the host's free roam, the host back at its title screen sends the guest to its own, "The host ended the session" at the top; in the host's lobby, the host leaving it does the same; 6 checks. |
+| `coop` (extended) | Daxter's climb | Daxter's triangle next to the crouching host: the host's Daxter appears and plays the stock climb (159 frames, rider 1), the guest hidden; screenshots during the climb on both machines; 8 checks. |
+| `daxter-ride` (rewritten) | Daxter with a driving Jak | The guest, Daxter, presses L1 + triangle next to the host's buggy: he sits on the driving host's shoulder (the host's own Daxter shown there for him), travels 25 m with the vehicle, within 0.8 m of the driver; 8 checks. |
+| `scene-skins` | Cutscene outfits | A Spargus cutscene on both machines: its Jak wears the host's shirt (`99ff3010`), its Daxter the guest's fur (`cc2040ff`) while the guest plays Daxter, the stock Daxter once it plays Jak, on both; 6 checks (screenshot). Before the fix, reading a cutscene's actors crashed the host (`handle->process` of a 0 handle). |
+| `player-list` (extended) | A long name | A 15-character guest name fits before its health bar, nothing overlaps (screenshot); the LAN playout delay logged (76 ms). |
+| `economy` | Orbs, the shop, saves | The host and the guest each take an orb: credited after the host checked the entity (and saw the guest at it); a claim of an entity that is no orb, and the guest's claim of an orb 80 m away, refused; a purchase without the orbs refused, then the gold outfit bought (5 orbs paid, item owned); at Kleiver's spot his line, triangle opens the shop page, X wears the outfit; the session's closing saves the accounts and the 2 orbs credited, records the session, and hosting again loads "2 account(s) and 2 orb(s) taken"; triangle leaves the shop; 9 checks (screenshots). |
+| `economy-trophy` | Metal Head trophies | A Metal Head killed by the host's blow: a trophy for the host; one killed by the guest's puppet's blow: a trophy for the guest, sent to it; 6 checks. |
+| `coop-respawn` | Back next to a teammate | The guest killed comes back next to the host (`target-stance`, health 8, no continue point), then the host next to the guest; 6 checks. |
+| `beam-real` | Regression | Passes again after the sidekick pointer check (the arena's cutscene left `(-> *target* sidekick)` `#f`, a crash in the `joint-control-remap!` wrapper). |
+
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
 passed, 0 failed, no crash):
@@ -1149,8 +1312,13 @@ passed, 0 failed, no crash):
 | ![The vote to skip a cutscene](multiplayer-screenshots/scene-skip-vote.jpg) | ![Players at a waypoint](multiplayer-screenshots/beam-players-here.jpg) |
 | ![A race start waiting for Daxter](multiplayer-screenshots/race-wait.jpg) | ![Two passengers in the host's car, seats 1 and 2](multiplayer-screenshots/ride-multi-seats.jpg) |
 | ![Kleiver's race: Daxter on the host's shoulder, the start's countdown](multiplayer-screenshots/race-countdown-daxter.jpg) | ![A guest's Dark Jak seen by a third player, retail boot](multiplayer-screenshots/dark-jak-third-player.jpg) |
+| ![Daxter climbing onto the host's shoulder](multiplayer-screenshots/coop-climb.jpg) | ![A cutscene: the host's outfit on Jak, the guest's on Daxter](multiplayer-screenshots/scene-outfits.jpg) |
+| ![Kleiver's line and prompt in Spargus](multiplayer-screenshots/kleiver-merchant.jpg) | ![Kleiver's shop, the gold outfit worn](multiplayer-screenshots/kleiver-shop.jpg) |
+| ![A guest back at the title screen: the host ended the session](multiplayer-screenshots/host-ended-session.jpg) | ![The player list with a long name](multiplayer-screenshots/player-list-long-name.jpg) |
 
-The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the evening
+The screenshots come from scenario runs (`out/mp-test/<scenario>/screenshots`): the late evening
+round of 2026-10-19 for the last three rows (`coop`, `scene-skins`, `economy`, `host-quit`,
+`player-list`); the evening
 round of 2026-10-19 for the five rows before the last, its night round (`race-real-daxter`, `retail-general`) for the last; the seated
 passengers and Daxter holding the gun from the afternoon round of 2026-10-19 (`--shot-size
 2560x1440`, cropped); the outline, Daxter's arc wielder, the lobby, the keyboard, the player list
@@ -1226,8 +1394,45 @@ public IP.
   Beyond 6 m the wave concussor needs a clear line over the ground (stock rules).
 - NPCs frozen around a player far from the authority were not reproduced in the scenarios; the
   stock pause rule is extended to other players as a safeguard (4.6).
+- Economy: the host is the server, so its own machine keeps the accounts; a modified host can
+  credit anything, guests cannot. An orb is credited only where the host has its level loaded and
+  sees its taker at it: an orb taken far from the host (another place, free roam) is refused.
+  Each orb pays once per session, whoever takes it: a new campaign under the same session key
+  gives nothing for orbs credited before. Trophies buy nothing yet; the shop has four outfits.
+- Daxter's climb plays only onto a Jak on foot: onto a driving Jak's shoulder he appears there at
+  once (the stock has no climb in a vehicle).
+- A dead player comes back next to a teammate only on foot and within 300 m; in a vehicle, the
+  stock death (a mission that fails on death fails).
+- The playout delay adapts to lateness, not to losses or bandwidth: no lowered cadence on a slow
+  link (1.10).
 
 ## 7. Change log
+
+- **2026-10-19 (late evening):** the user's request on menus, co-op, the host leaving, world sync
+  and an economy. The parts that follow himstan's Jak and Daxter II Multiplayer (ISC) say so in
+  the commits and the code.
+  - *Host leaving.* Every guest goes back to the title screen with "The host ended the session"
+    (1.8).
+  - *Daxter on a Jak's shoulder,* after himstan's ride-along: no Daxter of the game on a player
+    Jak; a Daxter player climbs on only next to a Jak (crouching or driving), with the stock
+    climb, hidden while the Jak's own Daxter wears his outfit; in a Jak's vehicle he sits on the
+    shoulder (4.16).
+  - *Cutscenes:* the host's outfit on Jak, the Daxter player's on Daxter, the stock Daxter when
+    every player is a Jak (4.17).
+  - *Menus:* names shortened with "...", lines shrunk to fit, the status line localized (4.18);
+    the Appearance page closer to himstan's editor: the part between L2 and R2, each character
+    back on its last part, held keys repeat (4.12).
+  - *Co-op missions,* after himstan's respawn policy: a dead player back next to a living
+    teammate, the mission going on (4.19).
+  - *World sync* compared with himstan's (1.10): the playout delay now adapts to each sender's
+    lateness (1.1).
+  - *Economy:* precursor orbs and Metal Head trophies per player, kept by the host alone under a
+    secret id, each orb paying once; saved every minute and at the session's end, each end
+    recorded, loaded back; Kleiver's shop in Spargus (4.20). Protocol 9.
+  - *Fixes:* the sidekick remap wrapper and the cutscene actors' handles no longer crash.
+  - *Tests.* Scenarios `host-quit`, `scene-skins`, `economy`, `economy-trophy`, `coop-respawn`;
+    `coop`, `daxter-ride` and `player-list` extended; commands in 5.3. Each test instance starts
+    without the user's economy files.
 
 - **2026-10-19 (night):** the co-op features checked on real missions and from a retail boot.
   - *Races,* in Kleiver's race: the start waited only for the players already in game, so it went
