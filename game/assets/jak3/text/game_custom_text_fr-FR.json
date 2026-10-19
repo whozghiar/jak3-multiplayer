@@ -366,13 +366,17 @@
   "1576": "Bleu",
   "1577": "Teinte",
   "1578": "d'origine",
-  "1579": "<PAD_L2> <PAD_R2> Pièce   <PAD_CIRCLE> Jak / Daxter",
+  "1579": "<PAD_L2>  ~S : ~S  <PAD_R2>",
   "157a": "<PAD_DPAD_UP> <PAD_DPAD_DOWN> Choisir   <PAD_ANALOG_LEFT_RIGHT> Régler   <PAD_L1> <PAD_R1> Plus vite",
-  "157b": "<PAD_X> Garder   <PAD_TRIANGLE> Annuler",
+  "157b": "<PAD_X> Garder   <PAD_CIRCLE> Jak / Daxter   <PAD_TRIANGLE> Annuler",
   "157c": "<PAD_TRIANGLE> Passer la cinématique (~D/~D)",
   "157d": "Passer : en attente des autres (~D/~D)",
   "157e": "Joueurs sur place : ~D/~D",
   "157f": "En attente des joueurs à bord : ~D/~D",
   "1580": "La course démarre dans ~D",
-  "1581": "L'hôte a mis fin à la session"
+  "1581": "L'hôte a mis fin à la session",
+  "1582": "Hébergement : ~D joueur(s)",
+  "1583": "Connecté : ~D joueur(s)",
+  "1584": "Connexion à ~S...",
+  "1585": "Hors ligne"
 }

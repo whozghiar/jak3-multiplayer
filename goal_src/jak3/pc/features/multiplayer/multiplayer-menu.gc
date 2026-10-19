@@ -62,19 +62,19 @@
   (let ((players (+ 1 (mp-player-count))))
     (case *mp-mode*
       (((mp-mode host))
-       (format (clear *mp-menu-label*) "Hosting: ~D player(s)" players)
+       (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-hosting) #f) players)
        )
       (((mp-mode client))
-       (format (clear *mp-menu-label*) "Connected: ~D player(s)" players)
+       (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-connected) #f) players)
        )
       (((mp-mode connecting))
-       (format (clear *mp-menu-label*) "Connecting to ~S..." *mp-address*)
+       (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-connecting) #f) *mp-address*)
        )
       (else
         (pc-mp-message *mp-status*)
         (if (zero? (length *mp-status*))
-            (format (clear *mp-menu-label*) "Offline")
-            (format (clear *mp-menu-label*) "Offline: ~S" *mp-status*)
+            (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-offline) #f))
+            (format (clear *mp-menu-label*) "~S: ~S" (lookup-text! *common-text* (text-id progress-mp-status-offline) #f) *mp-status*)
             )
         )
       )
@@ -626,6 +626,16 @@
   (none)
   )
 
+(defun mp-lobby-print-fit ((ctx font-context) (str string) (x float) (y float) (width float) (scale float) (color font-color))
+  "As mp-lobby-print, drawn smaller when `str` is wider than `width` at `scale` (down to 60 %): one
+   line, never wrapped onto the line below."
+  (set-scale! ctx scale)
+  (let ((w (-> (get-string-length str ctx) length)))
+    (mp-lobby-print ctx str x y width (if (< width w) (fmax (* 0.6 scale) (/ (* scale width) w)) scale) color)
+    )
+  (none)
+  )
+
 (defun mp-lobby-draw-square ((x int) (y int) (color int))
   "A player's color square, as in the player list."
   (with-dma-buffer-add-bucket ((buf (-> *display* frames (-> *display* on-screen) global-buf)) (bucket-id hud-draw-hud-alpha))
@@ -724,8 +734,8 @@
     (draw-page-header font-ctx (text-id progress-mp-lobby) alpha)
     ;; session status and game mode, centered
     (set-flags! font-ctx (font-flags kerning middle large))
-    (mp-lobby-print font-ctx (mp-status-text) left top width 0.45 (font-color font-color-32))
-    (mp-lobby-print font-ctx (mp-lobby-mode-line *mp-lobby-line*) left (+ top 17.0) width 0.45 (font-color font-color-32))
+    (mp-lobby-print-fit font-ctx (mp-status-text) left top width 0.45 (font-color font-color-32))
+    (mp-lobby-print-fit font-ctx (mp-lobby-mode-line *mp-lobby-line*) left (+ top 17.0) width 0.45 (font-color font-color-32))
     ;; the players: color, name and status, the selected one highlighted
     (set-flags! font-ctx (font-flags kerning large))
     (dotimes (row rows)
@@ -736,8 +746,11 @@
              )
         (when st
           (mp-lobby-draw-square (the int (+ left 14.0)) (the int (+ y 3.0)) (-> st color))
+          ;; the name ends before the status column
           (string<-charp *mp-lobby-line* (-> st name))
-          (mp-lobby-print font-ctx *mp-lobby-line* (+ left 28.0) y (* 0.4 width) 0.45 color)
+          (set-scale! font-ctx 0.45)
+          (mp-fit-text! *mp-lobby-line* font-ctx (+ (* 0.42 width) -32.0))
+          (mp-lobby-print font-ctx *mp-lobby-line* (+ left 28.0) y (+ (* 0.42 width) -30.0) 0.45 color)
           (mp-lobby-print font-ctx (lookup-text! *common-text* (mp-lobby-status-id st slot) #f)
                           (+ left (* 0.42 width)) (+ y 2.0) (* 0.17 width) 0.35 color
                           )
@@ -750,6 +763,8 @@
            )
       (when st
         (string<-charp *mp-lobby-line* (-> st name))
+        (set-scale! font-ctx 0.55)
+        (mp-fit-text! *mp-lobby-line* font-ctx (+ detail-w -4.0))
         (mp-lobby-print font-ctx *mp-lobby-line* detail-x row-top detail-w 0.55 (font-color font-color-33))
         (format (clear *mp-lobby-line*) "~S: ~S"
                 (lookup-text! *common-text* (text-id progress-mp-character) #f)
@@ -1198,7 +1213,10 @@
    (slider          int32)      ;; 0 red, 1 green, 2 blue, 3 strength
    (daxter?         symbol)     ;; the page shows Daxter (his parts) rather than Jak
    (preview-daxter? symbol)     ;; what the preview shows
-   (last-move       time-frame) ;; repeat of held keys
+   (last-move       time-frame) ;; repeat of held keys: left / right, L1 / R1, then up / down
+   (last-vert       time-frame)
+   (jak-group       int32)      ;; the part last edited of each character (circle comes back to it)
+   (dax-group       int32)
    (spin            float)      ;; the preview's turn
    (original        uint32 16)  ;; the outfit when the page opened
    (responds        int32)      ;; frames the page read its keys, and the last ones (test log)
@@ -1238,6 +1256,8 @@
       (set! (-> s draft i) (-> *mp-config* skin i))
       )
     (set! (-> e daxter?) (= (-> *mp-config* character) 1))
+    (set! (-> e jak-group) 1)
+    (set! (-> e dax-group) MP_SKIN_FIRST_DAXTER)
     (set! (-> e group) (if (-> e daxter?) MP_SKIN_FIRST_DAXTER 1))
     (set! (-> e slider) 0)
     (set! (-> s editing?) #t)
@@ -1484,19 +1504,19 @@
     (when (-> *mp-skins* editing?)
       (set! (-> font-ctx alpha) alpha)
       (draw-page-header font-ctx (text-id progress-mp-appearance) alpha)
-      ;; the part: "Jak: Shirt"
+      ;; the part between the keys that change it, as himstan's editor: "<L2>  Jak: Shirt  <R2>"
       (set-flags! font-ctx (font-flags kerning middle large))
-      (format (clear *mp-lobby-line*) "~S: ~S"
+      (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-skin-keys) #f)
               (lookup-text! *common-text* (if (-> e daxter?) (text-id progress-mp-daxter) (text-id progress-mp-jak)) #f)
               (lookup-text! *common-text* (-> *mp-skin-names* (-> e group)) #f)
               )
-      (mp-lobby-print font-ctx *mp-lobby-line* left (+ top 6.0) col-w 0.6 (font-color font-color-33))
+      (mp-lobby-print-fit font-ctx *mp-lobby-line* left (+ top 6.0) col-w 0.55 (font-color font-color-33))
       ;; the color swatch (gray striped when the part keeps its stock texture)
-      (let ((sw-x (the int (+ left (* 0.2 width))))
+      (let ((sw-x (the int (+ left (* 0.14 width))))
             (sw-y (the int (+ top 30.0)))
             )
-        (mp-menu-box (+ sw-x -1) (+ sw-y -1) (+ (the int (* 0.18 width)) 2) 20 (new 'static 'rgba :a #x80))
-        (mp-menu-box sw-x sw-y (the int (* 0.18 width)) 18
+        (mp-menu-box (+ sw-x -1) (+ sw-y -1) (+ (the int (* 0.3 width)) 2) 20 (new 'static 'rgba :a #x80))
+        (mp-menu-box sw-x sw-y (the int (* 0.3 width)) 18
                      (if (zero? strength)
                          (new 'static 'rgba :r #x40 :g #x40 :b #x40 :a #x80)
                          (mp-skin-rgba)
@@ -1553,9 +1573,8 @@
         )
       ;; the keys, under the last slider's bar (4:3: it ends 66 above the bottom)
       (set-flags! font-ctx (font-flags kerning middle large))
-      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys) #f) left (- bottom 54.0) width 0.38 (font-color font-color-32))
-      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys-2) #f) left (- bottom 38.0) width 0.38 (font-color font-color-32))
-      (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys-3) #f) left (- bottom 22.0) width 0.38 (font-color font-color-32))
+      (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys-2) #f) left (- bottom 46.0) width 0.38 (font-color font-color-32))
+      (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (text-id progress-mp-skin-keys-3) #f) left (- bottom 26.0) width 0.4 (font-color font-color-32))
       ;; the preview, on the page's right side (offsets from the screen's center)
       (mp-skin-preview-update (+ (* 0.78 width) left -256.0) (- bottom 290.0))
       )
@@ -1599,19 +1618,31 @@
          (sound-play "roll-over")
          )
         ((cpad-pressed? 0 circle)
+         ;; the other character, on the part last edited of his (as himstan's editor remembers it)
          (cpad-clear! 0 circle)
+         (if (-> e daxter?)
+             (set! (-> e dax-group) (-> e group))
+             (set! (-> e jak-group) (-> e group))
+             )
          (set! (-> e daxter?) (not (-> e daxter?)))
-         (set! (-> e group) (if (-> e daxter?) MP_SKIN_FIRST_DAXTER 1))
+         (set! (-> e group) (if (-> e daxter?) (-> e dax-group) (-> e jak-group)))
          (set! (-> e slider) 0)
          (sound-play "generic-beep")
          )
-        ((cpad-pressed? 0 up l-analog-up)
+        ((or (cpad-pressed? 0 up l-analog-up)
+             (and (cpad-hold? 0 up l-analog-up) (time-elapsed? (-> e last-vert) (seconds 0.15)))
+             )
+         ;; pressed, or held: every 0.15 s
          (cpad-clear! 0 up l-analog-up)
+         (set-time! (-> e last-vert))
          (set! (-> e slider) (mod (+ (-> e slider) 3) 4))
          (sound-play "roll-over")
          )
-        ((cpad-pressed? 0 down l-analog-down)
+        ((or (cpad-pressed? 0 down l-analog-down)
+             (and (cpad-hold? 0 down l-analog-down) (time-elapsed? (-> e last-vert) (seconds 0.15)))
+             )
          (cpad-clear! 0 down l-analog-down)
+         (set-time! (-> e last-vert))
          (set! (-> e slider) (mod (+ (-> e slider) 1) 4))
          (sound-play "roll-over")
          )

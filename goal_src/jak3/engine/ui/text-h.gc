@@ -1726,6 +1726,10 @@
   (progress-mp-race-wait #x157f)
   (progress-mp-race-start #x1580)
   (progress-mp-host-ended #x1581)
+  (progress-mp-status-hosting #x1582)
+  (progress-mp-status-connected #x1583)
+  (progress-mp-status-connecting #x1584)
+  (progress-mp-status-offline #x1585)
   )
 ;; ---text-id
 

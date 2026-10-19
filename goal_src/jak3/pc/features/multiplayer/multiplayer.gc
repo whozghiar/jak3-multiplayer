@@ -3846,6 +3846,31 @@
 ;; Overlay: names and health bars over the players, prompts, notifications
 ;; ------------------------------------------------------------------------------------------------
 
+;; Text that fits its place: a player's name shortened with "..." (as fit-overlay-text in himstan's
+;; Jak and Daxter II Multiplayer, goal_src/jak2/multiplayer/ui/lobby-browser.gc, ISC), a line of
+;; game text drawn smaller (mp-lobby-print-fit, multiplayer-menu.gc): no line wraps onto the next.
+(define *mp-fit-temp* (new 'global 'string 128 (the-as string #f)))
+
+(defun mp-fit-text! ((str string) (ctx font-context) (max-width float))
+  "Shorten `str` in place, ending it with \"...\", until it is at most `max-width` wide at the
+   scale of `ctx`. For plain text (player names: no game-text codes). Returns `str`."
+  (when (< max-width (-> (get-string-length str ctx) length))
+    (let ((n (length str)))
+      (while (> n 1)
+        (+! n -1)
+        (set! (-> str data n) (the-as uint 0))
+        (format (clear *mp-fit-temp*) "~S..." str)
+        (when (>= max-width (-> (get-string-length *mp-fit-temp* ctx) length))
+          (copy-string<-string str *mp-fit-temp*)
+          (return str)
+          )
+        )
+      (copy-string<-string str *mp-fit-temp*)
+      )
+    )
+  str
+  )
+
 (defun mp-draw-text ((buf dma-buffer) (str string) (x int) (y int) (scale float))
   "Draw `str` centered at x, y (512x416 screen). Returns its width."
   (pc-encode-utf8-string str *pc-encoded-temp-string*)
@@ -3976,6 +4001,11 @@
   "One row of the player list: the color square and the name, the health (a bar and its value, as
    over the player's head), then the ping (`name` may be *mp-temp-string*: it is drawn before the
    health and the ping are written there)."
+  ;; the name fits between the panel's edge and the health bar (its color square before it)
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 0 0.0 (font-color default) (font-flags shadow kerning middle large))))
+    (set! (-> ctx scale) 0.5)
+    (mp-fit-text! name ctx 130.0)
+    )
   (let ((width (mp-draw-text buf name MP_LIST_NAME_X y 0.5)))
     (draw-sprite2d-xy buf (- MP_LIST_NAME_X (+ (/ width 2) 10)) (+ y 2) 7 7 (new 'static 'rgba :a #x80) #x3fffff)
     (draw-sprite2d-xy buf (- MP_LIST_NAME_X (+ (/ width 2) 9)) (+ y 3) 5 5 (mp-color-rgba color) #x3fffff)

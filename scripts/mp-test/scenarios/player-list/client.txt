@@ -1,7 +1,8 @@
 # Player list, guest side: holds SELECT, which shows the players with their ping and must not pause
-# the game; logs the pings (log-ping) and takes a screenshot of the list.
+# the game; logs the pings (log-ping) and takes a screenshot of the list. Its name has the longest
+# length (15 characters): shortened where it would run into the health column.
 1 enable
-1 name Guest
+1 name Guest-LongName1
 1 color 2
 45 join 127.0.0.1:7777
 45.1 wait-joined
