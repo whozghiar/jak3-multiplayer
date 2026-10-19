@@ -775,6 +775,18 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 '"orbs": 8' in saved and '"items": 1' in saved and '"orbs_taken"' in saved and 'session "world" closed' in record
                 and any('economy "world": 2 account(s) and 2 orb(s) taken loaded' in l for l in host), f"{record.strip()[-160:]}")
 
+    elif scenario == "pressure":
+        nets = grab(host, r"\] net player 1 pressure (\S+) tx (\S+) rx (\S+) queue (\S+) sent (\d+) B/s")
+        c.check(scenario, "under the guest's losses the host sees the pressure on its link (congested or severe)",
+                any(re.search(r"network to player 1: (congested|severe)", l) for l in host), f"{nets}")
+        before = [int(n[4]) for n in nets[:2]]
+        during = [int(n[4]) for n in nets[2:4]]
+        c.check(scenario, "it sends the guest less meanwhile (between batches every 3 or 5 frames)",
+                len(nets) >= 5 and all(n[0] == "normal" for n in nets[:2]) and all(n[0] in ("congested", "severe") for n in nets[2:4])
+                and max(during) < 0.8 * min(before), f"before {before} B/s, during {during} B/s")
+        c.check(scenario, "and goes back to normal once the losses stop",
+                any("network to player 1: normal" in l for l in host) and nets[-1][0] == "normal", f"{nets[-1:]}")
+
     elif scenario == "coop-respawn":
         gr = grab(client, r"\] respawn (\d+) state (\S+) health (\S+)")
         hr = grab(host, r"\] respawn (\d+) state (\S+) health (\S+)")

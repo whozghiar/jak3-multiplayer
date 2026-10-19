@@ -1,0 +1,13 @@
+# Network pressure, guest side: next to the host, it drops 40 % of the datagrams it receives from 60 s
+# to 80 s (net), then none.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 goto-player 0 2 0
+60 net 0 0 40
+80 net 0 0 0
+92 log-net
+95 log-ping
+100 log

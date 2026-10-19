@@ -68,6 +68,7 @@
 ;;   econ-grant <slot> <orbs>                                the host credits a player (test of the server's accounts)
 ;;   kill-mh <slot>                                          host: a lethal blow from player slot to the nearest Metal Head
 ;;   die | log-respawn                                       kill our player; co-op respawns next to a teammate
+;;   net <ms> <jitter> <loss %> | log-net                    the test network from now on; each peer's network pressure
 ;;   log-outline                                             outlined players drawn through walls (renderer count, table)
 ;;   spawn-vehicle <type>                                    an empty vehicle 3 m in front of us
 ;;   power <dark|light> | log-power                          Dark / Light Jak on; ours and what puppets show
@@ -94,6 +95,8 @@
 (define-extern pc-mp-dark-skin-draws (function int))
 (define-extern pc-mp-skin-draws (function int))
 (define-extern pc-mp-player-delay (function int int)) ;; the delay player n is drawn with (ms)
+(define-extern pc-mp-log-net (function none))
+(define-extern pc-mp-test-network (function int int int none))
 
 ;; wait-joined / wait-player / wait-menu: the script clock stops until the wait is over
 ;; (mp-test-update).
@@ -1727,6 +1730,19 @@
                )
              )
            )
+         )
+        ((string= cmd "net")
+         ;; net <latency ms> <jitter ms> <loss %>: the test network from now on (what we receive)
+         (let* ((latency (mp-test-int))
+                (jitter (mp-test-int))
+                (loss (mp-test-int))
+                )
+           (pc-mp-test-network latency jitter loss)
+           )
+         )
+        ((string= cmd "log-net")
+         ;; log-net: each peer's network pressure, qualities both ways, queueing, bytes sent last second
+         (pc-mp-log-net)
          )
         ((string= cmd "log-end")
          ;; log-end: sessions ended without us, the note for the title screen, where we are

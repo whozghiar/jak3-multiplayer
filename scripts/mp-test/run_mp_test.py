@@ -96,6 +96,8 @@ def main() -> int:
                         help="screenshot size, '<width>x<height>' (MP_TEST_SHOT_SIZE, default 1280x720)")
     parser.add_argument("--retail", action="store_true",
                         help="boot as task boot-game-retail: the title screen, no debug segment")
+    parser.add_argument("--fixed-cadence", action="store_true",
+                        help="no network pressure: every send at its full rate (MP_TEST_FIXED_CADENCE, a baseline)")
     args = parser.parse_args()
 
     scenario = SCENARIOS / args.scenario
@@ -121,6 +123,8 @@ def main() -> int:
             env["MP_TEST_LATENCY"] = args.latency
         if args.loss:
             env["MP_TEST_LOSS"] = args.loss
+        if args.fixed_cadence:
+            env["MP_TEST_FIXED_CADENCE"] = "1"
         if args.shot_size:
             env["MP_TEST_SHOT_SIZE"] = args.shot_size
         # no real controller: the scripts drive pad 0 themselves (libpad), and a controller gone to

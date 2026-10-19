@@ -1,0 +1,15 @@
+# Network pressure, host side: the guest loses 40 % of what it receives from 60 s to 80 s; the host
+# learns it from the guest's pings, sends it less between batches, and goes back to normal 3 s after
+# the losses stop. log-net: the pressure, the qualities both ways and the bytes sent last second.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55 log-net
+58 log-net
+70 log-net
+75 log-net
+92 log-net
+95 log-ping
+100 log

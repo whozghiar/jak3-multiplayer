@@ -182,6 +182,7 @@ static u16 get_u16(const u8* p) {
 struct TestNetwork {
   bool init = false;
   double latency = 0, jitter = 0, loss = 0;
+  bool fixed_cadence = false;  // MP_TEST_FIXED_CADENCE: no network pressure (a baseline)
 };
 static TestNetwork& test_network() {
   static TestNetwork t;
@@ -198,6 +199,7 @@ static TestNetwork& test_network() {
       t.loss = std::atof(v);
       lg::info("[multiplayer] test loss {} %", t.loss);
     }
+    t.fixed_cadence = std::getenv("MP_TEST_FIXED_CADENCE") != nullptr;
   }
   return t;
 }
@@ -208,6 +210,8 @@ void set_test_network(double latency_ms, double jitter_ms, double loss_percent) 
   t.jitter = jitter_ms;
   t.loss = loss_percent;
 }
+
+static bool poses_have_effects(const u8* data, size_t len);
 
 // One remote end of the session: the host's view of a guest, or a guest's view of the host.
 struct Session::Peer {
@@ -224,6 +228,30 @@ struct Session::Peer {
   double close_at = 0;
   double rtt_ms = -1;     // round trip measured by pings, smoothed; -1 until the first answer
   double next_ping = 0;
+
+  // Network pressure, after the cadence scheduler of himstan's Jak and Daxter II Multiplayer
+  // (game/multiplayer/platform/session/cadence_scheduler.cpp and core/network_statistics.h, ISC):
+  // how much of what this peer sends us arrives (its message ids delivered over their span, each
+  // second), how much of ours it gets (its own count, in its pings), and the round trip above the
+  // lowest one (queueing). 0 normal, 1 degraded, 2 congested, 3 severe (Session::note_pressure).
+  // Under pressure, as his priorities: the bones sent between two 15 Hz batches (bulk) go to this
+  // peer every 2, 3 or 5 frames; the player state and the states of our objects between batches
+  // (normal) every 2 frames from congested on; the batches, which carry the effects, and the
+  // reliable messages always go.
+  u16 rx_first = 0;
+  u32 rx_count = 0;
+  float rx_quality = 1.f;
+  float tx_quality = 1.f;
+  double min_rtt = -1;
+  int pressure = 0;
+  double lower_since = -1;  // since when a lower pressure is seen: it drops after 3 s of it
+  u32 sent_bytes = 0;       // bytes sent this second, and the last second
+  u32 sent_rate = 0;
+  int bulk_every() const {
+    static const int every[] = {1, 2, 3, 5};
+    return every[pressure];
+  }
+  int state_every() const { return pressure >= 2 ? 2 : 1; }
 
   // Sending: unreliable datagrams of this frame; reliable fragments queued, then in flight until
   // acknowledged (sent again after a timeout).
@@ -314,11 +342,13 @@ struct Session::Peer {
     for (auto& [seq, f] : in_flight) {
       if (now - f.sent_at >= rto) {
         send_datagram(s, f.dgram);
+        sent_bytes += (u32)f.dgram.size();
         f.sent_at = now;
       }
     }
     for (auto& d : unreliable_out) {
       send_datagram(s, d);
+      sent_bytes += (u32)d.size();
     }
     unreliable_out.clear();
     if (ack_due) {
@@ -848,7 +878,7 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         m_remotes[p.slot].push(st, p.last_recv);
         u8 s = (u8)p.slot;
         for (auto* o : m_peers) {
-          if (o != &p && o->slot >= 0) {
+          if (o != &p && o->slot >= 0 && m_frame % o->state_every() == 0) {
             o->queue(MSG_STATE, &s, 1, &st, sizeof(st));
           }
         }
@@ -876,8 +906,9 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         std::vector<u8> copy(data, data + len);
         copy[0] = (u8)p.slot;
         store_poses(p.slot, copy.data(), copy.size(), p.last_recv);
+        bool bulk = !poses_have_effects(copy.data(), copy.size());
         for (auto* o : m_peers) {
-          if (o != &p && o->slot >= 0) {
+          if (o != &p && o->slot >= 0 && (!bulk || m_frame % o->bulk_every() == 0)) {
             o->queue(MSG_POSES, copy.data(), copy.size());
           }
         }
@@ -978,17 +1009,76 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
 
 // A ping is answered with its time; an answer gives the round trip to that peer.
 void Session::handle_ping(Peer& p, u8 type, const u8* data, size_t len) {
-  if (len != 4) {
+  if (len < 4) {
     return;
   }
   if (type == MSG_PING) {
     p.queue(MSG_PONG, data, 4);
+    if (len >= 5) {
+      p.tx_quality = data[4] / 255.f;  // the share of our messages it got last second
+      note_pressure(p);
+    }
     return;
   }
   u32 sent;
   memcpy(&sent, data, 4);
   double rtt = (double)(u32)((u32)m_now - sent);
   p.rtt_ms = p.rtt_ms < 0 ? rtt : p.rtt_ms * 0.7 + rtt * 0.3;
+  p.min_rtt = p.min_rtt < 0 ? rtt : std::min(p.min_rtt, rtt);
+}
+
+// himstan's classification (network_statistics.h): severe below 50 % of our messages arriving or
+// 500 ms of queueing, congested below 75 % or 250 ms, degraded below 90 % or 100 ms. A higher
+// pressure applies at once, a lower one once seen for 3 s (his dwell).
+void Session::note_pressure(Peer& p) {
+  if (test_network().fixed_cadence) {
+    return;
+  }
+  double queue = p.rtt_ms >= 0 && p.min_rtt >= 0 ? p.rtt_ms - p.min_rtt : 0;
+  float q = p.tx_quality;
+  int seen = (q < 0.5f || queue >= 500) ? 3 : (q < 0.75f || queue >= 250) ? 2 : (q < 0.9f || queue >= 100) ? 1 : 0;
+  if (seen < p.pressure) {
+    if (p.lower_since < 0) {
+      p.lower_since = m_now;
+    }
+    if (m_now - p.lower_since < 3000.0) {
+      return;
+    }
+  } else {
+    p.lower_since = -1;
+    if (seen == p.pressure) {
+      return;
+    }
+  }
+  static const char* names[] = {"normal", "degraded", "congested", "severe"};
+  lg::info("[multiplayer] network to player {}: {} (it gets {:.0f} % of our messages, {:.0f} ms queued): between batches every {} frame(s)",
+           m_mode == Mode::Host ? p.slot : 0, names[seen], q * 100.f, queue, (seen == 0 ? 1 : seen == 1 ? 2 : seen == 2 ? 3 : 5));
+  p.pressure = seen;
+  p.lower_since = -1;
+}
+
+void Session::log_net() const {
+  static const char* names[] = {"normal", "degraded", "congested", "severe"};
+  for (auto* p : m_peers) {
+    lg::info("[multiplayer] net player {} pressure {} tx {:.2f} rx {:.2f} queue {:.0f} sent {} B/s",
+             m_mode == Mode::Host ? p->slot : 0, names[p->pressure], p->tx_quality, p->rx_quality,
+             p->rtt_ms >= 0 && p->min_rtt >= 0 ? p->rtt_ms - p->min_rtt : 0.0, p->sent_rate);
+  }
+}
+
+// A POSES message (u8 source, u32 time, u16 count, entries) that carries effects: a 15 Hz batch.
+static bool poses_have_effects(const u8* data, size_t len) {
+  size_t at = 7;
+  while (at + 8 <= len) {
+    u16 bones;
+    memcpy(&bones, data + at + 4, 2);
+    if (bones & kPoseHasEffects) {
+      return true;
+    }
+    at += 8 + (bones & 0x7fff) * sizeof(PoseJoint) + data[at + 6] * sizeof(PoseEmitter) +
+          data[at + 7] * sizeof(PoseSound);
+  }
+  return false;
 }
 
 int Session::player_ping(int slot) const {
@@ -1143,6 +1233,9 @@ void Session::on_datagram(Peer& p, const u8* d, size_t n) {
     }
     p.newest_msg = id;
     p.any_msg = true;
+    if (p.rx_count++ == 0) {
+      p.rx_first = id;
+    }
     for (auto it = p.partial.begin(); it != p.partial.end();) {
       it = (s16)(it->first - id) <= 0 ? p.partial.erase(it) : std::next(it);
     }
@@ -1251,6 +1344,7 @@ void Session::update(PlayerState local, double now) {
   if (m_mode == Mode::Offline) {
     return;
   }
+  m_frame++;
 
   receive_all(now);
 
@@ -1272,8 +1366,19 @@ void Session::update(PlayerState local, double now) {
     if (!p->dead && ((m_mode == Mode::Host && p->slot >= 0) || m_mode == Mode::Client) &&
         now >= p->next_ping) {
       p->next_ping = now + kPingIntervalMs;
+      // this second: the share of its messages delivered, and the bytes we sent it
+      if (p->rx_count > 0) {
+        u32 span = (u32)(u16)(p->newest_msg - p->rx_first) + 1;
+        p->rx_quality = std::min(1.f, (float)p->rx_count / (float)span);
+      }
+      p->rx_count = 0;
+      p->sent_rate = p->sent_bytes;
+      p->sent_bytes = 0;
+      u8 ping[5];
       u32 t = (u32)now;
-      p->queue(MSG_PING, &t, 4);
+      memcpy(ping, &t, 4);
+      ping[4] = (u8)std::lround(p->rx_quality * 255.f);
+      p->queue(MSG_PING, ping, 5);
     }
   }
 
@@ -1285,7 +1390,7 @@ void Session::update(PlayerState local, double now) {
     local.name[sizeof(local.name) - 1] = 0;
     u8 s = (u8)m_local_slot;
     for (auto* p : m_peers) {
-      if (p->slot >= 0 || m_mode == Mode::Client) {
+      if ((p->slot >= 0 || m_mode == Mode::Client) && m_frame % p->state_every() == 0) {
         p->queue(MSG_STATE, &s, 1, &local, sizeof(local));
       }
     }
@@ -1375,7 +1480,7 @@ void Session::store_actors(int source, const u8* data, size_t len, double recv) 
   }
 }
 
-void Session::send_actors(const ActorState* actors, int count, double now) {
+void Session::send_actors(const ActorState* actors, int count, double now, bool bulk) {
   if (m_local_slot < 0 || count < 0 || (m_mode != Mode::Host && m_mode != Mode::Client)) {
     return;
   }
@@ -1387,7 +1492,8 @@ void Session::send_actors(const ActorState* actors, int count, double now) {
   memcpy(payload.data() + 5, &n, 2);
   memcpy(payload.data() + 7, actors, n * sizeof(ActorState));
   for (auto* p : m_peers) {
-    if (p->slot >= 0 || m_mode == Mode::Client) {
+    // object states are small: thinned as the player state, not as bones
+    if ((p->slot >= 0 || m_mode == Mode::Client) && (!bulk || m_frame % p->state_every() == 0)) {
       p->queue(MSG_ACTORS, payload.data(), payload.size());
     }
   }
@@ -1545,7 +1651,7 @@ void Session::add_sound(const SoundIO& snd) {
   entry[7]++;
 }
 
-void Session::send_poses(double now) {
+void Session::send_poses(double now, bool bulk) {
   auto entries = std::move(m_pose_out);
   m_pose_out.clear();
   if (m_local_slot < 0 || (m_mode != Mode::Host && m_mode != Mode::Client)) {
@@ -1570,7 +1676,7 @@ void Session::send_poses(double now) {
     }
     memcpy(payload.data() + 5, &n, 2);
     for (auto* p : m_peers) {
-      if (p->slot >= 0 || m_mode == Mode::Client) {
+      if ((p->slot >= 0 || m_mode == Mode::Client) && (!bulk || m_frame % p->bulk_every() == 0)) {
         p->queue(MSG_POSES, payload.data(), payload.size());
       }
     }
@@ -2288,9 +2394,12 @@ void pc_mp_config_save(u32 src) {
 }
 
 // (pc-mp-send-actors states count): send the `count` mp-actor-state this player simulates.
-void pc_mp_send_actors(u32 states, u32 count) {
+// (pc-mp-send-actors states count bulk): bulk #t between two 15 Hz batches (thinned under network
+// pressure).
+void pc_mp_send_actors(u32 states, u32 count, u32 bulk) {
   if (states) {
-    mp::session().send_actors(Ptr<mp::ActorState>(states).c(), (int)count, mp::now_ms());
+    mp::session().send_actors(Ptr<mp::ActorState>(states).c(), (int)count, mp::now_ms(),
+                              bulk != s7.offset);
   }
 }
 
@@ -2338,8 +2447,20 @@ u64 pc_mp_get_sounds(u32 id, u32 frame, u32 dest, u32 max) {
 }
 
 // (pc-mp-send-poses): send the queued poses.
-void pc_mp_send_poses() {
-  mp::session().send_poses(mp::now_ms());
+void pc_mp_send_poses(u32 bulk) {
+  mp::session().send_poses(mp::now_ms(), bulk != s7.offset);
+}
+
+// (pc-mp-log-net): each peer's network pressure (test log).
+void pc_mp_log_net() {
+  mp::session().log_net();
+}
+
+// (pc-mp-test-network latency-ms jitter-ms loss-percent): the test network (MP_TEST_LATENCY,
+// MP_TEST_LOSS) changed while running.
+void pc_mp_test_network(u32 latency, u32 jitter, u32 loss) {
+  mp::set_test_network((double)latency, (double)jitter, (double)loss);
+  lg::info("[multiplayer] test network: {} ms, jitter {} ms, loss {} %", latency, jitter, loss);
 }
 
 // (pc-mp-get-pose id frame dest max) -> bones written into dest (world matrices), 0 when none.
@@ -2781,6 +2902,8 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-econ-get", (void*)pc_mp_econ_get);
   make_function_symbol_from_c("pc-mp-econ-set-own", (void*)pc_mp_econ_set_own);
   make_function_symbol_from_c("pc-mp-econ-saves", (void*)pc_mp_econ_saves);
+  make_function_symbol_from_c("pc-mp-log-net", (void*)pc_mp_log_net);
+  make_function_symbol_from_c("pc-mp-test-network", (void*)pc_mp_test_network);
   make_function_symbol_from_c("pc-mp-econ-take-orb", (void*)pc_mp_econ_take_orb);
   make_function_symbol_from_c("pc-mp-campaign-write", (void*)pc_mp_campaign_write);
   make_function_symbol_from_c("pc-mp-campaign-read", (void*)pc_mp_campaign_read);

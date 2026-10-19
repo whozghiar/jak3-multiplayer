@@ -81,10 +81,10 @@
    )
   )
 
-(define-extern pc-mp-send-actors (function (inline-array mp-actor-state) int none))
+(define-extern pc-mp-send-actors (function (inline-array mp-actor-state) int symbol none)) ;; #t: between batches
 (define-extern pc-mp-add-pose (function uint matrix (inline-array matrix) int none))
 (define-extern pc-mp-add-emitter (function int int int matrix none))
-(define-extern pc-mp-send-poses (function none))
+(define-extern pc-mp-send-poses (function symbol none)) ;; #t: between batches
 (define-extern pc-mp-get-pose (function uint matrix (inline-array matrix) int int))
 (define-extern pc-mp-clock (function int int))
 (define-extern pc-mp-sandbox-begin (function none))
@@ -945,7 +945,7 @@
       (dotimes (i *mp-collect-count*)
         (mp-test-note-path #t (-> *mp-actors-out* state i))
         )
-      (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count*)
+      (pc-mp-send-actors (-> *mp-actors-out* state) *mp-collect-count* #f)
       (mp-send-poses)
       )
     ;; between batches, the bones of what another player sees up close, every frame
@@ -3480,7 +3480,7 @@
             )
         )
       )
-    (pc-mp-send-poses)
+    (pc-mp-send-poses #f)
     (set! (-> ps emit-count) 0)
     (set! (-> ps snd-count) 0)
     )
@@ -3552,12 +3552,12 @@
           )
         )
       )
-    (pc-mp-send-poses)
+    (pc-mp-send-poses #t) ;; between batches: thinned for a player under network pressure
     (dotimes (i (-> own count))
       (mp-test-note-path #t (-> own state i))
       )
     (if (> (-> own count) 0)
-        (pc-mp-send-actors (-> own state) (-> own count))
+        (pc-mp-send-actors (-> own state) (-> own count) #t)
         )
     )
   (none)

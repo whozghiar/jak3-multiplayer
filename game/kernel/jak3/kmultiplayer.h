@@ -257,7 +257,9 @@ class Session {
   // Copy the received blob into `out` (at most `max` bytes) and forget it. Returns the size copied.
   size_t take_blob(u8* out, size_t max);
   // Send the objects this player simulates (the host relays a guest's batch to the others).
-  void send_actors(const ActorState* actors, int count, double now_ms);
+  // `bulk`: a send between two 15 Hz batches, which a peer under network pressure gets less often
+  // (Session::note_pressure).
+  void send_actors(const ActorState* actors, int count, double now_ms, bool bulk = false);
   // Interpolated objects of the other players, at most `max`. Returns the count.
   int get_actors(double now_ms, ActorState* out, int max);
   // Queue the pose of one object: `count` world bone matrices, relative to `frame` (rigid, 16
@@ -269,8 +271,11 @@ class Session {
   void add_emitter(int kind, int index, int count, const float* origin);
   // Queue a sound of the object of the last add_pose.
   void add_sound(const SoundIO& snd);
-  // Send the queued poses (the host relays a guest's poses to the others).
-  void send_poses(double now_ms);
+  // Send the queued poses (the host relays a guest's poses to the others); `bulk` as send_actors.
+  void send_poses(double now_ms, bool bulk = false);
+  // Log each peer's network pressure, the qualities both ways, its queue delay and the bytes we
+  // sent it last second (test log).
+  void log_net() const;
   // World bones of object `id` laid on `frame`, interpolated like its actor state. Returns the
   // count written (0 when no pose arrived).
   int get_pose(u32 id, double now_ms, const float* frame, float* out, int max);
@@ -303,6 +308,8 @@ class Session {
  private:
   void handle_frame(Peer& p, u8 type, const u8* data, size_t len);
   void handle_ping(Peer& p, u8 type, const u8* data, size_t len);
+  // The pressure on the link to `p` from its last ping: see the Peer fields.
+  void note_pressure(Peer& p);
   void route_event(Event ev, int sender_slot);
   void store_actors(int source, const u8* data, size_t len, double recv_ms);
   void store_poses(int source, const u8* data, size_t len, double recv_ms);
@@ -338,6 +345,7 @@ class Session {
   };
   std::deque<HeldDatagram> m_held;
   std::vector<Peer*> m_peers;  // host: clients, client: the server
+  u64 m_frame = 0;             // updates since start: which frames a peer under pressure gets
   std::array<Remote, kMaxPlayers> m_remotes;
   std::unordered_map<u32, ActorTrack> m_actors;
   // Per sender: local ms minus sender ms, for its actor batches (see Remote::clock_offset).
