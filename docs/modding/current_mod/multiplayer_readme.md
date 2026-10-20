@@ -579,6 +579,7 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `merc-eye-anim` | `engine/gfx/foreground/eye.gc` | Our player's own model feeds no eyes while it plays Daxter online: it wrote Daxter's eyes into the eye slot every Jak shares (4.2). |
 | `restart-mission` | `engine/game/task/task-control.gc` | START > Restart restarts every player (4.21). |
 | `task-manager-init-by-other` | same file | A mission starting tells the others (4.24). |
+| `lightning-tracker-init` | `engine/common-obs/generic-obs.gc` | A bolt to a focusable without the joint asked follows its position (joint 256): the dark blast sent one to another player's hurtbox at joint 3 and the game stopped (4.23). |
 | `target-indax-stance`, `target-indax-walk` `event` | `engine/target/indax/target-indax.gc` | Their handler is replaced (a state keeps the one it was defined with): a lizard offered to a Daxter player starts the stock ride (4.22). |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
@@ -1055,7 +1056,7 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
   player finds him at the same place, for the session. His own minimap icon (class 116, his face,
   without the missions' trail, kept on the minimap's edge when far, on the big map too) is owned
   by the manager at that spot, and "Merchant" ("Marchand") is drawn in yellow over it within
-  80 m, as a player's name (`mp-draw-merchant-name`, `#x159a`). Only the spot: his model is not
+  80 m, as a player's name and above one standing there (`mp-draw-merchant-name`, `#x159a`). Only the spot: his model is not
   loaded in Spargus.
 - **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
   Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
@@ -1119,6 +1120,15 @@ lizard":
   shot on our puppet sends nothing, and a `pvp` event is ignored.
 - **Their vehicles.** In co-op, a blow on a copy owned by a player (the vehicle it drives, its
   wheels: `mp-actor-flag owned`) is not sent (`mp-replica-hit`).
+- **The dark blast** (Dark Jak's L1 + square, `target-darkjak-bomb1`) sends a lightning bolt to
+  every focusable of kind crate, enemy, guard or vehicle within 80 m, at joint 3
+  (`target-bomb1-fire-shot`), and the bolt follows that joint (`lightning-tracker` `update`).
+  Another player's hurtbox (`mp-hurtbox`, a crate with no skeleton) is one: the bolt read a joint
+  it does not have and the game of the player setting it off stopped (access violation in
+  `vector<-cspace!` from `lightning-tracker`, reproduced by `dark-blast` before the fix). The
+  `lightning-tracker-init` wrapper gives such a target joint 256: the bolt follows its position
+  (`get-trans`, which the hurtbox gives). The blast then hits the other player (free roam, PvP
+  on) or not (co-op), on both sides.
 - **The lizard ridden** is a manipy under the player (`target-flut-start`) while the level's lizard
   hides: it is now sent with the player's props (`mp-collect-props`), drawn under its rider on
   every machine and never hit (props are not solid). Before, the others saw the rider on nothing,
@@ -1272,7 +1282,7 @@ A script line is `<seconds> <command>`:
 | `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
 | `open-menu <page>`, `econ-grant-self <0\|1>` | A START menu page; the host's Mods menu entries, +100 precursor orbs (0) or Metal Head trophies (1). |
 | `log-eyes` | Each remote puppet's eye slot and the process that wrote it last (the puppet, our player). |
-| `dark-bomb`, `restart`, `log-restart` | The dark blast ready (features and stages, full dark eco; jump then square sets it off); START > Restart; the restarts done and asked. |
+| `dark-bomb`, `log-dark`, `restart`, `log-restart` | The dark bomb and the dark blast ready (features and stages, full dark eco; jump then square sets the bomb off, `press l1 600` then `press l1+square 200` the blast); what the blast needs (stage, features, eco, state) and the bolts that followed a target's position; START > Restart; the restarts done and asked. |
 | `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
 | `ride-flut`, `end-flut`, `goto-flut`, `log-fldax` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state. |
 | `respawn-manager <type>` | That task manager killed, then spawned again by the task masks, as when its mission starts. |
@@ -1455,6 +1465,7 @@ pass.
 | `mission-start` | A mission started by one player | Co-op at the arena training; the guest goes to Spargus's doors; the host's mission manager starts again: the guest is told, taken next to the host, and its own manager runs; 7 checks. |
 | `race-result` | Places and results | The guest, 4th of its racers, reads 5th with the host ahead; the host finished first waits for the guest; both first: won on both; the guest behind a racer: lost on both; 8 checks. |
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
+| `dark-blast`, `dark-blast-coop` | The dark blast | Dark Jak's L1 + square (`target-darkjak-bomb1`) 4 m from the other player: before the fix the host's game stopped (access violation in `vector<-cspace!` from `lightning-tracker`); now its bolt to the guest's hurtbox follows its position, the guest is hit (free roam), the guest's blast hits the host, no game stops; in co-op no damage; 7 and 6 checks. |
 | `race-real`, `race-real-daxter` (rewritten) | Kleiver's race | Both races report place and progress (the guest counts the host's 4 racers); Daxter leaving his turtle during the countdown holds the start, gets no shoulder, gets back in his own turtle: the countdown again, then the race; 8 and 10 checks. |
 
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
@@ -1515,9 +1526,9 @@ public IP.
 
 - Kleiver as a merchant is a spot, his icon and his name: his model is only loaded for his
   cutscenes, so nobody stands there.
-- The crash a player reported after another player's dark blast (a replayed effect's joint past
-  its copy's skeleton) was not reproduced: replayed effects now keep to the copy's joints (counted
-  in `log-weapons`), a guard, not a proven cause.
+- The crash in the user's log of 2026-10-19 (the host, entering the pre-game mission, in a
+  particle launch of a `part-tracker-subsampler`) was not reproduced as such; the dark blast's
+  own crash was (4.23). Replayed effects keep to their copy's joints (counted in `log-weapons`).
 - A guest's parked vehicle is not sent: the other players only see the vehicles one drives.
 - Race places compare progress from machine to machine: a finish is timed from each machine's own
   start, which the start's wait releases within a frame or two on each.
@@ -1613,7 +1624,9 @@ public IP.
   - *Eyes.* The Jak puppets animate their eyes; our player as Daxter no longer writes his eyes into
     the slot every Jak shares (`merc-eye-anim`, 3).
   - *Weapons.* The beam reflexor's shot and the plasmite RPG's grenade draw their light trail on the
-    other machines; a replayed effect keeps to its copy's joints (6).
+    other machines; a replayed effect keeps to its copy's joints (6). The dark blast stopped the
+    game of the player setting it off near another player (its bolt to the player's hurtbox read a
+    joint it has not): the bolt follows the hurtbox's position (4.23).
   - *Sessions.* Restart for everyone, a guest's Quit leaves the server, only the host pauses a
     cutscene (4.21); a dead co-op player watches a teammate for 5 s, its body on the ground (4.19).
   - *Co-op.* No friendly fire, no blow on a teammate's vehicle, the ridden lizard seen by the
@@ -1626,7 +1639,7 @@ public IP.
     one we drove last now live in `*mp-globals*`.
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
-    `daxter-perch-fire`, `mission-start`, `race-result`; `coop-respawn`, `race-board`,
+    `daxter-perch-fire`, `mission-start`, `race-result`, `dark-blast`, `dark-blast-coop`; `coop-respawn`, `race-board`,
     `race-real-daxter` and `economy` rewritten or extended; commands in 5.3.
 
 - **2026-10-19 (night, second pass):** after the stop hook's review of the first pass.
