@@ -1,11 +1,13 @@
 # Seated passengers, host side (Daxter): gets in a two-seat buggy (v-snake) spawned before him and stands still while the
 # guest sits in it as a passenger; gets out, then rides in the guest's buggy as the passenger.
+# Kleiver is put at the start (spot 1): his shop must not take the L1 + triangle of the ride.
 1 enable
 1 name Host
 1 color 1
 1 character 1
 38 host 0.0.0.0:7777
 44.9 wait-player 1
+45.5 merchant-spot 1
 52 spawn-vehicle 13
 54 press triangle 100
 62 screenshot driver

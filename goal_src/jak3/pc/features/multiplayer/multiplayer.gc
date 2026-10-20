@@ -6441,7 +6441,9 @@
 
 (defun mp-update-merchant ()
   "In game online, on foot within 4 m of Kleiver's spot (on the ground, 4 m above or below): his
-   line shows; triangle opens the shop. Offline he has no spot."
+   line shows; triangle opens the shop. Offline he has no spot. Triangle's other uses there come
+   first: a cutscene's skip, L1 + triangle (ride along), another player's vehicle or shoulder, one
+   of our vehicles."
   (let ((e *mp-econ*))
     (if (not (mp-online?))
         (set! (-> e spot) -1)
@@ -6455,6 +6457,12 @@
                             (>= (-> e spot) 0)
                             (< (vector-vector-xz-distance (-> *target* control trans) *mp-merchant-pos*) MP_MERCHANT_RANGE)
                             (< (fabs (- (-> *target* control trans y) (-> *mp-merchant-pos* y))) (meters 4))
+                            (not (movie?))
+                            (not (cpad-hold? 0 l1))
+                            (< *mp-prompt-slot* 0)
+                            (< *mp-prompt-replica* 0)
+                            (< *mp-perch-candidate* 0)
+                            (not (mp-nearest-own-vehicle (-> *target* control trans)))
                             )
                            #t
                            #f
