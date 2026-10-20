@@ -1474,7 +1474,9 @@ pass. Final sweep on the round's last code (`bbc67269e`): `lobby-text`, `ui-inga
 `coop-respawn`, `merchant`, `economy`, `coop-protect`, `daxter-flut`, `daxter-perch-fire`,
 `mission-start`, `mission-trigger`, `race-result`, `race-board`, `race-real`, `race-real-daxter`,
 `race-finish-win`, `race-seventh`, `pause`, and `skin-title`, `host-quit` from a retail boot: 27
-scenarios, 185 checks, 0 failed, no crash.
+scenarios, 185 checks, 0 failed, no crash. Then `pre-game` (5 checks) and `mission-trigger` (8)
+from a retail boot too (`--retail`: the title screen, the lobby, no debug segment): every check
+passed, no crash.
 
 | Scenario | Checks | Result |
 |---|---|---|
