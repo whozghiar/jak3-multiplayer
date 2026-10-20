@@ -1753,6 +1753,7 @@
   (progress-mp-act-1 #x159d)
   (progress-mp-act-2 #x159e)
   (progress-mp-act-3 #x159f)
+  (progress-mp-prompt-perch-l1 #x15a0)
   )
 ;; ---text-id
 

@@ -692,7 +692,8 @@
 
 (defbehavior mp-daxter-gun-update target ()
   "Daxter's guns, every frame (run as the player, from the manager): R1 takes the gun out and fires
-   the mod chosen with the D-pad; the gun goes away 2 s after R1 is let go."
+   the mod chosen with the D-pad; the D-pad takes it out too, the mod just chosen in his hand (as
+   Jak's gun shows it); the gun goes away 2 s after R1 is let go (or the D-pad's press)."
   (let ((dg *mp-daxter-gun*))
     (cond
       ((not (mp-daxter-gun-allowed? self))
@@ -706,7 +707,7 @@
               (held? (cpad-hold? 0 r1))
               )
           (when (nonzero? type)
-            (when held?
+            (when (or held? (cpad-pressed? 0 up down left right))
               (set-time! (-> dg out-time))
               (set! (-> dg out?) #t)
               )

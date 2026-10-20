@@ -268,6 +268,7 @@
 ;; to us Daxter can jump on, -1; times it happened (test log).
 (define *mp-perch-slot* -1)
 (define *mp-perch-candidate* -1)
+(define *mp-perch-l1?* #f) ;; that candidate is a Jak standing (not crouched): L1 + triangle
 (define *mp-perch-count* 0)
 ;; Co-op: the character the other players' was offered against already (once per session).
 (define *mp-coop-offered?* #f)
@@ -2736,6 +2737,12 @@
        )
   )
 
+(defun mp-jak-on-foot? ((st mp-player-state))
+  "#t when the player of `st` plays Jak on foot (not driving, riding along, hidden or dead): Daxter
+   can climb on his shoulder with L1 + triangle."
+  (not (logtest? (-> st flags) (mp-flag indax driving riding hidden dead)))
+  )
+
 (defun mp-jak-driving? ((st mp-player-state))
   "#t when the player of `st` plays Jak and drives a vehicle (Daxter can sit on his shoulder)."
   (and (logtest? (-> st flags) (mp-flag driving))
@@ -2788,7 +2795,7 @@
      (mp-draw-prompt (text-id progress-mp-prompt-perch-off))
      )
     ((>= *mp-perch-candidate* 0)
-     (mp-draw-prompt (text-id progress-mp-prompt-perch))
+     (mp-draw-prompt (if *mp-perch-l1?* (text-id progress-mp-prompt-perch-l1) (text-id progress-mp-prompt-perch)))
      )
     )
   (none)
@@ -3980,7 +3987,7 @@
   (set! *mp-prompt-slot* -1)
   (when (and (< *mp-ride-slot* 0)
              (< *mp-perch-slot* 0)
-             (< *mp-perch-candidate* 0)
+             (or (< *mp-perch-candidate* 0) *mp-perch-l1?*)
              (< (-> self ride-want) 0)
              (< (-> self steal-want) 0)
              (not (focus-test? *target* pilot grabbed dead))
@@ -4512,8 +4519,10 @@
       ;; a crouching Jak within 2.5 m of Daxter on the ground in his mode, or a Jak driving
       ;; within 3.5 m; in co-op, or with L1 held (riding along), a Jak driving a vehicle within 5 m of
       ;; him: Daxter rides with a Jak on his shoulder, as the stock (he does not rob that vehicle
-      ;; there, and its vehicle prompt is not shown: mp-update-vehicle-interaction)
+      ;; there, and its vehicle prompt is not shown: mp-update-vehicle-interaction). Any other Jak
+      ;; on foot within 2.5 m: L1 + triangle, at any time (*mp-perch-l1?*)
       (set! *mp-perch-candidate* -1)
+      (set! *mp-perch-l1?* #f)
       (when (and (focus-test? *target* indax)
                  (not (focus-test? *target* in-air grabbed dead hit))
                  (< *mp-ride-slot* 0)
@@ -4523,7 +4532,7 @@
         (let ((best-dist (meters 2.5)))
           (dotimes (i MP_MAX_PLAYERS)
             (let ((st (mp-remote-state i)))
-              (when (and st (or (mp-jak-crouching? st) (mp-jak-driving? st)))
+              (when (and st (or (mp-jak-crouching? st) (mp-jak-driving? st) (mp-jak-on-foot? st)))
                 (let ((d (cond
                            ((and (mp-jak-driving? st) (or (mp-coop?) (cpad-hold? 0 l1)))
                             (+ (vector-vector-distance (-> *target* control trans) (-> st veh-trans)) (meters -2.5))
@@ -4540,13 +4549,14 @@
                   (when (< d best-dist)
                     (set! best-dist d)
                     (set! *mp-perch-candidate* i)
+                    (set! *mp-perch-l1?* (not (or (mp-jak-crouching? st) (mp-jak-driving? st))))
                     )
                   )
                 )
               )
             )
           )
-        (when (and (>= *mp-perch-candidate* 0) (cpad-pressed? 0 triangle))
+        (when (and (>= *mp-perch-candidate* 0) (cpad-pressed? 0 triangle) (or (not *mp-perch-l1?*) (cpad-hold? 0 l1)))
           (logclear! (-> *cpad-list* cpads 0 button0-rel 0) (pad-buttons triangle))
           (set! *mp-perch-slot* *mp-perch-candidate*)
           (set! *mp-perch-candidate* -1)
@@ -6856,7 +6866,7 @@
                             (not (cpad-hold? 0 l1))
                             (< *mp-prompt-slot* 0)
                             (< *mp-prompt-replica* 0)
-                            (< *mp-perch-candidate* 0)
+                            (or (< *mp-perch-candidate* 0) *mp-perch-l1?*)
                             (not (mp-nearest-own-vehicle (-> *target* control trans)))
                             )
                            #t
