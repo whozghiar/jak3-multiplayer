@@ -72,6 +72,7 @@
 ;;   net <ms> <jitter> <loss %> | log-net                    the test network from now on; each peer's network pressure
 ;;   open-menu <page> | econ-grant-self <0|1>                a START page; the host's +100 orbs / trophies
 ;;   log-eyes                                                the remote puppets' eye slots and their last writer
+;;   ride-flut | end-flut                                    ride a lizard where we stand (a level with lizards); off it
 ;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   restart | log-restart                                   START > Restart; restarts done, mode, master mode
 ;;   log-outline                                             outlined players drawn through walls (renderer count, table)
@@ -1754,6 +1755,18 @@
                )
              )
            )
+         )
+        ((string= cmd "ride-flut")
+         ;; ride-flut: on a lizard where we stand, as its 'change-mode does (flut.gc), normal mode
+         (if *target*
+             (send-event *target* 'change-mode 'flut (the-as handle #f) #t -1)
+             )
+         )
+        ((string= cmd "end-flut")
+         ;; end-flut: off the lizard
+         (if *target*
+             (send-event *target* 'end-mode 'flut)
+             )
          )
         ((string= cmd "log-eyes")
          ;; log-eyes: each remote player's puppet, its eye slot and which process wrote it last

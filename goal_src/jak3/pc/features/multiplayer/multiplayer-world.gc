@@ -846,6 +846,16 @@
             )
         )
       )
+    ;; the lizard ridden: a manipy under the player (target-flut-start, engine/target/flut/
+    ;; target-flut.gc), not the lizard of the level, which hides meanwhile. Without it the others saw
+    ;; the rider on nothing; as a prop it is drawn there and nobody hits it.
+    (when (focus-test? *target* flut)
+      (let ((lizard (ppointer->process (-> *target* manipy))))
+        (if (and lizard (type? lizard process-drawable))
+            (mp-add-prop (the-as process-drawable lizard))
+            )
+        )
+      )
     (iterate-process-tree *target* (the-as (function object object) mp-collect-shot) *null-kernel-context*)
     (iterate-process-tree *target* (the-as (function object object) mp-collect-weapon) *null-kernel-context*)
     ;; the guns of the vehicle we drive put their shots under the rigid-body queue manager
@@ -1153,8 +1163,10 @@
   )
 
 (defbehavior mp-replica-hit mp-replica ((attacker process) (info attack-info))
-  "The local player hit this replica: send the blow to its owner (the host for an NPC)."
+  "The local player hit this replica: send the blow to its owner (the host for an NPC). In co-op a
+   teammate's own objects (the vehicle it drives, its wheels) take no blow from us."
   (when (and (mp-from-local-player? attacker)
+             (not (and (mp-coop?) (logtest? (-> self net flags) (mp-actor-flag owned))))
              *target*
              (not (and info
                        (logtest? (attack-mask id) (-> info mask))

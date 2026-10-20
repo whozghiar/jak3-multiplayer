@@ -1,0 +1,22 @@
+# Co-op protections, host side (co-op, Jak): the guest punches it (no hit), then it rides a lizard
+# (the guest sees it under the host and cannot hit it), gets off, then drives a buggy the guest
+# punches (no blow reaches it).
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 merchant-spot 0
+55 log
+62 log
+64 ride-flut
+68 log-me
+72 screenshot flut-host
+76 log
+77 end-flut
+80 vehicle 15
+86 log
+94 log
+96 log

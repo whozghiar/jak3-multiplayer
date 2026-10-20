@@ -754,6 +754,16 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "coop-protect":
+        hits = counter(host, r"pvp hits taken (\d+) reacted (\d+) last pushed " + NUM)
+        c.check(scenario, "co-op: the guest's punch does not hurt the host",
+                bool(hits) and hits[-1][0] == 0 and not any("pvp blow" in l for l in client), f"{hits[-1:]}")
+        flut = grab(client, r"\] copy 0 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
+        c.check(scenario, "the lizard the host rides is drawn under it on the guest",
+                any("state target-flut-stance" in l for l in host) and bool(flut) and flut[0] == ("#f", "#t"), f"{flut}")
+        c.check(scenario, "co-op: no blow on the host's buggy reaches it",
+                any("veh 15" in l for l in client) and not any("player 1 hit" in l for l in host), "")
+
     elif scenario == "merchant":
         hm = grab(host, r"\] merchant spot (-?\d+) at \S+ \S+ \S+ icon (\S+) name-drawn (\d+)")
         cm = grab(client, r"\] merchant spot (-?\d+) at \S+ \S+ \S+ icon (\S+) name-drawn (\d+)")

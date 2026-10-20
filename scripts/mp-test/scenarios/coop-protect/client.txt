@@ -1,0 +1,24 @@
+# Co-op protections, guest side: punches the host (no hit), watches it ride a lizard (the lizard's
+# copy drawn under it, punched: nothing), then punches the host's buggy (no blow sent).
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+45 join 127.0.0.1:7777
+45.1 wait-joined
+57 goto-player 0
+59 face-player 0
+60 press square 200
+62 log
+68 goto-player 0 8
+69 look-player 0
+70 log-copies 0
+70.5 screenshot flut-guest
+72 press square 200
+74 log-copies 0
+86 goto-player 0 2
+87 face-player 0
+88 press square 100
+89 press square 100
+90 log
+96 log

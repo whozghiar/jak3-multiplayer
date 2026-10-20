@@ -214,6 +214,11 @@
 (define *mp-local-slot* -1)
 ;; Host: the settings sent to guests. Guest: the settings received from the host.
 (define *mp-world* (mp-world-flag cheats sync-time pvp progress))
+
+(defun mp-pvp? ()
+  "#t when players can hurt each other: the server's PvP setting, never in co-op (teammates)."
+  (and (logtest? *mp-world* (mp-world-flag pvp)) (not (logtest? *mp-world* (mp-world-flag coop))))
+  )
 ;; Invincibility cheat (Mods menu).
 (define *mp-invulnerable* #f)
 ;; #t while this player simulates the NPCs around it (always for the host), see mp-update-authority
@@ -1760,7 +1765,7 @@
       (cond
         ((or (mp-from-local-player? attacker) (and by (mp-from-local-player? by)))
          (when (and *target*
-                    (logtest? *mp-world* (mp-world-flag pvp))
+                    (mp-pvp?)
                     (not (and info (logtest? (attack-mask damage) (-> info mask)) (= (-> info damage) 0.0)))
                     )
            (let ((ev (new 'stack 'mp-event))
@@ -3099,7 +3104,7 @@
          (mp-replay-weapon ev)
          )
         (((mp-event-kind pvp))
-         (when (and *target* (logtest? *mp-world* (mp-world-flag pvp)))
+         (when (and *target* (mp-pvp?))
            (format 0 "[multiplayer] pvp hit by player ~D, damage ~,,1f~%" (-> ev from) (-> ev fvec w))
            (mp-take-hit (-> ev fvec) (-> ev fvec w))
            )
@@ -5935,7 +5940,7 @@
                             *target*
                             (mp-in-game?)
                             (not *progress-process*)
-                            (not (focus-test? *target* pilot grabbed dead))
+                            (not (focus-test? *target* pilot grabbed dead flut board mech))
                             (>= (-> e spot) 0)
                             (< (vector-vector-xz-distance (-> *target* control trans) *mp-merchant-pos*) MP_MERCHANT_RANGE)
                             (< (fabs (- (-> *target* control trans y) (-> *mp-merchant-pos* y))) (meters 4))
