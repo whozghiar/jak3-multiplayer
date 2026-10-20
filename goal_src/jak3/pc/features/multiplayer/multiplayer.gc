@@ -357,6 +357,7 @@
    (sounds?       symbol)     ;; the sounds were let go on under the START menu
    (pad-held?     symbol)     ;; pad 0 hidden from the world this frame (mp-input), given back by the hook
    (input         handle)     ;; the mp-input process
+   (menu-at       time-frame) ;; real-clock time the START menu was last seen open (mp-input)
    (pauses        int32)      ;; pauses and pad frames hidden, for the test log
    (pad-frames    int32)
    )
@@ -5834,16 +5835,31 @@
   )
 
 (defun mp-input-update ()
-  "Run first every frame: while our START menu is open over the running world, pad 0 is kept in
-   *mp-pad-backup* and hidden from what runs next (no button, sticks centered); the hook gives it
-   back before the menu reads it. And triangle during a cutscene another player watches
+  "Run first every frame: while our START menu is open over the running world, and 0.3 s after it
+   closes (the button that closed it), pad 0 is kept in *mp-pad-backup* and hidden from what runs
+   next (no button, sticks centered, the PC's high-fps history emptied); the hook gives it back
+   before the menu reads it. X choosing a menu entry made the player jump: the jump reads that
+   history (recently-pressed?). And triangle during a cutscene another player watches
    (mp-skip-input)."
   (mp-skip-input)
-  (when (and (-> *mp-pause* live?) (= *master-mode* 'progress) *progress-process*)
-    (let ((pad (-> *cpad-list* cpads 0)))
+  (if *progress-process*
+      (set! (-> *mp-pause* menu-at) (mp-now))
+      )
+  (when (and (-> *mp-pause* live?)
+             (or *progress-process* (< (- (mp-now) (-> *mp-pause* menu-at)) (seconds 0.3)))
+             )
+    (let ((pad (-> *cpad-list* cpads 0))
+          (history (-> *cpad-history-list* cpads 0))
+          )
       (mem-copy! (the-as pointer (&-> *mp-pad-backup* type)) (the-as pointer (&-> pad type)) (the-as int (size-of cpad-info)))
       (cpad-invalid! pad)
       (set! (-> pad valid) (-> *mp-pad-backup* valid))
+      ;; and the PC's high-fps history the buffered checks read (recently-pressed?: the jump), which
+      ;; service-cpads filled before this ran: X choosing a menu entry made the player jump
+      (dotimes (i 15)
+        (set! (-> history button0-abs i) (pad-buttons))
+        (set! (-> history button0-rel i) (pad-buttons))
+        )
       (set! (-> *mp-pause* pad-held?) #t)
       (+! (-> *mp-pause* pad-frames) 1)
       )
