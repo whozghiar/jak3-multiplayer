@@ -481,7 +481,7 @@ world and has NPCs react to online players, and to take the best of both. Read i
 
 | Requirement | Implementation |
 |---|---|
-| Create or join a server from the start menu | The title screen's **Host Game** and **Join Game**, then the lobby (1.8). In game, START > Options > Multiplayer: **Host a server**, **Join the server**, **Disconnect**, plus a status line. The ring of the start menu has exactly ten slots (36 degrees each, matching its 3D model), so the page hangs off the Options list, which gets a sixth entry while the mod is enabled. |
+| Create or join a server from the start menu | The title screen's **Host Game** and **Join Game**, then the lobby (1.8). In game, START > Options > Multiplayer only customizes the player: its status line, name, character, color and appearance; the game mode, hosting, joining and the server's administration are only at the title screen and in the lobby (4.21). The ring of the start menu has exactly ten slots (36 degrees each, matching its 3D model), so the page hangs off the Options list, which gets a sixth entry while the mod is enabled. |
 | The same menus as himstan's Jak 2 mod to reach multiplayer | Host Game / Join Game, the lobby and its keys, the multiplayer options from the lobby, the SELECT player list (1.8, 4.7). |
 | A guest uses the host's world, not its own save | Section 1.7: the host's game sent as a save in memory and loaded with a loading screen, the guest next to the host, its own save neither read nor written. |
 | Free roam and co-op, the same rules, chosen in the lobby | Square in the lobby (the mode list), or the **Game mode** carousel (host). Section 1.7. |
@@ -503,7 +503,7 @@ world and has NPCs react to online players, and to take the best of both. Read i
 | Players hit each other, with a reaction | Section 1.3: an `mp-hurtbox` child of each puppet receives the local player's blows and shots; the victim plays the stock hit reaction, pushed away from the attacker. Host setting **Players can hit each other** (on by default). |
 | Game entities focus any player | Puppets are `process-focusable` in the player collide list with `collide-spec jak`, which `enemy::find-best-focus` considers. |
 | Players on the minimap in real time | Each puppet has a minimap icon in its player's color. |
-| Administration page when hosting | Options > Multiplayer > **Server administration**: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other, share story progress, share time of day, stop the server. |
+| Administration page when hosting | Options > Multiplayer > **Server administration**, at the title screen and in the lobby: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other (never in co-op, 4.23), share story progress, share time of day, stop the server. The host's Mods menu also credits it 100 precursor orbs or 100 Metal Head trophies (4.20). |
 | A 10-second countdown in the lobby, the host can cancel it | 1.8. |
 | The host's SELECT pauses everyone, the game resumes 3 s after the host asks | 4.10. |
 | START no longer pauses the world for anyone | 4.10. |
@@ -539,7 +539,9 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's choice. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
+| `goal_src/jak3/dgos/wwd.gd`, `voca.gd` | `jak-fldax+0-ag.go` added after `jak-flut+0-ag.go`: Daxter's lizard clips (`daxter-fldax-*`) and the lizard's under him (`flut-saddle-fldax-*`), which only the desert chase loaded (DESLIZ, unchanged). Its lizard clips link to the lizard of the same level, so it is not in GAME (4.22). |
+| `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post reports our place, progress and result and the racers' progress (`mp-racer-progress`, `mp-race-ai-progress`, `mp-race-position`), waits for the other players' result (`mp-race-result-wait?`) and asks it (`mp-race-won?`) (4.15). |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`) and the result waiting for the others (`#x159b`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
@@ -554,7 +556,7 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 |---|---|---|
 | `enemy` `mark-as-dead` | `engine/common-obs/enemy-states.gc` | Share enemy deaths; a Metal Head's trophy for the player whose blow killed it (4.20). |
 | `progress` `set-menu-options` | `pc/progress/progress-pc.gc` | The `'multiplayer` page, the title screen's Host Game and Join Game pages, the lobby (1.8). |
-| `determine-pause-mode` | `engine/draw/drawable.gc` | Online, SELECT is the host's pause for everyone (a tap) and the player list (held); a guest's SELECT and START do nothing while the host paused (4.7, 4.10). |
+| `determine-pause-mode` | `engine/draw/drawable.gc` | Online, SELECT is the host's pause for everyone (a tap) and the player list (held); a guest's SELECT and START do nothing while the host paused (4.7, 4.10), nor during a cutscene, where the host's START pauses it for everyone (4.21). |
 | `blit-displays-work` `set-menu-mode` | `engine/gfx/blit-displays-h.gc` | No still copy of the screen while the world runs under the START menu (4.10). |
 | `progress` `draw-bg-box-alpha-1` | `pc/progress/progress-draw-pc.gc` | The Appearance page's background leaves its right part open for the preview (4.12). |
 | `target-pos` | `engine/target/target-util.gc` | A co-op waypoint's owner sees us away from it until every player is there (4.14). |
@@ -574,6 +576,10 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `joint-control-remap!` | `engine/anim/joint.gc` | The sidekick (Daxter's model in his mode) calls it after copying the player's clips: Daxter's clip holding the gun goes on his upper body there (4.8); on Jak's shoulder, the climb of a Daxter player (4.16). |
 | `target-death-reset` | `engine/target/target-death.gc` | Co-op: a dead player back next to a living teammate, no task manager told (4.19). |
 | `game-info` `give` | `engine/game/game-info.gc` | A precursor orb taken is claimed from the host for our account (4.20). |
+| `merc-eye-anim` | `engine/gfx/foreground/eye.gc` | Our player's own model feeds no eyes while it plays Daxter online: it wrote Daxter's eyes into the eye slot every Jak shares (4.2). |
+| `restart-mission` | `engine/game/task/task-control.gc` | START > Restart restarts every player (4.21). |
+| `task-manager-init-by-other` | same file | A mission starting tells the others (4.24). |
+| `target-indax-stance`, `target-indax-walk` `event` | `engine/target/indax/target-indax.gc` | Their handler is replaced (a state keeps the one it was defined with): a lizard offered to a Daxter player starts the stock ride (4.22). |
 
 Every wrapper only notes the call when a session is running, for a process the others draw.
 
@@ -610,6 +616,12 @@ model has fewer bones than the player's skeleton the pose is taken from): it pla
 index, and his clip holding the gun on his upper body (`top-index`, `top-frame` in his state, 4.8).
 Its `mp-hurtbox` child sits in the actor hash, where the player's attacks look. A model change
 (character, outfit) respawns the puppet.
+
+Eyes: every model of Jak shares one eye slot (`*eye-control-array*`, found by art group name),
+which the last model to animate fills. A Jak puppet animates its eyes (`joint-control-status
+eye-anim`); our player as Daxter keeps Jak's model, hidden, playing Daxter's clips, and the
+`merc-eye-anim` wrapper keeps it from writing Daxter's eyes into that slot (the other players'
+Jaks showed them).
 
 The hurtbox is a `process-focusable` of kind crate, in the actor hash: its collide shape is made
 with `(collide-list-enum usually-hit-by-player)`, while the puppet's own `hit-by-others` shape is
@@ -784,6 +796,10 @@ put away for him (`gun-type` 0) and `multiplayer-guns.gc` fires instead
   dark shot along his aim (`moving` `:enter`: the parent's, then the velocity turned).
 - *Feedback:* the mod's name and its ammo at the bottom of the screen while he holds the gun (his
   mode has no gun HUD).
+- *Where:* on his feet in his mode, on a Jak's shoulder or riding along (his grab state,
+  `*mp-perch-slot*` or `*mp-ride-slot*` set: the shots leave from the shoulder or the seat), and
+  on a lizard (4.22). On a shoulder the others see the shots, not the gun: the Jak's own Daxter
+  they draw there holds none.
 
 Every weapon (Mods menu): the gun, its twelve mods and their ammo upgrades
 (`MP_ALL_GUN_FEATURES`), full ammo; kept through a respawn (in another player's world a respawn
@@ -899,34 +915,45 @@ released ("every player at the waypoint (2/2)").
 
 ### 4.15 Co-op: races
 
-In co-op, every player races with a vehicle of its own, or rides with another; the start waits
-until every connected player is aboard (multiplayer.gc, "Races"):
+In co-op, every player races in a vehicle of its own; the players count in each other's place,
+and the race is won only when they take the first places (multiplayer.gc, "Races"):
 
 - **A vehicle each.** A race continue point (`continue-flags race`) gives its vehicle where the
   player stands at the end of `target-continue`: each machine running the race gives its own
   player one, Daxter included (he drives as Daxter). A guest's player is moved back first (6 m
   per slot): the player starts last on the grid, the racers stand ahead and beside it (moved
-  aside, the guest's turtle fell over against a racer). A Jak on foot within 60 m of a player
-  whose race start waits gets a vehicle of that player's type beside it (once a minute at most,
-  not when he drove in the last 30 s: he left his vehicle to ride with another).
+  aside, the guest's turtle fell over against a racer). A player on foot within 60 m of a player
+  whose race start waits gets a vehicle of that player's type beside it (every 20 s at most, not
+  when it drove in the last 30 s: its own waits where it left it); Daxter leaves his mode first
+  (it ignores `'change-mode 'pilot`) and drives as Daxter. A guest never puts the vehicle it
+  drove last to sleep with the NPCs it leaves to the host (`mp-suppress-actor`): it stays where
+  the player left it, visible, and the player gets in again.
+- **No other player's vehicle.** From the start's wait to the finish (`mp-race-context?`: the
+  start waits, or the race reported within 1 s), no steal, no ride along, no shoulder: a
+  passenger or a Daxter on a shoulder is put down, `mp-update-vehicle-interaction` offers no other
+  player's vehicle (our own is still boarded, Daxter included) and `mp-update-perch` no Jak.
 - **The start waits.** The race's task manager (`course-race.gc`: Kleiver's race, the beast
   hunters' time trial and rally; `artifact-race.gc`: Damas's races) loops on `mp-race-hold?` before
-  the start: #t while, in co-op, a connected player is not aboard, i.e. driving, riding a seat of
-  another player's vehicle (L1 + triangle), or Daxter on a driving Jak's shoulder (triangle, flag
-  `perched`); a player still loading the host's world is not aboard. "Waiting for every player
-  aboard: 1/2" shows at the bottom (flag `race-wait`). Once every player is aboard, "The race
-  starts in 10" counts down: a player may still leave its vehicle to ride with another or sit on
-  Jak's shoulder, and the wait starts again. Meanwhile the players may leave their vehicle (a
-  `pilot-exit #t` setting in `engine-hi` over the race's). Offline, alone or in free roam, the
-  stock start.
-- **The choice, on screen.** Under the wait or the countdown, a second line says what the player
-  can do (`mp-race-choice`, texts `#x1594` to `#x1597`): Jak, "Your own vehicle, or L1 + triangle
-  next to another player's to ride with them"; Daxter, "... or triangle next to a driving Jak to
-  ride on his shoulder"; riding in another player's vehicle, "triangle to get off and race in your
-  own vehicle"; on Jak's shoulder, "X to jump off and race in your own vehicle".
-- **Daxter and a driving Jak.** In co-op, Daxter's triangle within 5 m of the vehicle a Jak drives
-  puts him on that Jak's shoulder (standing or walking); he never robs that vehicle, and its
-  steal prompt is not shown. In free roam he may still steal it beyond 3.5 m of Jak.
+  the start: #t while, in co-op, a connected player does not drive; a player still loading the
+  host's world does not. "Waiting for every player aboard: 1/2" shows at the bottom (flag
+  `race-wait`), and above it "Every player races in their own vehicle" (`#x1594`). Once every
+  player drives, "The race starts in 10" counts down (again when a player leaves its vehicle).
+  Meanwhile the players may leave their vehicle (a `pilot-exit #t` setting in `engine-hi` over
+  the race's). Offline, alone or in free roam, the stock start.
+- **Places.** The manager's `active` post (`race-manager.gc`) calls `mp-race-ai-progress` with
+  each racer's progress and `mp-race-position` with our place among its racers, our progress and
+  our result: laps done and the part of the lap, or once finished 1000 minus the time
+  (`mp-racer-progress`: the earlier the larger), comparable from one machine to another. Ours
+  goes to the others 5 times a second (`race-progress` event), the host's racers' with it (8 at
+  most, floats in the event's text): the racers every player sees and passes are the host's (a
+  guest's own sleep, 1.2), so a guest counts the host's racers ahead of it, the host its own. The
+  HUD's place (`*game-info*` `race-position`, the sprites 1st to 8th) adds the players ahead: with
+  six racers and two players, a player can read 7th.
+- **Result.** At its finish a player is ahead of every racer or not (counted as above, fixed
+  then). One ahead of every racer waits, 60 s at most, until the other players of the race
+  finished ("Waiting for the other players to finish", `#x159b`); the race is won when every one of
+  them finished ahead of every racer (the players took the first places), lost otherwise, on every
+  machine. A time trial (`racer-info-flag rif6`) keeps its stock result, its score.
 
 ### 4.16 Daxter on a Jak's shoulder
 
@@ -954,6 +981,7 @@ Jak's shoulder":
 - **Off.** X, his death or the Jak hidden puts him down next to Jak. A perched Daxter is hidden
   but present: he counts as there for the players' distances (no longer taken for a player still
   loading).
+- **Firing** from there: 4.8. **Not in a co-op race:** 4.15.
 
 ### 4.17 Cutscene outfits
 
@@ -987,6 +1015,12 @@ the nearest) comes back 2 m from that teammate, health full, invulnerable for 3 
 `target-stance`, and no task manager is told: a mission goes on while one player lives. Dying
 alone, or in a vehicle, stays the stock (the continue point; the mission fails if it does so).
 
+Before coming back, the dead player watches that teammate for 5 s, as himstan's death spectate
+does: its body stays where it fell, the camera follows the teammate's puppet (`'change-target`),
+and "Spectating: <name>" with "Back in N" shows at the top (`mp-draw-spectate`, `#x1598`,
+`#x1599`). A teammate who dies meanwhile is left for another; with none left, the stock death
+follows.
+
 ### 4.20 Economy: orbs, trophies and Kleiver's shop
 
 multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cpp` `mp::Economy`:
@@ -1015,13 +1049,91 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
   Hosting the same session again loads them back, also after the game was closed without ending
   the session (the minute's save). Each player who comes (or comes back) gets its balances once
   (`sent` bits): a returning guest sees the orbs it earned before.
-- **Kleiver's shop.** At Kleiver's garage in Spargus (by the city's doors, continue point
-  `wasdoors-city`), within 4 m: his line ("Kleiver: Got orbs? I've got just what you need.") and
-  "Press triangle to trade". Triangle opens the START menu on one page, the shop
+- **Kleiver's spot.** The host draws one of four spots of Kleiver's in Spargus when its accounts
+  open (`*mp-merchant-spots*`: his garage at the doors, the lower city's square, his spot in the
+  upper city, another place there) and sends it with the balances (`econ` event, `fvec x`): every
+  player finds him at the same place, for the session. His own minimap icon (class 116, his face,
+  without the missions' trail, kept on the minimap's edge when far, on the big map too) is owned
+  by the manager at that spot, and "Merchant" ("Marchand") is drawn in yellow over it within
+  80 m, as a player's name (`mp-draw-merchant-name`, `#x159a`). Only the spot: his model is not
+  loaded in Spargus.
+- **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
+  Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
+- **Kleiver's shop.** At Kleiver's spot, within 4 m, on foot: his line ("Kleiver: Got orbs? I've
+  got just what you need.") and "Press triangle to trade". Triangle's other uses there come first
+  (a cutscene, L1 + triangle to ride along, another player's vehicle or shoulder, one of our
+  vehicles): his spot may be where the players start, by their vehicles. Triangle opens the START menu on one page, the shop
   (`activate-progress` with `'mp-shop`): the balances, four outfits with their prices (5 to 10
   orbs; the future economy adds weapons, vehicles and powers), X buys one (asked of the host,
   which checks the price and the account) or wears one owned (its tints over the outfit, saved
   and sent), triangle leaves.
+
+### 4.21 Session flow: restart, quitting, the START page, cutscenes
+
+multiplayer.gc "Restart for everyone", "Session ended", "Pause for everyone"; multiplayer-menu.gc:
+
+- **Restart for everyone.** START > Restart (`restart-mission`, wrapped) on the host restarts its
+  mission and sends `restart` to everyone: each player restarts too, then goes back next to the
+  host. A guest's Restart asks the host, whose restart then goes to everyone.
+- **A guest that quits leaves.** A guest that played in the host's world and is back at its title
+  screen (START > Quit) leaves the server (`mp-update-session-title`, `guest-played?`); the others
+  see it go. The host's own Quit ends the session (1.8).
+- **The START page in game** keeps the first five options of `*mp-menu-all*` (status, name,
+  character, color, appearance) in `*mp-menu-ingame*`: the `'multiplayer` route of the
+  `set-menu-options` wrapper swaps the page's options by `(level-status? *level* 'title #f)`.
+  The game mode, Host, Join and Leave entries are gone from that page: the lobby and the title
+  screen do them.
+- **The pad under the START menu.** The world reads no button and centered sticks while the menu
+  is open (4.10): the player, its vehicle and its gun do not move (`menu-still`).
+- **Cutscenes.** While another player may watch it too, a guest's START and SELECT do not pause a
+  cutscene (its own fell behind the others'); the host's START pauses it for everyone, as its
+  SELECT does, and resumes it (the `determine-pause-mode` wrapper).
+
+### 4.22 Daxter on a lizard
+
+The stock rides Daxter on a lizard only in the desert chase (`'wild` mode, the lizard running on
+its own: `target-fldax-enter`, `engine/target/flut/target-flut.gc`). multiplayer.gc "Daxter on a
+lizard":
+
+- **Getting on.** A lizard waiting to be ridden offers itself with triangle (`'change-mode 'flut`,
+  its idle state, `flut.gc`). Daxter's mode ignored it (`target-indax-handler`): his stance and
+  walk now take it (`mp-indax-handler`, their state's `event`) and go to the stock ride
+  (`target-flut-start`, mode `'normal`), so the lizard answers as it does for Jak.
+- **Drawn as Daxter.** Once on, the player's art group is a copy of Daxter's (`mp-fldax-art`,
+  made once: the art group's header and slots, its type included) whose slots of Jak's lizard
+  clips (`jakb-flut-*`, 406 to 432) hold Daxter's (`daxter-fldax-*`, `*mp-fldax-map*`); the
+  sidekick follows the player's bones (`'matrix 'indax`, `no-draw-bounds2`), as
+  `target-fldax-enter` does. The lizard under him clones those clips by name (`joint-control-remap!`
+  to `flut-saddle-fldax-*`). `mp-fldax-update` (from the manager, before his mode) puts that art
+  on when the ride starts and the player's back once off; then his mode again.
+- **His clips** are in `jak-fldax+0-ag`, which only DESLIZ loaded; WWD and VOCA, the levels with
+  lizards to ride, load it too. In GAME its lizard clips found no lizard to link to ("could not
+  find a master slot"), and the lizard under Daxter was hidden.
+- **Firing:** R1, as on foot (4.8). **The others** see Daxter's puppet on the lizard (4.23).
+- **Each player its own lizard.** A lizard is no NPC the host shares (`mp-actor-kind` 0): every
+  machine runs its own, so in a mission (the kanga-rat hunt's `flut-1`) each player has one.
+
+### 4.23 Co-op: teammates and their vehicles
+
+- **No friendly fire.** `mp-pvp?`: the server's PvP setting, never in co-op. A teammate's punch or
+  shot on our puppet sends nothing, and a `pvp` event is ignored.
+- **Their vehicles.** In co-op, a blow on a copy owned by a player (the vehicle it drives, its
+  wheels: `mp-actor-flag owned`) is not sent (`mp-replica-hit`).
+- **The lizard ridden** is a manipy under the player (`target-flut-start`) while the level's lizard
+  hides: it is now sent with the player's props (`mp-collect-props`), drawn under its rider on
+  every machine and never hit (props are not solid). Before, the others saw the rider on nothing,
+  and the lizard they hit was their own copy left standing.
+
+### 4.24 Co-op: missions started together
+
+A mission runs while its task manager lives: its node's `on-open` script spawns it when the node
+opens and its level is active (`engine/util/script.gc`), or `update-task-masks` does once that
+level loads. In co-op, a player whose manager starts (`task-manager-init-by-other`, wrapped: it
+reached the mission's spot, talked, watched the intro) sends `mission-start` with the node. A
+player without that mission's manager and more than 40 m away goes next to that player
+(`*mp-request-teleport*`, "A mission starts: you join the other player"); the shared story
+progress (1.5) opened the same node there, so its own manager starts once that level is loaded. A
+player already running it stays where it is.
 
 ## 5. Testing in game
 
@@ -1128,7 +1240,7 @@ A script line is `<seconds> <command>`:
 | `econ-claim <aid>`, `econ-grant <slot> <orbs>`, `shop-buy <item>` | Claim the orb of that entity without taking it (0: the nearest, from where we stand), a cheat the host must refuse; the host credits a player (a test of its accounts; nothing on a guest); buy shop item n as the page's X does. |
 | `kill-mh <slot>` | On the host: a lethal blow from player slot's character (ours or its puppet) to the nearest Metal Head, credited by the economy. |
 | `die`, `log-respawn` | A blow that kills our player; the times we came back next to a teammate, our state and health, the teammate found. |
-| `net <ms> <jitter> <loss %>`, `log-net` | The test network from now on (what this instance receives, as `--latency` and `--loss`); each peer's network pressure, the share of messages delivered both ways, the queueing and the bytes sent it last second. `log-race` also prints the choice line shown. |
+| `net <ms> <jitter> <loss %>`, `log-net` | The test network from now on (what this instance receives, as `--latency` and `--loss`); each peer's network pressure, the share of messages delivered both ways, the queueing and the bytes sent it last second. |
 | `look-player <slot>` | Face that player, the camera put 6 m behind us, 2 m up and 1.5 m aside on the line to it (`'teleport-to-vector-start-string`): a screenshot shows that player ahead. |
 | `log-outline` | Outlined models the renderer drew since boot, the pixels of fill and outline it drew last frame where walls hide players (`pc-mp-outline-pixels`), each player in the outline table with its color. |
 | `cheat weapons`, `daxter-mod <pickup-type>`, `log-daxter-gun` | Every weapon (Mods menu); the mod Daxter fires, as the D-pad sets it; Daxter's gun: out, mod, shots fired, ammo, aim, the features, the gun's scale and state, its model's distance to his right hand, its draw status and clip, his clip holding it (index, frame), `gun-daxter`, the joints selected, the gun's distance to his gun joint; each other player's clip holding the gun as its state says. |
@@ -1158,6 +1270,13 @@ A script line is `<seconds> <command>`:
 | `go-state <type> <state>`, `log-state <type>` | The first process of that type goes to that virtual state (`method-state`, `go-process`): a mission's task manager taken to a later step, its own code running from there; the state of the first process of that type. |
 | `log-stretch`, `hide-puppets <0\|1>`, `hide-copies <0\|1>` | Each puppet's bone farthest from its root, and the copies with a bone over 5 m away (a stretched scarf); hide the puppets or the copies (counter-tests). |
 | `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
+| `open-menu <page>`, `econ-grant-self <0\|1>` | A START menu page; the host's Mods menu entries, +100 precursor orbs (0) or Metal Head trophies (1). |
+| `log-eyes` | Each remote puppet's eye slot and the process that wrote it last (the puppet, our player). |
+| `dark-bomb`, `restart`, `log-restart` | The dark blast ready (features and stages, full dark eco; jump then square sets it off); START > Restart; the restarts done and asked. |
+| `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
+| `ride-flut`, `end-flut`, `goto-flut`, `log-fldax` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state. |
+| `respawn-manager <type>` | That task manager killed, then spawned again by the task masks, as when its mission starts. |
+| `race-sim <progress x 1000> <result> <place>`, `goto-own-vehicle` | Our race reports as a race would (node 999), then our place with the players, and once finished whether our result waits and is won; stand beside the vehicle we drove last. `log-race` prints our place, progress, result, the racers ahead and the host's racers received. |
 
 Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano; `check_results.py`: 253 checks passed, 1 failed, 35 scenarios, no crash, before the last changes; the failure, `v1-city-combat` checking a vehicle's copy dying, no vehicle destroyed in that run, was dropped for that scenario (`v1-city-dark1-host` destroys one for sure) and the run again passed 6 of 6. The last changes (the laser sight sent by its owner and passing through it, each blow's answer logged, `goto-npc` with a distance, `press` with a stick) were checked by `guard-hit`, `shot-path` and `laser`, and the first 7 scenarios of a full run (`smoke` to `npc-handoff`, no crash) stopped there on the user's request; the others were not run again after them):
 
@@ -1269,7 +1388,7 @@ fix, 10 of 10. The scenarios new or extended in this round:
 | `ride-multi` | Three passengers' seats | Two passengers in the host's three-seat car: seats 1 and 2, each drawn in its own. |
 | `scene-skip` | Skipping a cutscene together | Both watch the host's cutscene (2 viewers); the host's triangle asks (1/2) and it goes on; the guest sees the vote, asks, and the cutscene is skipped on both machines; 8 checks. |
 | `beam` | A waypoint reached together | The host at a test beam is held (1/2, its owner sees it 45 m away) while the guest is away; the guest sees the count, comes, and the mission goes on for both; 6 checks. |
-| `race-board` | A race start waiting for every player | The guest on foot gets a turtle of its own beside the host, then the 10 s countdown and the start; riding on the back of the host's turtle counts as aboard (countdown, start); Daxter on foot holds the start (1/2, the host may leave its vehicle), then sits on the driving host's shoulder and it goes; 8 checks (screenshot). |
+| `race-board` | A race start waiting for every player | The guest on foot gets a turtle of its own beside the host, then the 10 s countdown and the start; riding on the back of the host's turtle counts as aboard (countdown, start); Daxter on foot holds the start (1/2, the host may leave its vehicle), then sits on the driving host's shoulder and it goes; 8 checks (screenshot). Rewritten on 2026-10-20 (own vehicles only, 5.3). |
 | `race-continue` | Both players at a race continue point | `desertb-race-start`: each machine gives its own player a turtle, the guest's 6 m back; each player drives its own; 6 checks. |
 | `race-real` | Kleiver's race, a real mission | Co-op from the lobby at `desert-course-race`: the host's race (its `task-manager-race`) waits (1/2) while the guest loads the host's world, each machine's race gives its player a turtle (the guest's 6 m back), the countdown, then the race starts (held 14 s): timer and laps running on both screens; 7 checks (screenshots). |
 | `race-real-daxter` | The same race, the guest plays Daxter | Daxter arrives in a turtle of his own; during the countdown he leaves it (1/2 again), jumps on the driving host's shoulder (triangle), the countdown starts again, the race starts with him there (held 16 to 20 s); twice in a row, 8 checks each (screenshots). Before the fixes of this round: the race started while the guest was still loading; the guest's turtle, moved aside, fell over against a racer; Daxter's triangle beside the host's turtle stole it instead. |
@@ -1310,6 +1429,33 @@ turtle rolls down the start's slope (6); it now moves there 1 s before: 8 of 8 i
 | `race-board` (extended) | The choice on screen | The line shown at each step: Jak's (own vehicle or L1 + triangle), riding's, Daxter's, the shoulder's (screenshots: above the count, clear of the prompts and the minimap); 9 checks. |
 | `economy-persist` | Saved while running | An orb each, 7 more credited to the guest; 70 s later the minute's save holds the accounts and the orbs credited, and the games are stopped without ending the session; 6 checks. |
 | `economy-reload` (`--settings-from economy-persist`) | After a restart | Hosting again loads "2 account(s) and 2 orb(s) taken"; the guest finds its 8 orbs by its secret id (before the fix: 0 until it earned something), the host its 1; the orbs each takes again in its fresh world are refused as already credited; 7 checks, the pair passing twice in a row. |
+
+Scenarios of 2026-10-20 (the user's bug list and co-op rules; `check_results.py`). Each feature's
+scenarios and its regressions ran after its commit (`pvp`, `vehicle-hit` after the co-op
+protections; `daxter-fire`, `coop`, `daxter-drive` after the lizard; `beam-real`, `race-real` after
+the mission starts; `steal-dup` after the handle fix). After the races, `smoke`, `ride`,
+`daxter-ride`, `session-flow`, `coop-respawn`, `race-continue`, `pause`, `skin`, `lobby` and
+`retail-general` (retail boot) passed every check, no crash; `ride-seat-daxter` failed: Kleiver was
+drawn at the start and his shop took the L1 + triangle of the ride. His triangle now gives way
+(4.20); on that last code `ride-seat-daxter` (Kleiver put at the start), `merchant` and `economy`
+pass.
+
+| Scenario | Checks | Result |
+|---|---|---|
+| `skin-title`, `lobby-text`, `ui-ingame` | Menus | The Appearance preview at the title screen (Jak, then Daxter, tinted); the lobby's lines and typed names fit, in the game's font; START > Options > Multiplayer in game holds the five customization entries (screenshots). |
+| `menu-still` | START over the world | The START menu open, the stick and the throttle held: Daxter and his vehicle do not move. |
+| `eyes` | Eye slots | Each Jak puppet feeds its eye slot; our Daxter player's model writes none (close-up). |
+| `weapons-fx`, `dark-smack` | Trails, dark blast | The beam reflexor's and the plasmite RPG's trails counted on the guest; the host's dark blast hits the guest, no crash. |
+| `session-flow` | Restart, quitting | The host's Restart restarts the guest next to it; a guest's asks the host; a guest's Quit leaves the server; 7 checks. |
+| `coop-respawn` (rewritten) | Spectating | The dead guest watches the host 5 s ("Spectateur : Host", "Retour dans 5", camera on the host), its body on the ground, then comes back next to it; then the host the same; 7 checks. |
+| `merchant` | Kleiver's spot | The host draws a spot, the guest gets the same; each of the four spots set by the host reaches the guest and stands on the ground; his icon on the minimap, "Marchand" in yellow over him, his line at his spot (screenshots); 8 checks. |
+| `coop-protect` | Teammates | The guest's punch does not hurt the host; the host's lizard drawn under it on the guest; no blow on the host's buggy sent; 7 checks (`pvp` and `vehicle-hit` in free roam unchanged). |
+| `daxter-flut` | Daxter on a lizard | Daxter gets on the lizard the host left (triangle), drawn as Daxter, fires the scatter gun from it, jumps, rides 22 m, gets off and is Daxter again; the host draws the guest's lizard under him; 8 checks (screenshots). |
+| `daxter-perch-fire` | Firing from a shoulder | Daxter on the host's shoulder fires the blaster, the host sees him there; X puts him down; 6 checks. |
+| `mission-start` | A mission started by one player | Co-op at the arena training; the guest goes to Spargus's doors; the host's mission manager starts again: the guest is told, taken next to the host, and its own manager runs; 7 checks. |
+| `race-result` | Places and results | The guest, 4th of its racers, reads 5th with the host ahead; the host finished first waits for the guest; both first: won on both; the guest behind a racer: lost on both; 8 checks. |
+| `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
+| `race-real`, `race-real-daxter` (rewritten) | Kleiver's race | Both races report place and progress (the guest counts the host's 4 racers); Daxter leaving his turtle during the countdown holds the start, gets no shoulder, gets back in his own turtle: the countdown again, then the race; 8 and 10 checks. |
 
 Under a network's delay (2026-10-15, `--latency 50:30`: what each instance receives held 50 ms
 plus up to 30 ms, so 100 to 160 ms there and back; 15 scenarios, `check_results.py`: 121 checks
@@ -1366,6 +1512,15 @@ Over the Internet, the host forwards UDP port 7777 (or the port chosen) and gues
 public IP.
 
 ## 6. Known limits
+
+- Kleiver as a merchant is a spot, his icon and his name: his model is only loaded for his
+  cutscenes, so nobody stands there.
+- The crash a player reported after another player's dark blast (a replayed effect's joint past
+  its copy's skeleton) was not reproduced: replayed effects now keep to the copy's joints (counted
+  in `log-weapons`), a guard, not a proven cause.
+- A guest's parked vehicle is not sent: the other players only see the vehicles one drives.
+- Race places compare progress from machine to machine: a finish is timed from each machine's own
+  start, which the start's wait releases within a frame or two on each.
 
 - Another place's objects (1.6) are drawn within 400 m of our player only, from their art loaded
   alone (32 MB at most, freed with the level whose memory holds it); farther, they are not drawn.
@@ -1446,6 +1601,33 @@ public IP.
   cadence, both within the check). Its levels follow pings, once a second.
 
 ## 7. Change log
+
+- **2026-10-20:** the user's list of bugs and co-op rules (menus, eyes, weapons, sessions, co-op
+  missions, races, the merchant). The parts that follow himstan's Jak and Daxter II Multiplayer
+  (ISC) say so in the commits and the code.
+  - *Menus.* The lobby's character, ping and status lines shrink to fit (Daxter's ran over the
+    ping); a name or address a player typed goes through the font's encoding (`mp-user-text`:
+    raw, g, j, p, q and y drew with the wrong glyph, larger or out of line); the Appearance preview
+    shows at the title screen (its model flagged `hud`, which the menu mode's foreground still
+    draws). The START page in game only customizes the player (4.21).
+  - *Eyes.* The Jak puppets animate their eyes; our player as Daxter no longer writes his eyes into
+    the slot every Jak shares (`merc-eye-anim`, 3).
+  - *Weapons.* The beam reflexor's shot and the plasmite RPG's grenade draw their light trail on the
+    other machines; a replayed effect keeps to its copy's joints (6).
+  - *Sessions.* Restart for everyone, a guest's Quit leaves the server, only the host pauses a
+    cutscene (4.21); a dead co-op player watches a teammate for 5 s, its body on the ground (4.19).
+  - *Co-op.* No friendly fire, no blow on a teammate's vehicle, the ridden lizard seen by the
+    others (4.23); Daxter rides lizards and fires from them and from a shoulder (4.22, 4.8); a
+    mission one player starts brings the others there (4.24); races with own vehicles, places
+    counting the players and a result won only in the first places (4.15).
+  - *Merchant.* Kleiver at a random spot of four, his icon on the minimap, "Merchant" in yellow;
+    the host's +100 orbs and trophies in the Mods menu (4.20).
+  - *Fix.* Two handles were kept in global symbols, which hold 32 bits: our stolen vehicle and the
+    one we drove last now live in `*mp-globals*`.
+  - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
+    `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
+    `daxter-perch-fire`, `mission-start`, `race-result`; `coop-respawn`, `race-board`,
+    `race-real-daxter` and `economy` rewritten or extended; commands in 5.3.
 
 - **2026-10-19 (night, second pass):** after the stop hook's review of the first pass.
   - *Network pressure,* after himstan's cadence scheduler: each link's losses and queueing,

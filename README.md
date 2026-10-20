@@ -22,8 +22,9 @@ Daxter co-op duo with its own multiplayer save.
 - **Host Game and Join Game on the title screen:** the host's lobby opens at once and the others
   join it by typing the host's address (`ip:port`) before anything starts. In the lobby, choose
   Jak or Daxter and say you are ready; the host chooses the game mode and, once everyone is
-  ready, starts a 10-second countdown that every player sees and the host can cancel. Hosting and joining from the pause menu (Options > Multiplayer) work too. Up to 8
-  players (2 in co-op).
+  ready, starts a 10-second countdown that every player sees and the host can cancel. Up to 8
+  players (2 in co-op). Servers are hosted and joined from the title screen only, and the game
+  mode is chosen in the lobby only.
 - **Game modes, chosen by the host in the lobby:** Parkour, Egg hunt, PvP, Battlefront, Hide and
   seek and Races are listed for later (grayed out, coming soon); two can be played now:
   - **Free roam:** the end of the game. Every story mission is done and everything is unlocked
@@ -35,12 +36,16 @@ Daxter co-op duo with its own multiplayer save.
     the host's computer as a multiplayer save of its own, apart from the memory card's save
     slots. A guest who picks the host's character is offered the other one. In cutscenes, Jak
     wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
-    on foot while the other one is alive nearby comes back next to them, and the mission goes on.
-    A cutscene is skipped once both players asked (triangle). A waypoint (the yellow beam) waits for both players to stand on it
-    ("Players here: 1/2"). A race gives each player a vehicle and starts once both are aboard:
-    each in their own, riding with the other, or Daxter on Jak's shoulder (triangle next to Jak's
-    vehicle). A line at the start says each player's choice, and a 10-second countdown leaves
-    time to change your mind and ride together.
+    on foot while the other one is alive nearby watches them for 5 seconds ("Spectating"), their
+    body on the ground, then comes back next to them, and the mission goes on. When one player
+    starts a mission (reaching its spot, talking to someone), the other is brought there and the
+    mission starts for both. Players cannot hurt each other or each other's vehicles, and each one
+    has their own lizard where the game gives one. A cutscene is skipped once both players asked
+    (triangle); only the host can pause it. A waypoint (the yellow beam) waits for both players to
+    stand on it ("Players here: 1/2"). In a race each player drives their own vehicle (no riding
+    along, no shoulder): the start waits until both drive, the place on screen counts the other
+    player (with six racers and two players you can be 7th), and the race is won only when both
+    players finish first and second.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.
@@ -48,16 +53,19 @@ Daxter co-op duo with its own multiplayer save.
   Jak played online carries no Daxter of the game: Daxter is a player. Next to a crouching Jak, or
   a Jak driving, Daxter's triangle climbs onto his shoulder with the game's own animation, and he
   rides there, in vehicles too, until he jumps off (X). He fires every gun too: R1 fires the mod chosen with the D-pad, aimed at the nearest enemy ahead,
-  with the mod and its ammo shown at the bottom of the screen. He holds the gun in his hands and
-  aims and fires it with the game's own Daxter animations, on every screen. He gets in vehicles
-  and drives them as Daxter.
+  with the mod and its ammo shown at the bottom of the screen, on foot, on Jak's shoulder, riding
+  along or on a lizard. He holds the gun in his hands and aims and fires it with the game's own
+  Daxter animations, on every screen. He gets in vehicles and drives them as Daxter, and rides
+  the lizards (triangle next to one), drawn as Daxter on it.
 - **Every weapon:** a Mods menu option gives the gun with its twelve mods, their upgrades and full
   ammo, for Jak and for Daxter alike.
 - **See each other through walls:** a player hidden by a wall, a vehicle or anything else shows
   as an outline in their color.
 - **Player list:** hold SELECT to see every player with their health and their ping.
 - **Pause:** the host's SELECT pauses the game for everyone; SELECT again resumes it after a
-  3-second countdown. START opens your menu while the game goes on, for you and for the others.
+  3-second countdown. START opens your menu while the game goes on, for you and for the others;
+  your character stands still meanwhile. START > Restart restarts the mission for every player.
+  Quitting the game (START > Quit) leaves the server.
 - **Appearance:** Options > Multiplayer > Appearance colors each part of Jak's and Daxter's
   clothes (shirt, armor, pants, boots, scarf, hair, fur...), with a turning preview. Every player
   sees your outfit.
@@ -83,7 +91,7 @@ Daxter co-op duo with its own multiplayer save.
 - **Enemies fight everyone:** enemies can target any player, and the hits they land count.
 - **Players can hit each other:** punches, shots and blasts between players (the wave concussor,
   the mass inverter, the arc wielder, the needle lazer too) hurt and knock back (the host can turn
-  it off).
+  it off; never in co-op).
 - **Cheats menu:** in the Mods menu (L3 + SELECT): every weapon, refill ammo, restore health, dark
   eco and light eco, invincibility, teleport to a zone or to a player.
 - **Shared story:** a mission completed by one player is completed for everybody, with its
@@ -101,8 +109,10 @@ Daxter co-op duo with its own multiplayer save.
 - **Precursor orbs and Metal Head trophies:** every precursor orb you take and every Metal Head
   you kill counts for you. The host's game keeps every player's count, saves it every minute
   and when the session ends, and gives it back when it hosts that session again; each orb counts
-  once. Spend your orbs at **Kleiver's shop** in Spargus, by his garage at the city's doors:
-  stand next to him and press triangle to buy and wear new outfits.
+  once. Spend your orbs at **Kleiver's shop** in Spargus: he stands at one of four places, the
+  same for every player and drawn at random for each session, marked by his icon on the minimap
+  and by "Merchant" in yellow over his spot. Stand there and press triangle to buy and wear new
+  outfits. The host's Mods menu can give the host 100 orbs or 100 trophies.
 
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
@@ -117,8 +127,9 @@ Daxter co-op duo with its own multiplayer save.
    new campaign, the campaign continued, or a mission of the story. The host starts the
    countdown (X) once everyone is ready, and the guests follow into its world when it ends. Circle opens the multiplayer options
    (name, color, address), triangle leaves the lobby.
-4. In game, START > **Options > Multiplayer** holds the same settings, the server administration
-   for the host, and hosting or joining without going back to the title screen.
+4. In game, START > **Options > Multiplayer** changes your name, character, color and
+   appearance. The server administration, hosting and joining are at the title screen and in the
+   lobby.
 
 | Action | Control |
 |---|---|
@@ -134,6 +145,7 @@ Daxter co-op duo with its own multiplayer save.
 | Ride as passenger | L1 + Triangle next to it |
 | Get off as passenger | Triangle |
 | As Daxter: climb onto a crouching or driving Jak's shoulder / jump off | Triangle / X |
+| Get on a lizard (Jak or Daxter) | Triangle next to it |
 | Kleiver's shop: open / buy or wear / leave | Triangle next to him / X / Triangle |
 
 > [!NOTE]
