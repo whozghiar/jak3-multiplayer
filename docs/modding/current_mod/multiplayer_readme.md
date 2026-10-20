@@ -770,7 +770,8 @@ put away for him (`gun-type` 0) and `multiplayer-guns.gc` fires instead
   aim use (`fire-range`, `track-*`), which `target-gun-type-set!` sets for Jak only, are set
   when the gun comes out (`mp-daxter-gun-setup`). A D-pad press takes the gun out too, the mod
   just chosen in his hand, without firing (2 s, as after R1); before, the mod changed unseen until
-  he fired (`daxter-moves`).
+  he fired (`daxter-moves`). The mod's name and ammo show above the prompts (`mp-draw-daxter-gun`,
+  y 292; the prompts are at 320).
 - *Aim:* from his chest toward the nearest enemy, guard, civilian or crate within 40 m in a
   60-degree cone ahead (`fill-actor-list-for-box`, `find-nearest-focusable`, as
   `target-gun-find-track`), else straight ahead; the target found is the gun's tracked target
@@ -1078,7 +1079,12 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
   out, the manager asks the same borrow with its own setting (`set-setting! 'borrow`;
   `apply-settings` runs `update-task-masks` when the borrow changes, which loads it) and drops it
   when the spot goes. The model is a `manipy` in `*entity-pool*`: when `lkleever` unloads, the
-  level kills it with its art (`check-for-rougue-process`). In free roam only: in co-op the host draws no spot (-1), so no icon, name or
+  level kills it with its art (`check-for-rougue-process`). He is solid (his `manipy-init`
+  sphere, 1.2 m up and 0.9 m wide, made an `obstacle` with `solid` action, `mp-kleiver-solid!`):
+  a player walking into him stops against him; the collision is off while our player stands
+  within 1.2 m of him (a teleport or his spot moving onto it would trap it inside). He turns
+  toward our player within 12 m, and his five idle clips (`*mp-kleiver-idles*`) follow one
+  another every 6 s, blended 30 frames (`mp-kleiver-live`). In free roam only: in co-op the host draws no spot (-1), so no icon, name or
   shop, on any machine.
 - **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
   Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
@@ -1336,6 +1342,7 @@ A script line is `<seconds> <command>`:
 | `log-seat` | Our model in a vehicle, in the vehicle's axes (x left, y up, z forward) from the seat point: as a passenger the model in the seat (its root, bone 3, its bones' extent, its clip), driving the model drawn (Daxter's in his mode) from the player's position. |
 | `log-joints`, `log-anim <daxter\|jak> <index>` | Daxter's joints (index, name, parent); the entry at that index of Daxter's or Jak's art group (a clip is loaded when it prints an `art-joint-anim`). |
 | `log-name` | The player name kept and the on-screen keyboard's text. |
+| `goto-merchant [m]`, `walk-to-merchant <frames>` | Stand at Kleiver's spot, or m meters from it facing it; walk toward it (the stick follows the camera). `log-econ` prints his model (alive, level, drawn), whether he is solid, his idle clip, how much he faces us and how far we stand. |
 | `host-play-mission <name>`, `log-input` | The host's Choose a mission in game on that play-list name (`mp-host-play-mission`); what our buttons did: state, gun mod, ammo of each color, Daxter's shots, the START menu open. |
 | `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions`, `log-acts` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered; the missions of each act (count, first three). |
 | `gun [pickup-type]`, `board` | Every gun mod unlocked with ammo, the gun out, the mod `pickup-type` picked (26 red 1 ... 31 yellow 3 ... 35 dark 1 ... 37 dark 3); the hoverboard unlocked with its zap, the player on it. |
@@ -1551,7 +1558,7 @@ passed, no crash.
 | `weapons-fx`, `dark-smack` | Trails, dark blast | The beam reflexor's and the plasmite RPG's trails counted on the guest; the host's dark blast hits the guest, no crash. |
 | `session-flow` | Restart, quitting | The host's Restart restarts the guest next to it; a guest's asks the host; a guest's Quit leaves the server; 7 checks. |
 | `coop-respawn` (rewritten) | Spectating | The dead guest watches the host 5 s ("Spectateur : Host", "Retour dans 5", camera on the host), its body on the ground, then comes back next to it; then the host the same; 7 checks. Each machine logs the other player once a second while it lies dead: drawn, still once its fall is over, until it comes back (2026-10-20 evening). |
-| `merchant` | Kleiver's spot | The host draws a spot, the guest gets the same; each of the four spots set by the host reaches the guest and stands on the ground; his icon on the minimap, "Marchand" in yellow over him, his line at his spot (screenshots); 8 checks. His label as drawn reads "Marchand" in French, in yellow (`log-econ`, 2026-10-20 evening). |
+| `merchant` | Kleiver's spot | The host draws a spot, the guest gets the same; each of the four spots set by the host reaches the guest and stands on the ground; his icon on the minimap, "Marchand" in yellow over him (the label read as drawn), his line at his spot; his model at each spot; at the last one the host walks into him from 4 m and stops against him, he faces it, his idle clips change (screenshots); 11 checks. |
 | `coop-protect` | Teammates | The guest's punch does not hurt the host; the host's lizard drawn under it on the guest; no blow on the host's buggy sent; 7 checks (`pvp` and `vehicle-hit` in free roam unchanged). |
 | `daxter-flut` | Daxter on a lizard | Daxter gets on the lizard the host left (triangle), drawn as Daxter, fires the scatter gun from it, jumps, rides 22 m, gets off and is Daxter again; the host draws the guest's lizard under him; 8 checks (screenshots). Since 2026-10-20 evening he fires the blaster (yellow 1, a projectile): the host draws its shots. |
 | `daxter-perch-fire` | Firing from a shoulder | Daxter on the host's shoulder fires the blaster, the host sees him there; X puts him down; 6 checks. The host logs him climbing on and its own Daxter standing for him (his puppet hidden), and draws his blaster shots (2026-10-20 evening). |
@@ -1630,10 +1637,8 @@ public IP.
 
 ## 6. Known limits
 
-- Kleiver stands at his spot but does not move or talk: his model plays its idle clip, the shop is
-  the menu page.
-- Daxter's L1 + triangle prompt and the game's gun name (shown a moment when a mod is chosen)
-  share the bottom of the screen, as the game's own prompts do.
+- Kleiver does not speak: his art group has no talking clip (only idles and a walk), so his line
+  is text and the shop is the menu page.
 - Co-op seconds are given to the lizards a level places. The leaper race and the desert's lizard
   roundup give the player their own lizard by other means (`was-leaper-race.gc`,
   `desert-lizard-task.gc`) and get none; the vehicles of the desert missions are spawned by the
@@ -1735,8 +1740,10 @@ public IP.
     already blocked; `menu-buttons` reproduced the jump on both players, then showed none.
   - *Daxter.* The D-pad takes his gun out with the mod chosen (4.8); L1 + triangle climbs on any
     Jak on foot within 2.5 m, at any time (4.16).
-  - *Kleiver* stands at his spot: his level `lkleever` borrowed into waswide while his spot is out
-    (4.20).
+  - *Kleiver* stands at his spot: his level `lkleever` borrowed into waswide while his spot is out;
+    solid (a player walking into him from 4 m stops 1.6 m away), he turns toward the player and
+    shifts between his idle clips (4.20). Daxter's gun name and ammo moved above the prompts, which
+    they overlapped (4.8).
   - *Changing mission in game* (the palace ruins' attack, Jak in the Rhino): reproduced as played
     (`mission-switch`): both players at its start, each in its own Rhino, the host seeing the
     guest drive; the user's log shows the same (the guest's Rhino, "pilot-on") until the crash.
