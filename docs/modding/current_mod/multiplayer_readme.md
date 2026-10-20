@@ -1282,6 +1282,7 @@ A script line is `<seconds> <command>`:
 | `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
 | `open-menu <page>`, `econ-grant-self <0\|1>` | A START menu page; the host's Mods menu entries, +100 precursor orbs (0) or Metal Head trophies (1). |
 | `log-eyes` | Each remote puppet's eye slot and the process that wrote it last (the puppet, our player). |
+| `trace-fx` | Log each effect another player's machine sent and we replay (group, parent, joint). |
 | `dark-bomb`, `log-dark`, `restart`, `log-restart` | The dark bomb and the dark blast ready (features and stages, full dark eco; jump then square sets the bomb off, `press l1 600` then `press l1+square 200` the blast); what the blast needs (stage, features, eco, state) and the bolts that followed a target's position; START > Restart; the restarts done and asked. |
 | `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
 | `ride-flut`, `end-flut`, `goto-flut`, `log-fldax` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state. |
@@ -1467,6 +1468,7 @@ pass.
 | `race-result` | Places and results | The guest, 4th of its racers, reads 5th with the host ahead; the host finished first waits for the guest; both first: won on both; the guest behind a racer: lost on both; 8 checks. |
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
 | `race-finish`, `race-finish-win` | Kleiver's race to the finish | Co-op from the lobby; once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers: lost on both machines; the guest reads 5th (the host's 4 racers and the host ahead). With the host's racers removed (`race-stop-racers`): the host finishes first and waits ("our result waits for the other players"), the guest second, won on both machines; 7 checks each. |
+| `pre-game` | Spargus's pre-game in co-op | Co-op from the lobby at `wascity-pre-game`: both machines run the bubble game, the guest wins (R1, the game's debug win) and its resolution streams; the host's effects replayed on the guest (7, `trace-fx`). Before the fix the guest stopped as in the user's log of 2026-10-19 (`*mp-stock-launch-spawn*` +#x143, two runs out of two); after it, three runs without a crash; 6 checks. `combat` and `props` pass again (their Daxter check now expects no Daxter of the game on a Jak player). |
 | `dark-blast`, `dark-blast-coop` | The dark blast | Dark Jak's L1 + square (`target-darkjak-bomb1`) 4 m from the other player: before the fix the host's game stopped (access violation in `vector<-cspace!` from `lightning-tracker`); now its bolt to the guest's hurtbox follows its position, the guest is hit (free roam), the guest's blast hits the host, no game stops; in co-op no damage; 7 and 6 checks. |
 | `race-real`, `race-real-daxter` (rewritten) | Kleiver's race | Both races report place and progress (the guest counts the host's 4 racers); Daxter leaving his turtle during the countdown holds the start, gets no shoulder, gets back in his own turtle: the countdown again, then the race; 8 and 10 checks. |
 
@@ -1528,9 +1530,8 @@ public IP.
 
 - Kleiver as a merchant is a spot, his icon and his name: his model is only loaded for his
   cutscenes, so nobody stands there.
-- The crash in the user's log of 2026-10-19 (the host, entering the pre-game mission, in a
-  particle launch of a `part-tracker-subsampler`) was not reproduced as such; the dark blast's
-  own crash was (4.23). Replayed effects keep to their copy's joints (counted in `log-weapons`).
+- Effects drawn in an object's local space (`sp-group-flag sp12`) are not replayed on the other
+  machines: they need the object's binding (see the change log of 2026-10-20).
 - A guest's parked vehicle is not sent: the other players only see the vehicles one drives.
 - Race places compare progress from machine to machine: a finish is timed from each machine's own
   start, which the start's wait releases within a frame or two on each.
@@ -1639,9 +1640,17 @@ public IP.
     the host's +100 orbs and trophies in the Mods menu (4.20).
   - *Fix.* Two handles were kept in global symbols, which hold 32 bits: our stolen vehicle and the
     one we drove last now live in `*mp-globals*`.
+  - *Crash of 2026-10-19 (Spargus's pre-game).* Reproduced by `pre-game` (co-op at
+    `wascity-pre-game`, the guest wins with the game's debug R1): the guest stopped at the same
+    address as in the user's log (`*mp-stock-launch-spawn*` +#x143, from a
+    `part-tracker-subsampler`). The host's effects of the game's crystal (`group-wascity-pre-game-
+    crystal-glow`...) are drawn in the crystal's local space (`sp-group-flag sp12`): a launch
+    control copies a matrix from `local-space-binding`, which overlays `fade` and only the
+    object's `set-local-space-info` sets; replayed on a tracker without it, the launch read
+    address 0 + #x20. `mp-group-replayable?` refuses those groups: three runs, no crash.
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
-    `daxter-perch-fire`, `mission-start`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`; `coop-respawn`, `race-board`,
+    `daxter-perch-fire`, `mission-start`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,
     `race-real-daxter` and `economy` rewritten or extended; commands in 5.3.
 
 - **2026-10-19 (night, second pass):** after the stop hook's review of the first pass.
