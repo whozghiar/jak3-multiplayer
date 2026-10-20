@@ -1303,6 +1303,7 @@ A script line is `<seconds> <command>`:
 | `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
 | `ride-flut`, `end-flut`, `goto-flut`, `log-fldax` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state. |
 | `respawn-manager <type>` | That task manager killed, then spawned again by the task masks, as when its mission starts. |
+| `race-extra-ahead <n>` | n more players counted ahead of us in a race (the HUD's place of a session larger than co-op allows). |
 | `race-autopilot`, `race-stop-racers` | Once a race runs (its timer going), the vehicle we drive is driven by the racers' AI to the finish (`'set-control-hook-race-ai`); every vehicle of ours but our player's removed (a race's racers: the race drives them every frame, a speed of 0 does not hold), their places frozen. |
 | `race-sim <progress x 1000> <result> <place>`, `goto-own-vehicle` | Our race reports as a race would (node 999), then our place with the players, and once finished whether our result waits and is won; stand beside the vehicle we drove last. `log-race` prints our place, progress, result, the racers ahead and the host's racers received. |
 
@@ -1466,7 +1467,12 @@ the mission starts; `steal-dup` after the handle fix). After the races, `smoke`,
 `retail-general` (retail boot) passed every check, no crash; `ride-seat-daxter` failed: Kleiver was
 drawn at the start and his shop took the L1 + triangle of the ride. His triangle now gives way
 (4.20); on that last code `ride-seat-daxter` (Kleiver put at the start), `merchant` and `economy`
-pass.
+pass. Final sweep on the round's last code (`bbc67269e`): `lobby-text`, `ui-ingame`, `menu-still`,
+`eyes`, `weapons-fx`, `dark-smack`, `dark-blast`, `dark-blast-coop`, `pre-game`, `session-flow`,
+`coop-respawn`, `merchant`, `economy`, `coop-protect`, `daxter-flut`, `daxter-perch-fire`,
+`mission-start`, `mission-trigger`, `race-result`, `race-board`, `race-real`, `race-real-daxter`,
+`race-finish-win`, `race-seventh`, `pause`, and `skin-title`, `host-quit` from a retail boot: 27
+scenarios, 185 checks, 0 failed, no crash.
 
 | Scenario | Checks | Result |
 |---|---|---|
@@ -1485,6 +1491,7 @@ pass.
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
 | `race-finish`, `race-finish-win` | Kleiver's race to the finish | Co-op from the lobby; once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers: lost on both machines; the guest reads 5th (the host's 4 racers and the host ahead). With the host's racers removed (`race-stop-racers`): the host finishes first and waits ("our result waits for the other players"), the guest second, won on both machines; 7 checks each. |
 | `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
+| `race-seventh` | Places beyond a race's own count | Jak 3's races have 5 participants at most (4 racers and the player), so two co-op players reach 6th at most (seen on the guest's HUD in `race-finish`); with two more players counted ahead (`race-extra-ahead 2`, a session of four), the guest's HUD shows the 7th, then the 8th place sprite; 5 checks. |
 | `pre-game` | Spargus's pre-game in co-op | Co-op from the lobby at `wascity-pre-game`: both machines run the bubble game, the guest wins (R1, the game's debug win) and its resolution streams; the host's effects replayed on the guest (7, `trace-fx`). Before the fix the guest stopped as in the user's log of 2026-10-19 (`*mp-stock-launch-spawn*` +#x143, two runs out of two); after it, three runs without a crash; 6 checks. `combat` and `props` pass again (their Daxter check now expects no Daxter of the game on a Jak player). |
 | `dark-blast`, `dark-blast-coop` | The dark blast | Dark Jak's L1 + square (`target-darkjak-bomb1`) 4 m from the other player: before the fix the host's game stopped (access violation in `vector<-cspace!` from `lightning-tracker`); now its bolt to the guest's hurtbox follows its position, the guest is hit (free roam), the guest's blast hits the host, no game stops; in co-op no damage; 7 and 6 checks. |
 | `race-real`, `race-real-daxter` (rewritten) | Kleiver's race | Both races report place and progress (the guest counts the host's 4 racers); Daxter leaving his turtle during the countdown holds the start, gets no shoulder, gets back in his own turtle: the countdown again, then the race; 8 and 10 checks. |
