@@ -393,11 +393,9 @@
   "1591": "<PAD_X> Acheter / porter   <PAD_TRIANGLE> Quitter",
   "1592": "Kleiver : T'as des orbes ? J'ai ce qu'il te faut.",
   "1593": "Appuyez sur <PAD_TRIANGLE> pour échanger",
-  "1594": "Votre propre véhicule, ou L1 + <PAD_TRIANGLE> près de celui d'un autre joueur pour monter avec lui",
-  "1595": "Votre propre véhicule, ou <PAD_TRIANGLE> près d'un Jak au volant pour monter sur son épaule",
-  "1596": "Passager : <PAD_TRIANGLE> pour descendre et courir dans votre propre véhicule",
-  "1597": "Sur l'épaule de Jak : <PAD_X> pour sauter et courir dans votre propre véhicule",
+  "1594": "Chaque joueur court dans son propre véhicule",
   "1598": "Spectateur : ~S",
   "1599": "Retour dans ~D",
-  "159a": "Marchand"
+  "159a": "Marchand",
+  "159b": "En attente de l'arrivée des autres joueurs"
 }

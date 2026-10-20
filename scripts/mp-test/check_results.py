@@ -733,16 +733,19 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the guest on foot gets a turtle of its own beside the host: the start goes (1)",
                 any("a vehicle for the race start of player 0" in l for l in client) and bool(gm) and gm[0][0] == "#t"
                 and len(hr) > 1 and hr[1][3] == "1", f"guest {gm[:1]}, host {hr[:2]}")
-        c.check(scenario, "riding on the back of the host's turtle counts as aboard: the countdown runs, then the start (2)",
-                any(r == "#t" and st == "target-grab-ride" for _, r, _, st in gm) and len(hr) > 3
-                and hr[2][0] == "#t" and hr[2][1] == hr[2][2] == "2" and hr[3][3] == "2", f"guest {gm}, host {hr[2:4]}")
+        c.check(scenario, "L1 + triangle at the host's turtle does not ride along in a race: the start waits (1/2) (2)",
+                len(gm) > 2 and gm[2][1] == "#f" and gm[2][0] == "#f" and len(hr) > 2 and hr[2][0] == "#t" and hr[2][1] == "1",
+                f"guest {gm[2:3]}, host {hr[2:3]}")
+        c.check(scenario, "driving its own turtle again, the start goes (2)",
+                len(gm) > 3 and gm[3][0] == "#t" and len(hr) > 4 and hr[4][3] == "2", f"guest {gm[3:4]}, host {hr[3:5]}")
         c.check(scenario, "Daxter on foot holds the start (1/2), the host may leave its vehicle meanwhile (3)",
                 any(w == "#t" and a == "1" and p == "2" and e == "#t" for w, a, p, _, _, e in hr), f"{hr}")
-        c.check(scenario, "Daxter on the driving host's shoulder: the start goes (3)",
-                bool(gm) and gm[-1][2] == "#t" and hr[-1][3] == "3", f"guest {gm[-1:]}, host {hr[-1:]}")
-        choices = [ch for (ch,) in grab(client, r"\] race choice #x(\w+)")]
-        c.check(scenario, "the start says the choice: own vehicle or ride (Jak, Daxter), get off to race alone (riding, shoulder)",
-                all(t in choices for t in ("1594", "1596", "1595", "1597")), f"{choices}")
+        c.check(scenario, "Daxter's triangle at the driving host: no shoulder in a race (3)",
+                len(gm) > 5 and gm[5][2] == "#f" and not any(p == "#t" for _, _, p, _ in gm), f"{gm[4:6]}")
+        c.check(scenario, "Daxter gets a turtle of his own and drives it as Daxter: the start goes (3)",
+                sum(1 for l in client if "a vehicle for the race start of player 0" in l) >= 2
+                and any(d == "#t" and st.startswith("target-pilot") for d, _, _, st in gm[6:])
+                and hr[-1][3] == "3", f"guest {gm[6:]}, host {hr[-1:]}")
 
     elif scenario == "race-continue":
         hm = grab(host, r"\] me " + NUM + " " + NUM + " " + NUM + r" speed \S+ state (\S+)")
@@ -753,6 +756,18 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "each player drives its own turtle, apart from the other's",
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
+
+    elif scenario == "race-result":
+        hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
+        gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")
+        c.check(scenario, "the guest, 4th of its racers, is 5th with the host ahead; the host stays 1st",
+                ("4", "#f", "racing") in gs and all(p == "0" for p, _, _ in hs), f"guest {sorted(set(gs))}")
+        c.check(scenario, "the host finished first waits while the guest races",
+                any(w == "#t" for _, w, _ in hs), f"{hs}")
+        c.check(scenario, "both finished ahead of every racer: won on both machines",
+                any(w == "#f" and won == "#t" for _, w, won in hs) and ("1", "#f", "#t") in gs, f"host {hs}, guest {gs}")
+        c.check(scenario, "the guest finished behind a racer: lost on both machines",
+                bool(hs) and hs[-1][2] == "#f" and gs[-1][2] == "#f", f"host {hs[-1:]}, guest {gs[-1:]}")
 
     elif scenario == "mission-start":
         me = grab(client, r"\] me (\S+) (\S+) (\S+) speed")
@@ -1031,6 +1046,11 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         gm = grab(client, r"\] race me driving (\S+) riding (\S+) perched (\S+) state (\S+)")
         gr = grab(client, r"\] race waiting (\S+) aboard (\d+)/(\d+) starts (\d+)")
         hr = grab(host, r"\] race waiting (\S+) aboard (\d+)/(\d+) starts (\d+)")
+        hp = grab(host, r"\] race place (\d+) progress \S+ done \d+ node (\d+) in-race (\S+)")
+        gp = grab(client, r"\] race place (\d+) progress \S+ done \d+ node (\d+) in-race (\S+)")
+        c.check(scenario, "both races report their place and progress (the players counted in each other's place)",
+                any(i == "#t" and n != "0" for _, n, i in hp) and any(i == "#t" and n != "0" for _, n, i in gp),
+                f"host {hp[-1:]}, guest {gp[-1:]}")
         if scenario == "race-real":
             c.check(scenario, "each machine's race gives its own turtle, the guest's 6 m back; both drive",
                     any("race start: our vehicle 6.0 behind" in l for l in client)
@@ -1039,9 +1059,11 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         else:
             c.check(scenario, "Daxter leaves his turtle during the countdown: the start waits again (1/2)",
                     any(w == "#t" and a == "1" for w, a, _, _ in gr), f"{gr}")
-            c.check(scenario, "Daxter on the host's shoulder: the countdown starts again, then the race",
+            c.check(scenario, "no shoulder in a race: Daxter's triangle next to the host leaves him on foot",
+                    len(gm) > 2 and gm[2][0] == "#f" and not any(p == "#t" for _, _, p, _ in gm), f"guest {gm}")
+            c.check(scenario, "back in his own turtle: the countdown starts again, then the race",
                     sum("every player aboard (2): the race starts in 10 s" in l for l in host) >= 2
-                    and bool(gm) and gm[-1][2] == "#t" and hr[-1:] and hr[-1][3] == "1",
+                    and bool(gm) and gm[-1][0] == "#t" and hr[-1:] and hr[-1][3] == "1",
                     f"guest {gm[-1:]}, host {hr[-1:]}")
 
     elif scenario == "player-list":

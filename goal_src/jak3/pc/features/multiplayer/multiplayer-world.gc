@@ -865,7 +865,8 @@
     (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
       (let ((veh (handle->process (-> *target* pilot vehicle))))
         ;; not a vehicle another player took from us (its own stands there now)
-        (when (and veh (type? veh process-drawable) (!= veh (handle->process *mp-stolen-vehicle*)))
+        (when (and veh (type? veh process-drawable) (!= veh (handle->process (-> *mp-globals* stolen-vehicle))))
+          (set! (-> *mp-globals* last-vehicle) (process->handle veh))
           (mp-add-actor (the-as process-drawable veh) (mp-actor-flag vehicle owned))
           (let ((child (-> veh child)))
             (while child
@@ -1922,6 +1923,8 @@
              (nonzero? (-> proc root))
              (> (mp-actor-kind proc) 0)
              (not (mp-driven-vehicle? proc))
+             ;; the vehicle our player left: it waits for it where it left it (a race's own vehicle)
+             (!= proc (handle->process (-> *mp-globals* last-vehicle)))
              (not (logtest? (-> proc mask) (process-mask sleep)))
              (< (-> *mp-world-state* suppressed-count) 256)
              ;; one our player is looking at sleeps once it looks away: it does not vanish under its

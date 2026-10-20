@@ -1,9 +1,10 @@
-# Race start waiting for every player aboard (co-op), host side. Each phase runs a race start of a
-# test on both machines (race-gate waits as the races' task managers do). 1: the host drives a turtle,
-# the guest is on foot: the start waits (1/2) until the guest got a turtle of its own beside the host,
-# then counts 10 s down. 2: the guest rides on the back of the host's turtle: it counts as aboard, the
-# countdown runs at once. 3: the guest plays Daxter, on foot: the start waits, the host may leave its
-# vehicle meanwhile, until Daxter sits on the driving host's shoulder.
+# Race start waiting for every player driving its own vehicle (co-op), host side. Each phase runs a
+# race start of a test on both machines (race-gate waits as the races' task managers do). 1: the
+# host drives a turtle, the guest is on foot: the start waits (1/2) until the guest got a turtle of
+# its own beside the host, then counts 10 s down. 2: the guest left its turtle and tries to ride on
+# the back of the host's: refused, the start waits until it drives again. 3: the guest plays Daxter,
+# on foot: no shoulder, the start waits (the host may leave its vehicle meanwhile) until Daxter got
+# a turtle of his own and drives it.
 1 enable
 1 name Host
 1 color 1
@@ -17,12 +18,13 @@
 66 log-race
 76 race-gate
 78 log-race
-78.5 screenshot race-countdown
-91 log-race
-98 race-gate
-99 log-race
-99.3 screenshot race-wait-daxter
-116 log-race
-117 look-player 1
-118 screenshot daxter-shoulder
-120 log
+86 log-race
+96 log-race
+103 race-gate
+104 log-race
+104.3 screenshot race-wait-daxter
+120 log-race
+135 log-race
+136 screenshot daxter-own
+150 log-race
+152 log

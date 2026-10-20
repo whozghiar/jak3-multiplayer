@@ -393,11 +393,9 @@
   "1591": "<PAD_X> Buy / wear   <PAD_TRIANGLE> Leave",
   "1592": "Kleiver: Got orbs? I've got just what you need.",
   "1593": "Press <PAD_TRIANGLE> to trade",
-  "1594": "Your own vehicle, or L1 + <PAD_TRIANGLE> next to another player's to ride with them",
-  "1595": "Your own vehicle, or <PAD_TRIANGLE> next to a driving Jak to ride on his shoulder",
-  "1596": "Riding along: <PAD_TRIANGLE> to get off and race in your own vehicle",
-  "1597": "On Jak's shoulder: <PAD_X> to jump off and race in your own vehicle",
+  "1594": "Every player races in their own vehicle",
   "1598": "Spectating: ~S",
   "1599": "Back in ~D",
-  "159a": "Merchant"
+  "159a": "Merchant",
+  "159b": "Waiting for the other players to finish"
 }

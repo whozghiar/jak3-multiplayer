@@ -74,6 +74,8 @@
 ;;   log-eyes                                                the remote puppets' eye slots and their last writer
 ;;   ride-flut | end-flut                                    ride a lizard where we stand (a level with lizards); off it
 ;;   respawn-manager <type>                                  kill that mission's task manager, which starts again
+;;   race-sim <progress x 1000> <result> <place>             our race reports a place, progress and result (node 999)
+;;   goto-own-vehicle                                        stand beside the vehicle we drove last (and left)
 ;;   goto-flut | log-fldax                                   stand 2 m from the nearest lizard waiting, facing it; Daxter on it
 ;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   restart | log-restart                                   START > Restart; restarts done, mode, master mode
@@ -2371,7 +2373,44 @@
          (format 0 "[mp-test] race me driving ~A riding ~A perched ~A state ~A~%" (logtest? (-> *mp-local* flags) (mp-flag driving))
                  (logtest? (-> *mp-local* flags) (mp-flag riding)) (logtest? (-> *mp-local* flags) (mp-flag perched)) (mp-target-state-name)
                  )
-         (format 0 "[mp-test] race choice #x~X ~S~%" (the-as int (mp-race-choice)) (lookup-text! *common-text* (mp-race-choice) #f))
+         (format 0 "[mp-test] race place ~D progress ~,,3f done ~D node ~D in-race ~A context ~A~%" (-> *mp-race* place)
+                 (-> *mp-race* own-progress) (-> *mp-race* own-done) (-> *mp-race* own-node)
+                 (< (- (mp-now) (-> *mp-race* in-race-at)) (seconds 1)) (mp-race-context?)
+                 )
+         (format 0 "[mp-test] race racers ahead ~D host racers ~D sent ~,,1f s ago~%" (-> *mp-race* ai-ahead)
+                 (-> *mp-race* host-ai-count) (* 0.0033333334 (the float (- (mp-now) (-> *mp-race* host-ai-time))))
+                 )
+         )
+        ((string= cmd "goto-own-vehicle")
+         ;; goto-own-vehicle: stand 2.5 m beside the vehicle we drove last (and left)
+         (let ((veh (the-as process-drawable (handle->process (-> *mp-globals* last-vehicle)))))
+           (when (and veh *target*)
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> veh root trans))))
+               (vector+float*! pos pos (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> veh root quat)) (meters 2.5))
+               (move-to-point! (-> *target* control) pos)
+               (vector-reset! (-> *target* control transv))
+               )
+             )
+           (format 0 "[mp-test] own vehicle ~A~%" (if veh #t #f))
+           (let ((last (the-as process-drawable (handle->process (-> *mp-globals* last-vehicle)))))
+             (format 0 "[mp-test] last vehicle ~A draw #x~X asleep ~A~%" last (if last (-> last draw status) 0)
+                     (and last (logtest? (-> last mask) (process-mask sleep)))
+                     )
+             )
+           )
+         )
+        ((string= cmd "race-sim")
+         ;; race-sim <progress x 1000> <result> <place>: our race reports as a race would (node 999),
+         ;; then our place with the players and, finished, whether our result waits and is won
+         (let* ((progress (* 0.001 (the float (mp-test-int))))
+                (done (mp-test-int))
+                (rank (mp-test-int))
+                (place (mp-race-position rank progress done 999))
+                )
+           (format 0 "[mp-test] race sim place ~D wait ~A won ~A~%" place (mp-race-result-wait? (= done 1))
+                   (if (nonzero? done) (mp-race-won? (= done 1)) 'racing)
+                   )
+           )
          )
         ((string= cmd "beam-at-host")
          ;; beam-at-host <dx> <dz>: a waypoint beam dx, dz meters from the host, whose process checks

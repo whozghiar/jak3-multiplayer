@@ -1,6 +1,7 @@
 # A real race in co-op with Daxter, guest side: Join Game > Connect, X ready, follows into Kleiver's
 # race as Daxter, in a turtle of its own; during the start's countdown it leaves it (triangle), comes
-# next to the host and jumps on its shoulder (triangle): the countdown starts again, then the race.
+# next to the host and presses triangle: no shoulder in a race; back at its own turtle, triangle puts
+# it in again: the countdown starts again, then the race.
 1 enable
 1 name Guest
 1 color 2
@@ -28,7 +29,13 @@
 69.5 press triangle 100
 70 log-race
 70.5 log-coop
-71 screenshot perched
+71 screenshot no-shoulder
+71.5 goto-player 0 0 -6
+71.8 log-vehicles
+71.9 log-me
+72 goto-own-vehicle
+73 press triangle 100
+76 log-race
 85 log-race
 85.5 log-coop
 86 screenshot racing

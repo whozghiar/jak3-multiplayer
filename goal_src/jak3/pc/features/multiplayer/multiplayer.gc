@@ -99,6 +99,9 @@
                   ;; player does too; guest to the host: asks for it ("Restart for everyone")
   (mission-start 25) ;; co-op: the sender's mission started, its task node iarg 0 ("Missions
                      ;; started together")
+  (race-progress 26) ;; the sender's race: its task node iarg 0, its result iarg 1 (0 racing, 1
+                     ;; finished ahead of every racer, 2 behind one), its progress fvec x; from the
+                     ;; host, its racers' progress too (iarg 2 of them, floats in text) ("Races")
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -237,8 +240,6 @@
 ;; driven vehicle (body and wheels) are dropped here at once (mp-stolen-copy?), -1 for none.
 (define *mp-stolen-from* -1)
 (define *mp-stolen-until* 0)
-;; Our vehicle another player took: no longer sent, hidden, removed once we are out.
-(define *mp-stolen-vehicle* (the-as handle #f))
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
 
@@ -297,6 +298,25 @@
    (aside?    symbol)     ;; our vehicle of a race start moved back
    (starts    int32)      ;; starts after every player boarded, vehicles got (test log)
    (gifts     int32)
+   ;; places and results with the players counted (mp-race-position)
+   (in-race-at  time-frame) ;; last frame our race ran
+   (own-progress float)     ;; our progress, our race's task node, our result (as sent)
+   (own-node    int32)
+   (own-done    int32)
+   (sent        time-frame) ;; last progress sent
+   (finished-at time-frame) ;; when we finished, 0 racing
+   (result-hold time-frame) ;; last frame our result waited for the other players
+   (place       int32)      ;; our place with the players counted, from 0 (test log)
+   (prog        float 8)    ;; each remote player's progress, race, result, and when it came
+   (prog-node   int32 8)
+   (prog-done   int32 8)
+   (prog-time   time-frame 8)
+   (ai          float 8)    ;; our race's racers' progress (mp-race-ai-progress), as many as ai-count
+   (ai-count    int32)
+   (host-ai     float 8)    ;; the host's racers' progress, as it sent them, and when
+   (host-ai-count int32)
+   (host-ai-time  time-frame)
+   (ai-ahead    int32)      ;; racers ahead of us (test log)
    )
   )
 
@@ -356,11 +376,18 @@
    (lobby-go      time-frame) ;; host: real-clock time the lobby's countdown ends, 0 none
    (lobby-cancel  time-frame) ;; when the lobby's countdown was cancelled (its hint), 0 never
    (lobby-last    int32)      ;; the countdown's ms left as last seen (a guest notices a cancel)
+   ;; handles are 64 bits: a global symbol would keep 32 of them
+   (stolen-vehicle handle)    ;; our vehicle another player took: no longer sent, hidden, removed
+                              ;; once we are out
+   (last-vehicle  handle)     ;; the vehicle our player drove last (mp-collect-props): a guest never
+                              ;; puts it to sleep
    )
   )
 
 (define *mp-globals* (new 'global 'mp-globals))
 (set! (-> *mp-globals* manager) (the-as handle #f))
+(set! (-> *mp-globals* stolen-vehicle) (the-as handle #f))
+(set! (-> *mp-globals* last-vehicle) (the-as handle #f))
 
 ;; On-screen notification (joins, leaves, kicks...).
 (define *mp-message* (new 'global 'string 128 (the-as string #f)))
@@ -2681,6 +2708,8 @@
 (define-extern mp-econ-buy (function int int none))
 (define-extern mp-apply-restart (function mp-event none)) ;; "Restart for everyone", below
 (define-extern mp-apply-mission-start (function mp-event none)) ;; "Missions started together", below
+(define-extern mp-apply-race-progress (function mp-event none)) ;; "Races", below
+(define-extern mp-race-context? (function symbol))
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -2701,6 +2730,7 @@
    (last-hit    time-frame)
    (spawn-retry time-frame) ;; last failed puppet spawn (process pool full)
    (merchant-icon connection-minimap) ;; Kleiver's icon on the minimap while he is out, #f
+   (gift-slot   int32)      ;; Daxter out of his mode for a vehicle at that player's race start, -1
    (event       mp-event :inline)
    )
   )
@@ -2853,7 +2883,7 @@
    thief's appears in its place) and removed once we are out."
   (when (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)))
     (set! (-> self steal-veh) (-> *target* pilot vehicle))
-    (set! *mp-stolen-vehicle* (-> *target* pilot vehicle))
+    (set! (-> *mp-globals* stolen-vehicle) (-> *target* pilot vehicle))
     (let ((veh (handle->process (-> *target* pilot vehicle))))
       (when (and veh (type? veh process-drawable))
         (mp-hide-tree (the-as process-drawable veh))
@@ -3165,6 +3195,9 @@
         (((mp-event-kind mission-start))
          (mp-apply-mission-start ev)
          )
+        (((mp-event-kind race-progress))
+         (mp-apply-race-progress ev)
+         )
         )
       )
     )
@@ -3336,6 +3369,7 @@
             (< (-> self steal-want) 0)
             (zero? (-> self take-id))
             (not (handle->process (-> self board-veh)))
+            (< (-> self gift-slot) 0)
             (or (= state 'target-stance) (= state 'target-gun-stance)) ;; Jak's gun out: his mode puts it away
             (not (focus-test? *target* indax pilot dead grabbed))
             )
@@ -3580,7 +3614,7 @@
       ;; removed without its death (no explosion where the thief's vehicle now stands)
       (deactivate veh)
       (set! (-> self steal-veh) (the-as handle #f))
-      (set! *mp-stolen-vehicle* (the-as handle #f))
+      (set! (-> *mp-globals* stolen-vehicle) (the-as handle #f))
       )
     )
   (none)
@@ -3599,6 +3633,9 @@
              )
     (let ((best -1)
           (best-dist (meters 5))
+          ;; in a co-op race every player drives its own vehicle ("Races"): no other player's
+          ;; vehicle to steal or ride in, our own still boarded
+          (race? (mp-race-context?))
           )
       (dotimes (i MP_MAX_PLAYERS)
         (let ((st (mp-remote-state i)))
@@ -3606,6 +3643,7 @@
           ;; the level names of the two players' places; in co-op Daxter never robs the Jak driving
           ;; it: triangle puts him on that Jak's shoulder (mp-update-perch)
           (when (and st
+                     (not race?)
                      (logtest? (-> st flags) (mp-flag driving))
                      (>= (-> st veh-type) 0)
                      (not (and (mp-coop?) (focus-test? *target* indax) (mp-jak-driving? st)))
@@ -3620,7 +3658,7 @@
           )
         )
       (set! *mp-prompt-slot* best)
-      (set! *mp-prompt-replica* (if (< best 0)
+      (set! *mp-prompt-replica* (if (and (< best 0) (not race?))
                                     (mp-nearest-replica-vehicle (-> *target* control trans))
                                     -1
                                     )
@@ -4104,6 +4142,8 @@
       (when (and (focus-test? *target* indax)
                  (not (focus-test? *target* in-air grabbed dead hit))
                  (< *mp-ride-slot* 0)
+                 ;; in a co-op race every player drives its own vehicle ("Races")
+                 (not (mp-race-context?))
                  )
         (let ((best-dist (meters 2.5)))
           (dotimes (i MP_MAX_PLAYERS)
@@ -4219,6 +4259,7 @@
   (set! (-> self steal-want) -1)
   (set! (-> self tp-slot) -1)
   (set! (-> self merchant-icon) #f)
+  (set! (-> self gift-slot) -1)
   (go mp-manager-active)
   )
 
@@ -4831,28 +4872,38 @@
 ;; ------------------------------------------------------------------------------------------------
 ;; Races
 ;;
-;; In co-op, every player can race with a vehicle of its own, or ride with another: the race's start
-;; waits until every connected player is aboard (one still loading the host's world is not).
+;; In co-op, every player races in a vehicle of its own: the race's start waits until every connected
+;; player drives one (one still loading the host's world does not); no player rides along with
+;; another or on a Jak's shoulder meanwhile. The players count in each other's place, and the race
+;; is won only when they take the first places.
 ;;   - A race gives its vehicle at a race continue point (target-death.gc arrive-at-continue, flag
 ;;     race): each machine running the race gives its own player one, at the same place. A guest's
 ;;     player is moved back before its vehicle appears (6 m per slot, behind the grid), so the
 ;;     vehicles do not stand in each other.
-;;   - A Jak on foot within 60 m of another player whose race start waits gets a vehicle of that
-;;     player's type beside it, once a minute at most, unless he drove in the last 30 s (he left
-;;     his vehicle to ride with another): every player has one when needed.
+;;   - A player on foot within 60 m of another player whose race start waits gets a vehicle of that
+;;     player's type beside it, once every 20 s at most, unless it drove in the last 30 s (its own
+;;     waits where it left it): every player has one when needed. Daxter leaves his mode first (it
+;;     ignores 'change-mode 'pilot) and drives as Daxter.
 ;;   - The race's task manager (course-race.gc for Kleiver's race and the beast hunters' time trial and
-;;     rally, artifact-race.gc for Damas's races) waits before the start while a player is not aboard:
-;;     driving, riding a seat of another player's vehicle (L1 + triangle), or Daxter on a driving
-;;     Jak's shoulder (triangle). "Waiting for every player aboard: 1/2" shows at the bottom. Once
-;;     every player is aboard, "The race starts in 10" counts down: a player may still leave its
-;;     vehicle to ride with another (the wait then starts again). Meanwhile the players may leave
-;;     their vehicle (the race forbids it, pilot-exit).
+;;     rally, artifact-race.gc for Damas's races) waits before the start while a player does not
+;;     drive. "Waiting for every player aboard: 1/2" shows at the bottom. Once every player drives,
+;;     "The race starts in 10" counts down (again when a player leaves its vehicle). Meanwhile the
+;;     players may leave their vehicle (the race forbids it, pilot-exit).
+;;   - From the start's wait to the finish no ride along (mp-update-vehicle-interaction) and no
+;;     shoulder (mp-update-perch): mp-race-context?.
+;;   - Places: a running race (race-manager.gc, its manager's active post) calls mp-race-position
+;;     every frame with our place among its racers and our progress (laps done and the part of the
+;;     lap, or a finish: the earlier the larger, mp-racer-progress), and mp-race-ai-progress with
+;;     each racer's; ours goes to the others 5 times a second, the host's racers' with it. The
+;;     racers every player sees and passes are the host's (a guest's own sleep, 1.2): a guest
+;;     counts the host's racers ahead of it, the host its own. The HUD's place (*game-info*
+;;     race-position, sprites 1st to 8th) adds the players ahead of us.
+;;   - Result: at its finish a player is ahead of every racer or not (counted as above). One ahead
+;;     of every racer waits (60 s at most) until the other players of the race finished ("Waiting
+;;     for the other players to finish"); the race is won when every one of them finished ahead of
+;;     every racer (the players took the first places), lost otherwise. A time trial keeps its stock
+;;     result (its score).
 ;; ------------------------------------------------------------------------------------------------
-
-(defun mp-aboard? ((st mp-player-state))
-  "#t when the player of `st` is aboard: driving, riding with a driver, or Daxter on a Jak's shoulder."
-  (logtest? (-> st flags) (mp-flag driving riding perched))
-  )
 
 (defconstant MP_RACE_READY (seconds 10)) ;; the start's countdown once every player is aboard
 
@@ -4863,14 +4914,14 @@
    alone or in free roam, #f: the stock start."
   (let ((r *mp-race*)
         (players 1)
-        (aboard (if (mp-aboard? *mp-local*) 1 0))
+        (aboard (if (logtest? (-> *mp-local* flags) (mp-flag driving)) 1 0))
         )
     (when (mp-coop?)
       (dotimes (i MP_MAX_PLAYERS)
         (let ((st (mp-remote-state i)))
           (when st
             (+! players 1)
-            (if (mp-aboard? st)
+            (if (logtest? (-> st flags) (mp-flag driving))
                 (+! aboard 1)
                 )
             )
@@ -4921,6 +4972,193 @@
   (and (mp-online?) (< (- (mp-now) (-> *mp-race* hold-time)) (seconds 0.3)))
   )
 
+(defun mp-race-context? ()
+  "#t in co-op from a race start's wait to its finish: every player drives its own vehicle."
+  (and (mp-coop?) (or (mp-race-waiting?) (< (- (mp-now) (-> *mp-race* in-race-at)) (seconds 1))))
+  )
+
+(defun mp-race-mate? ((i int))
+  "#t when remote player `i` runs our race, by what it sent: within 3 s while racing, until another
+   race once it finished (its result stays)."
+  (let ((r *mp-race*))
+    (and (mp-coop?)
+         (mp-remote-state i)
+         (nonzero? (-> r own-node))
+         (= (-> r prog-node i) (-> r own-node))
+         (< (- (mp-now) (-> r prog-time i)) (if (zero? (-> r prog-done i))
+                                                (seconds 3)
+                                                (seconds 300)
+                                                )
+            )
+         )
+    )
+  )
+
+(defun mp-race-ai-progress ((i int) (progress float))
+  "Called every frame by a running race (race-manager.gc) with racer `i`'s progress, before
+   mp-race-position: kept for the event the host sends (8 racers at most)."
+  (let ((r *mp-race*))
+    (when (< (-> r ai-count) 8)
+      (set! (-> r ai (-> r ai-count)) progress)
+      (+! (-> r ai-count) 1)
+      )
+    )
+  (none)
+  )
+
+(defun mp-race-ai-ahead ((rank int) (progress float))
+  "Racers ahead of us: a guest in co-op, the host's (they are the ones it sees), from what the host
+   sent within 3 s; else our race's own (`rank`)."
+  (let ((r *mp-race*))
+    (cond
+      ((and (mp-coop?)
+            (!= *mp-mode* (mp-mode host))
+            (= (-> r prog-node 0) (-> r own-node))
+            (< (- (mp-now) (-> r host-ai-time)) (seconds 3))
+            )
+       (let ((n 0))
+         (dotimes (i (-> r host-ai-count))
+           (if (< progress (-> r host-ai i))
+               (+! n 1)
+               )
+           )
+         n
+         )
+       )
+      (else
+        rank
+        )
+      )
+    )
+  )
+
+(defun mp-race-position ((rank int) (progress float) (done int) (node int))
+  "Called every frame by a running race (race-manager.gc) with our place among its racers (from 0),
+   our progress (above), our result (0 racing, 1 finished ahead of every racer, 2 behind one) and
+   its task node: sent to the others 5 times a second, at once when the result changes. Returns our
+   place with the players of the race ahead of us counted, 7 (8th) at most."
+  (let* ((r *mp-race*)
+         (ai-ahead (begin
+                     (set! (-> r own-node) node)
+                     (mp-race-ai-ahead rank progress)
+                     )
+                   )
+         (place ai-ahead)
+         )
+    (set! (-> r in-race-at) (mp-now))
+    (set! (-> r ai-ahead) ai-ahead)
+    ;; our result, fixed at our finish: ahead of every racer (1) or not (2)
+    (cond
+      ((zero? done)
+       (set! (-> r finished-at) 0)
+       )
+      ((zero? (-> r own-done))
+       (set! (-> r finished-at) (mp-now))
+       (set! done (if (zero? ai-ahead) 1 2))
+       )
+      (else
+        (set! done (-> r own-done))
+        )
+      )
+    (let ((changed? (!= done (-> r own-done))))
+      (set! (-> r own-progress) progress)
+      (set! (-> r own-node) node)
+      (set! (-> r own-done) done)
+      (when (and (mp-coop?) (or changed? (>= (- (mp-now) (-> r sent)) (seconds 0.2))))
+        (set! (-> r sent) (mp-now))
+        (let ((ev (new 'stack 'mp-event)))
+          (set! (-> ev kind) (mp-event-kind race-progress))
+          (set! (-> ev to) -1)
+          (set! (-> ev iarg 0) node)
+          (set! (-> ev iarg 1) done)
+          (set! (-> ev fvec x) progress)
+          ;; the host's racers, the ones every player races against
+          (set! (-> ev iarg 2) (if (= *mp-mode* (mp-mode host)) (-> r ai-count) 0))
+          (dotimes (i (-> ev iarg 2))
+            (set! (-> (the-as (pointer float) (-> ev text)) i) (-> r ai i))
+            )
+          (pc-mp-send-event ev)
+          )
+        )
+      )
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (and (mp-race-mate? i) (< progress (-> r prog i)))
+          (+! place 1)
+          )
+      )
+    (set! (-> r place) place)
+    (set! (-> r ai-count) 0)
+    (min place 7)
+    )
+  )
+
+(defun mp-apply-race-progress ((ev mp-event))
+  "Another player's race progress (mp-race-position)."
+  (let ((r *mp-race*)
+        (i (-> ev from))
+        )
+    (when (and (>= i 0) (< i MP_MAX_PLAYERS))
+      (set! (-> r prog i) (-> ev fvec x))
+      (set! (-> r prog-node i) (-> ev iarg 0))
+      (set! (-> r prog-done i) (-> ev iarg 1))
+      (set! (-> r prog-time i) (mp-now))
+      (when (and (zero? i) (> (-> ev iarg 2) 0))
+        (set! (-> r host-ai-count) (min 8 (-> ev iarg 2)))
+        (dotimes (k (-> r host-ai-count))
+          (set! (-> r host-ai k) (-> (the-as (pointer float) (-> ev text)) k))
+          )
+        (set! (-> r host-ai-time) (mp-now))
+        )
+      )
+    )
+  (none)
+  )
+
+(defconstant MP_RACE_RESULT_WAIT (seconds 60))
+
+(defun mp-race-result-wait? ((first? symbol))
+  "Called by a race every frame once our player finished: #t while, in co-op, we finished ahead of
+   every racer (our result, mp-race-position; `first?` #f for a time trial) and another player of
+   the race still races, 60 s at most: our result waits for theirs."
+  (let ((r *mp-race*)
+        (wait? #f)
+        )
+    (when (and (mp-coop?) (= (-> r own-done) 1) first? (< (- (mp-now) (-> r finished-at)) MP_RACE_RESULT_WAIT))
+      (dotimes (i MP_MAX_PLAYERS)
+        (if (and (mp-race-mate? i) (zero? (-> r prog-done i)))
+            (set! wait? #t)
+            )
+        )
+      )
+    (when wait?
+      (if (>= (- (mp-now) (-> r result-hold)) (seconds 1))
+          (format 0 "[multiplayer] race finished: our result waits for the other players~%")
+          )
+      (set! (-> r result-hold) (mp-now))
+      )
+    wait?
+    )
+  )
+
+(defun mp-race-won? ((first? symbol))
+  "Our race's result: the stock (finished ahead of every racer of our race, `first?`) offline or in
+   free roam; in co-op, won only when every player of the race finished ahead of every racer (our
+   result as mp-race-position counted it, theirs as they sent it)."
+  (let* ((r *mp-race*)
+         (won? (if (mp-coop?) (= (-> r own-done) 1) first?))
+         )
+    (when (mp-coop?)
+      (dotimes (i MP_MAX_PLAYERS)
+        (if (and (mp-race-mate? i) (!= (-> r prog-done i) 1))
+            (set! won? #f)
+            )
+        )
+      (format 0 "[multiplayer] race result: ~S (ours ~S)~%" (if won? "won" "lost") (if first? "first" "behind a racer"))
+      )
+    won?
+    )
+  )
+
 (defun mp-update-race ()
   "Every frame from the hook: while our race start waits, the player may leave its vehicle (a
    setting of ours over the race's pilot-exit #f, *setting-control* engine-hi)."
@@ -4939,9 +5177,21 @@
   (none)
   )
 
+(define-extern mp-race-gift-vehicle (function int none :behavior mp-manager))
+
 (defbehavior mp-update-race-vehicles mp-manager ()
-  "In game, from the manager: our vehicle of a race start moved back (a guest), and a vehicle for us
-   when another player's race start waits near us and we are on foot (see above)."
+  "In game, from the manager: our vehicle of a race start moved back (a guest), off another
+   player's vehicle or shoulder once a co-op race begins, and a vehicle for us when another
+   player's race start waits near us and we are on foot (see above)."
+  ;; a passenger or a Daxter on a shoulder when the race begins: down, to race in its own vehicle
+  (when (mp-race-context?)
+    (if (>= *mp-ride-slot* 0)
+        (mp-stop-riding)
+        )
+    (if (>= *mp-perch-slot* 0)
+        (mp-stop-perch)
+        )
+    )
   (let ((r *mp-race*))
     ;; a race continue point gives the vehicle where the player stands (change-mode 'pilot at the end
     ;; of target-continue): before that, a guest's player moves aside
@@ -4971,32 +5221,66 @@
     (if (focus-test? *target* pilot)
         (set! (-> r drove) (mp-now))
         )
-    (when (and (mp-online?)
-               (or (zero? (-> r drove)) (>= (- (mp-now) (-> r drove)) (seconds 30)))
-               (= (mp-target-state-name) 'target-stance)
-               (not (focus-test? *target* indax pilot))
-               (< *mp-ride-slot* 0)
-               (< *mp-perch-slot* 0)
-               (or (zero? (-> r given)) (>= (- (mp-now) (-> r given)) (seconds 60)))
-               )
-      (dotimes (i MP_MAX_PLAYERS)
-        (let ((st (mp-remote-state i)))
-          (when (and st
-                     (logtest? (-> st flags) (mp-flag race-wait))
-                     (logtest? (-> st flags) (mp-flag driving))
-                     (>= (-> st veh-type) 0)
-                     (< (vector-vector-distance (-> *target* control trans) (-> st veh-trans)) (meters 60))
-                     )
-            (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st veh-trans))))
-              (vector+float*! pos pos (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> st veh-quat)) (meters 4.5))
+    (let ((state (mp-target-state-name)))
+      (when (and (mp-online?)
+                 (or (zero? (-> r drove)) (>= (- (mp-now) (-> r drove)) (seconds 30)))
+                 (or (= state 'target-stance) (= state 'target-indax-stance))
+                 (not (focus-test? *target* pilot))
+                 (< *mp-ride-slot* 0)
+                 (< *mp-perch-slot* 0)
+                 (< (-> self gift-slot) 0)
+                 (or (zero? (-> r given)) (>= (- (mp-now) (-> r given)) (seconds 20)))
+                 )
+        (dotimes (i MP_MAX_PLAYERS)
+          (let ((st (mp-remote-state i)))
+            (when (and st
+                       (logtest? (-> st flags) (mp-flag race-wait))
+                       (logtest? (-> st flags) (mp-flag driving))
+                       (>= (-> st veh-type) 0)
+                       (< (vector-vector-distance (-> *target* control trans) (-> st veh-trans)) (meters 60))
+                       )
               (set! (-> r given) (mp-now))
-              (when (mp-get-vehicle-at (-> st veh-type) pos (-> st veh-quat))
-                (+! (-> r gifts) 1)
-                (format 0 "[multiplayer] a vehicle for the race start of player ~D~%" i)
+              (cond
+                ((focus-test? *target* indax)
+                 ;; Daxter: out of his mode first, the vehicle once he stands (below)
+                 (set! (-> self gift-slot) i)
+                 (send-event *target* 'end-mode 'indax)
+                 )
+                (else
+                  (mp-race-gift-vehicle i)
+                  )
                 )
+              (set! i MP_MAX_PLAYERS)
               )
-            (set! i MP_MAX_PLAYERS)
             )
+          )
+        )
+      ;; Daxter out of his mode: the vehicle now (within 2 s, else he goes back to his mode)
+      (when (>= (-> self gift-slot) 0)
+        (cond
+          ((= state 'target-stance)
+           (mp-race-gift-vehicle (-> self gift-slot))
+           (set! (-> self gift-slot) -1)
+           )
+          ((>= (- (mp-now) (-> r given)) (seconds 2))
+           (set! (-> self gift-slot) -1)
+           )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-race-gift-vehicle mp-manager ((slot int))
+  "A vehicle of player `slot`'s type beside its vehicle, for its race start (see above)."
+  (let ((st (mp-remote-state slot)))
+    (when st
+      (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> st veh-trans))))
+        (vector+float*! pos pos (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> st veh-quat)) (meters 4.5))
+        (when (mp-get-vehicle-at (-> st veh-type) pos (-> st veh-quat))
+          (+! (-> *mp-race* gifts) 1)
+          (format 0 "[multiplayer] a vehicle for the race start of player ~D~%" slot)
           )
         )
       )
@@ -5006,30 +5290,18 @@
 
 (define *mp-race-line* (new 'global 'string 128 (the-as string #f)))
 
-(defun mp-race-choice ()
-  "The choice a race start leaves us, as the text that says it: on Jak's shoulder or riding in
-   another player's vehicle, how to get off and race in our own; else our own vehicle, or how to
-   ride with another player (Jak: L1 + triangle at their vehicle; Daxter: triangle at a driving
-   Jak, on his shoulder)."
-  (cond
-    ((>= *mp-perch-slot* 0)
-     (text-id progress-mp-race-choice-perched)
-     )
-    ((>= *mp-ride-slot* 0)
-     (text-id progress-mp-race-choice-riding)
-     )
-    ((= (-> *mp-config* character) 1)
-     (text-id progress-mp-race-choice-daxter)
-     )
-    (else
-      (text-id progress-mp-race-choice-jak)
+(defun mp-draw-race-wait ()
+  "While our race start waits: how many players are aboard, then the start's countdown; above, that
+   every player races in its own vehicle, shrunk to fit clear of the prompts and the minimap. While
+   our result waits for the other players: that it does."
+  (when (< (- (mp-now) (-> *mp-race* result-hold)) (seconds 0.3))
+    (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 296 0.0 (font-color default) (font-flags shadow kerning middle large))))
+      (set-width! ctx 512)
+      (set-height! ctx 40)
+      (set! (-> ctx scale) 0.5)
+      (print-game-text (lookup-text! *common-text* (text-id progress-mp-race-finish-wait) #f) ctx #f 44 (bucket-id hud-draw-hud-alpha))
       )
     )
-  )
-
-(defun mp-draw-race-wait ()
-  "While our race start waits: how many players are aboard, then the start's countdown; above, the
-   choice it leaves us (mp-race-choice), shrunk to fit clear of the prompts and the minimap."
   (when (mp-race-waiting?)
     (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 296 0.0 (font-color default) (font-flags shadow kerning middle large)))
           (r *mp-race*)
@@ -5048,7 +5320,7 @@
       (print-game-text *mp-race-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
       ;; above the count: below it are the vehicle and shoulder prompts (mp-draw-prompt, x 22-372 from
       ;; y 320) and the minimap (right, from y 283, its circle reaching x 406); 360 wide at most, centered
-      (let ((line (lookup-text! *common-text* (mp-race-choice) #f)))
+      (let ((line (lookup-text! *common-text* (text-id progress-mp-race-own) #f)))
         (set! (-> ctx origin y) 270.0)
         (set! (-> ctx scale) 0.4)
         (let ((w (-> (get-string-length line ctx) length)))

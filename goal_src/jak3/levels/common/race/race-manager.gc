@@ -23,6 +23,29 @@
   )
 
 (declare-type turbo-pickup process-drawable)
+
+;; MOD multiplayer: in co-op the players count in each other's place, and the race is won when they
+;; take the first places (pc/features/multiplayer/multiplayer.gc, "Races")
+(define-extern mp-race-position (function int float int int int))
+(define-extern mp-race-ai-progress (function int float none))
+(define-extern mp-race-result-wait? (function symbol symbol))
+(define-extern mp-race-won? (function symbol symbol))
+
+(defun mp-racer-progress ((rs race-state) (r racer-state))
+  "MOD multiplayer: how far racer `r` is, comparable from one machine to another: laps done and the
+   part of the lap, or once finished 1000 minus its time (the earlier the larger)."
+  (cond
+    ((logtest? (-> r flags) (racer-state-flags rsf1))
+     (- 1000.0 (* 0.0001 (the float (- (-> r finish-time) (-> rs race-start-time)))))
+     )
+    ((logtest? (-> r flags) (racer-state-flags rsf0))
+     (+ (the float (-> r lap-count)) (-> r lap-distance))
+     )
+    (else
+      0.0
+      )
+    )
+  )
 (define-extern race-turbo-pickup-spawn (function process vector turbo-pickup))
 (define-extern race-vehicle-entity-hack (function none))
 
@@ -1258,7 +1281,32 @@
           )
       (set! (-> gp-0 target-pos) (-> s5-0 pos))
       (let ((v1-5 *game-info*))
-        (set! (-> v1-5 race-position) (-> s5-0 rank))
+        ;; MOD multiplayer: our place with the other players of the race counted (co-op); our
+        ;; progress and result go to them, and the racers' progress (the host's racers are the
+        ;; ones every player races against)
+        (dotimes (s4-0 (-> gp-0 racer-count))
+          (if (!= s4-0 (-> gp-0 i-player))
+              (mp-race-ai-progress s4-0 (mp-racer-progress gp-0 (-> gp-0 racer-array s4-0)))
+              )
+          )
+        (set! (-> v1-5 race-position)
+              (mp-race-position
+                (-> s5-0 rank)
+                (mp-racer-progress gp-0 s5-0)
+                (cond
+                  ((not (logtest? (-> s5-0 flags) (racer-state-flags rsf1)))
+                   0
+                   )
+                  ((zero? (-> s5-0 finish-count))
+                   1
+                   )
+                  (else
+                    2
+                    )
+                  )
+                (the-as int (-> gp-0 info task-node))
+                )
+              )
         (set! (-> v1-5 race-current-lap-count) (min (+ (-> s5-0 lap-count) 1) (-> self race-state info lap-count)))
         (set! (-> v1-5 race-total-lap-count) (-> self race-state info lap-count))
         (let ((a0-12 (-> gp-0 current-time)))
@@ -1294,7 +1342,14 @@
       (if (or (logtest? (-> s5-0 flags) (racer-state-flags rsf2)) (not *target*) (focus-test? *target* dead))
           (go-virtual fail)
           )
-      (when (logtest? (-> s5-0 flags) (racer-state-flags rsf1))
+      ;; MOD multiplayer: a finish ahead of every racer waits for the other players' result (co-op)
+      (when (and (logtest? (-> s5-0 flags) (racer-state-flags rsf1))
+                 (not (mp-race-result-wait? (and (not (logtest? (-> gp-0 info flags) (racer-info-flag rif6)))
+                                                 (zero? (-> s5-0 finish-count))
+                                                 )
+                                            )
+                      )
+                 )
         (when (not (logtest? (-> s5-0 flags) (racer-state-flags rsf5)))
           (logior! (-> s5-0 flags) (racer-state-flags rsf5))
           (set! (-> gp-0 new-score?) (save-score self (the-as int (- (-> s5-0 finish-time) (-> gp-0 race-start-time)))))
@@ -1306,7 +1361,8 @@
         (set! (-> self show-stats?) #f)
         (set! (-> gp-0 player-win?) (if (logtest? (-> gp-0 info flags) (racer-info-flag rif6))
                                         (-> gp-0 new-score?)
-                                        (zero? (-> s5-0 finish-count))
+                                        ;; MOD multiplayer: in co-op, won when every player finished first
+                                        (mp-race-won? (zero? (-> s5-0 finish-count)))
                                         )
               )
         (if (-> gp-0 player-win?)

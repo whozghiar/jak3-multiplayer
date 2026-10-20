@@ -1,6 +1,7 @@
-# Race start waiting for every player aboard (co-op), guest side (see the host's script): playing
-# Jak (the co-op offer made it Daxter), on foot, gets a turtle beside the host; leaves it and rides on
-# the back of the host's; then plays Daxter and jumps on the driving host's shoulder.
+# Race start waiting for every player driving its own vehicle (co-op), guest side (see the host's
+# script): playing Jak, on foot, gets a turtle beside the host; leaves it and tries L1 + triangle at
+# the back of the host's (refused), then drives a turtle again; then plays Daxter, whose triangle
+# next to the driving host does not put him on its shoulder, and gets a turtle of his own.
 1 enable
 1 name Guest
 1 color 2
@@ -15,21 +16,24 @@
 55 log-race
 55.5 screenshot two-vehicles
 67 press triangle 300
-70 goto-player 0 0 -3
-71 press l1+triangle 200
 74 race-gate
-76 log-race
-76.5 screenshot choice-riding
-87 log-race
-89 press triangle 300
-91 character 1
-95 goto-player 0 2 0
-96 race-gate
-97 log-race
-97.5 screenshot choice-daxter
-99 goto-player 0 2 0
-100 press triangle 100
+75 goto-player 0 0 -3
+75.5 press l1+triangle 200
+78 log-race
+78.5 screenshot no-ride
+80 vehicle 12
+84 log-race
+96 press triangle 300
+97 character 1
+100 goto-player 0 2 0
+101 race-gate
 102 log-race
-102.5 screenshot perched
-115 log-race
-120 log
+102.5 screenshot daxter-wait
+104 goto-player 0 2 0
+105 press triangle 100
+107 log-race
+120 log-race
+132 log-race
+132.5 screenshot daxter-own
+145 log-race
+150 log
