@@ -2815,6 +2815,7 @@
 (define-extern mp-draw-race-wait (function none))
 (define-extern mp-draw-beam-count (function none)) ;; "Waypoints reached together", below
 (define-extern mp-draw-merchant (function none))
+(define-extern mp-update-merchant-model (function none :behavior mp-manager)) ;; "Economy", below
 (define-extern mp-draw-merchant-name (function dma-buffer none))
 (define-extern mp-merchant-set-spot (function int none))
 (define-extern mp-draw-spectate (function none)) ;; "Co-op: back next to a teammate", below
@@ -2845,6 +2846,8 @@
    (last-hit    time-frame)
    (spawn-retry time-frame) ;; last failed puppet spawn (process pool full)
    (merchant-icon connection-minimap) ;; Kleiver's icon on the minimap while he is out, #f
+   (kleiver     handle)     ;; his model at his spot (mp-update-merchant-model), #f
+   (kleiver-borrow? symbol) ;; our borrow setting asks for his level (lkleever)
    (gift-slot   int32)      ;; Daxter out of his mode for a vehicle at that player's race start, -1
    (event       mp-event :inline)
    )
@@ -4595,6 +4598,7 @@
       (mp-daxter-guns)
       (mp-update-session)
       (mp-update-race-vehicles)
+      (mp-update-merchant-model)
       )
     (else
       (set! *mp-ride-slot* -1)
@@ -4644,6 +4648,8 @@
   (set! (-> self steal-want) -1)
   (set! (-> self tp-slot) -1)
   (set! (-> self merchant-icon) #f)
+  (set! (-> self kleiver) (the-as handle #f))
+  (set! (-> self kleiver-borrow?) #f)
   (set! (-> self gift-slot) -1)
   (go mp-manager-active)
   )
@@ -6836,6 +6842,73 @@
               (draw-string-adv (lookup-text! *common-text* (text-id progress-mp-merchant) #f) buf ctx)
               )
             (+! (-> *mp-econ* tag-drawn) 1)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(define *mp-kleiver-borrow* '((waswide 0 lkleever special))) ;; his missions' borrow (game-task.gc)
+
+(defbehavior mp-update-merchant-model mp-manager ()
+  "Free roam: Kleiver's model stands at his spot, idle. His art (skel-kleever-highres) is in the
+   borrowed level lkleever, which his missions load into waswide's slot 0: the manager asks the same
+   borrow with its setting while his spot is out (apply-settings runs update-task-masks, which
+   loads it), and drops it when the spot goes. The model lives in *entity-pool*: when lkleever
+   unloads, its art goes and the level kills it (check-for-rougue-process)."
+  (let ((want? (if (>= (-> *mp-econ* spot) 0) #t #f)))
+    (when (!= want? (-> self kleiver-borrow?))
+      (set! (-> self kleiver-borrow?) want?)
+      (if want?
+          (set-setting! 'borrow *mp-kleiver-borrow* 0.0 0)
+          (remove-setting! 'borrow)
+          )
+      (apply-settings *setting-control*)
+      (format 0 "[multiplayer] Kleiver's level ~A~%" (if want? "asked" "dropped"))
+      )
+    (let ((proc (the-as manipy (handle->process (-> self kleiver))))
+          (sg (if want?
+                  (the-as skeleton-group (art-group-get-by-name *level* "skel-kleever-highres" (the-as (pointer level) #f)))
+                  )
+              )
+          )
+      (cond
+        ((not sg)
+         (when proc
+           (deactivate proc)
+           (set! (-> self kleiver) (the-as handle #f))
+           )
+         )
+        ((not proc)
+         (let ((pp (process-spawn
+                     manipy
+                     :init manipy-init
+                     *mp-merchant-pos*
+                     (the-as entity-actor #f)
+                     sg
+                     (the-as vector #f)
+                     (the-as manipy-options 0)
+                     :name "mp-kleiver"
+                     :to *entity-pool*
+                     ;; his skirt is cloth: a model with cloth needs the room a puppet has
+                     :stack-size #x20000
+                     )
+                   )
+               )
+           (when pp
+             (set! (-> self kleiver) (ppointer->handle pp))
+             (send-event (ppointer->process pp) 'art-joint-anim "kleever-highres-idle" 0)
+             (send-event (ppointer->process pp) 'anim-mode 'loop)
+             (format 0 "[multiplayer] Kleiver stands at spot ~D~%" (-> *mp-econ* spot))
+             )
+           )
+         )
+        (else
+          ;; his spot changed (the host's, or a test's)
+          (when (< (meters 0.5) (vector-vector-distance (-> proc root trans) *mp-merchant-pos*))
+            (vector-copy! (-> proc root trans) *mp-merchant-pos*)
             )
           )
         )
