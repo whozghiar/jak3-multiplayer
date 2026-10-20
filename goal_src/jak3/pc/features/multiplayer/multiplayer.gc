@@ -6338,7 +6338,8 @@
                             )
        (pc-mp-econ-open (-> e key))
        (set! (-> e open?) #t)
-       (mp-merchant-set-spot (rand-vu-int-count MP_MERCHANT_SPOTS))
+       ;; Kleiver trades in free roam only (none in co-op)
+       (mp-merchant-set-spot (if (mp-coop?) -1 (rand-vu-int-count MP_MERCHANT_SPOTS)))
        (format 0 "[multiplayer] the merchant is at spot ~D~%" (-> e spot))
        (set! (-> e claims) 0)
        (set! (-> e sent) (the-as uint 0))
@@ -6396,7 +6397,7 @@
 ;; Kleiver's shop, in Spargus: at his spot, a line of his and a prompt; triangle opens the START
 ;; menu on the shop's page (multiplayer-menu.gc, 'mp-shop), the only page offering trades for orbs.
 ;; The host draws his spot among these when its accounts open, and sends it with the balances: the
-;; same for every player. His icon shows on the minimap (and the big map), "Merchant" in yellow
+;; same for every player. Free roam only: in co-op he has no spot (no icon, no name, no shop). His icon shows on the minimap (and the big map), "Merchant" in yellow
 ;; over the spot, as a player's name. Only the spot: his model is not loaded in Spargus.
 (define *mp-merchant-spots*
   (new 'static 'inline-array vector 4
@@ -6484,11 +6485,11 @@
 
 (defun mp-update-merchant ()
   "In game online, on foot within 4 m of Kleiver's spot (on the ground, 4 m above or below): his
-   line shows; triangle opens the shop. Offline he has no spot. Triangle's other uses there come
+   line shows; triangle opens the shop. Offline or in co-op he has no spot (free roam only). Triangle's other uses there come
    first: a cutscene's skip, L1 + triangle (ride along), another player's vehicle or shoulder, one
    of our vehicles."
   (let ((e *mp-econ*))
-    (if (not (mp-online?))
+    (if (or (not (mp-online?)) (mp-coop?))
         (set! (-> e spot) -1)
         )
     (mp-update-merchant-icon)
