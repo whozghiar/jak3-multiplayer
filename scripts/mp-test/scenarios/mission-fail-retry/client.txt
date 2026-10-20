@@ -1,0 +1,34 @@
+# A mission failed with retry or quit, guest side: votes quit (the host votes retry: nothing
+# happens), then retry: both retry together; then quits with the host.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+78 log-me
+84 log-fail
+86.5 screenshot failed
+88 press triangle 100
+91 log-fail
+96 press x 100
+100 log-fail
+104 log-fail
+104.2 log-me
+119 log-fail
+123 press triangle 100
+129 log-fail
+135 log-fail
+135.2 log-me
+135.4 log-join
+138 log

@@ -852,6 +852,40 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 ("#f", "#t") in hc and len(gm) >= 2 and abs(float(gm[-1][0]) - float(gm[0][0])) + abs(float(gm[-1][1]) - float(gm[0][1])) > 5,
                 f"{hc[-1:]}, guest {gm[:1]} -> {gm[-1:]}")
 
+    elif scenario in ("mission-fail", "mission-fail-retry"):
+        FL = r"\] fail resetter (\S+) state (\S+) message (-?\d+) grabbed (\S+) vote (\d+) decided (\S+) shown (\d+) sent (\d+) received (\d+) decisions (\d+) last (\d+)"
+        hf, gf = grab(host, FL), grab(client, FL)
+        retry = scenario == "mission-fail-retry"
+        c.check(scenario, "the host's mission fails: the failure shows on the host and, sent, on the guest",
+                any(f[0] == "#t" and f[3] == "#t" for f in hf) and any(f[0] == "#t" and f[3] == "#t" and int(f[8]) >= 1 for f in gf)
+                and any("our mission failed: every player sees it" in l for l in host), f"host {hf[:1]}, guest {gf[:1]}")
+        if retry:
+            c.check(scenario, "it offers retry or quit; votes that differ (host retry, guest quit) decide nothing: both screens stay",
+                    any(f[2] == "2" for f in hf) and any(f[0] == "#t" and f[4] == "1" and f[5] == "#f" for f in hf)
+                    and any(f[0] == "#t" and f[4] == "2" and f[5] == "#f" for f in gf),
+                    f"host {[(f[0], f[2], f[4], f[5]) for f in hf]}, guest {[(f[0], f[2], f[4], f[5]) for f in gf]}")
+        else:
+            c.check(scenario, "no reset by itself in co-op: after the host's X and the guest's triangle (no vote), both screens stay",
+                    any(f[0] == "#t" and f[4] == "1" and f[5] == "#f" for f in hf) and any(f[0] == "#t" and f[4] == "0" for f in gf[1:]),
+                    f"host {[(f[0], f[4], f[5]) for f in hf]}, guest {[(f[0], f[4], f[5]) for f in gf]}")
+        first = "retry" if retry else "retry"
+        c.check(scenario, "every player chose the same: decided on both machines, both resetters gone (put back together)",
+                any(f"every player chose to {first} the failed mission" in l for l in host)
+                and any(f"every player chose to {first} the failed mission" in l for l in client), "")
+        second = "quit" if retry else "retry"
+        c.check(scenario, f"the second failure: every player chose the same ({second}): decided on both machines",
+                sum(1 for l in host if "every player chose to" in l) >= 2 and sum(1 for l in client if "every player chose to" in l) >= 2
+                and any(f"every player chose to {second} the failed mission" in l for l in host)
+                and bool(hf) and hf[-1][0] == "#f" and bool(gf) and gf[-1][0] == "#f",
+                f"host {hf[-1:]}, guest {gf[-1:]}")
+        hg = [int(v) for (v,) in grab(host, r"the failure's choice given, host clock (\d+)")]
+        gg = [int(v) for (v,) in grab(client, r"the failure's choice given, host clock (\d+)")]
+        c.check(scenario, "both players are put back together: each machine gives its decision within 0.5 s of the other (host time)",
+                len(hg) >= 2 and len(gg) >= 2 and all(abs(h - g) < 5000 for h, g in zip(hg, gg)),
+                f"host {hg}, guest {gg} (0.1 ms)")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "menu-buttons":
         for side, lines in (("host", host), ("guest", client)):
             inp = grab(lines, r"\] input state (\S+) gun (-?\d+) ammo (\S+) (\S+) (\S+) (\S+) daxter-shots (\d+) menu (\S+)")

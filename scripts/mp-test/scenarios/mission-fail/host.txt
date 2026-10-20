@@ -1,0 +1,33 @@
+# A mission failed, for every player, host side: co-op at the jump training; the host's mission
+# fails (its task manager told to, as the mission's code does; this failure offers no retry and
+# resets by itself after a delay in the game): it shows on both machines and stays until every
+# player pressed X. The host presses X; the guest's triangle is no vote: both screens stay; the
+# guest's X: both are put back together. A second failure: both press X.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission arena-training-1
+63 press x 100
+70 wait-player 1
+74 log-me
+76 send-fail task-manager-arena-training
+80 log-fail
+81 screenshot failed
+82 press x 100
+86 log-fail
+90 log-fail
+100 log-fail
+100.2 log-me
+110 send-fail task-manager-arena-training
+116 press x 100
+124 log-fail
+130 log-fail
+130.2 log-me
+134 log

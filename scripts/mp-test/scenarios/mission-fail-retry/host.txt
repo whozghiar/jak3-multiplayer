@@ -1,0 +1,34 @@
+# A mission failed with retry or quit, host side: co-op at the jump training; a failure offering
+# retry (X) or quit (triangle), as the minigames' (spawn-fail-or-retry); the host's mission fails: both machines show it. The host votes
+# retry, the guest quit: nothing happens; the guest votes retry: both retry together. A second
+# failure: both vote quit: both quit together.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission arena-training-1
+63 press x 100
+70 wait-player 1
+78 log-me
+80 spawn-fail-or-retry
+84 log-fail
+85 screenshot failed
+86 press x 100
+90 log-fail
+94 log-fail
+104 log-fail
+104.2 log-me
+104.4 screenshot retried
+115 spawn-fail-or-retry
+121 press triangle 100
+129 log-fail
+135 log-fail
+135.2 log-me
+135.4 log-join
+138 log
