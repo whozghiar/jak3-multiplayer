@@ -111,7 +111,7 @@ Daxter co-op duo with its own multiplayer save.
 - **Precursor orbs and Metal Head trophies:** every precursor orb you take and every Metal Head
   you kill counts for you. The host's game keeps every player's count, saves it every minute
   and when the session ends, and gives it back when it hosts that session again; each orb counts
-  once. In free roam, spend your orbs at **Kleiver's shop** in Spargus: he stands at one of four places, the
+  once. In free roam, spend your orbs at **Kleiver's shop** in Spargus: he stands there in person, at one of four places, the
   same for every player and drawn at random for each session, marked by his icon on the minimap
   and by "Merchant" in yellow over his spot. Stand there and press triangle to buy and wear new
   outfits. The host's Mods menu can give the host 100 orbs or 100 trophies.
@@ -150,6 +150,8 @@ Daxter co-op duo with its own multiplayer save.
 | Get off as passenger | Triangle |
 | As Daxter: climb onto a crouching or driving Jak's shoulder / jump off | Triangle / X |
 | Get on a lizard (Jak or Daxter) | Triangle next to it |
+| Daxter: jump on Jak's shoulder (at any time) | L1 + triangle next to him (triangle alone next to a crouching Jak) |
+| Daxter: choose a gun | D-pad (it shows in his hand), then R1 to fire |
 | Kleiver's shop: open / buy or wear / leave | Triangle next to him / X / Triangle |
 
 > [!NOTE]

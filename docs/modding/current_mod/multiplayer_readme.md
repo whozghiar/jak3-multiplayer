@@ -544,13 +544,14 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/wwd.gd`, `voca.gd` | `jak-fldax+0-ag.go` added after `jak-flut+0-ag.go`: Daxter's lizard clips (`daxter-fldax-*`) and the lizard's under him (`flut-saddle-fldax-*`), which only the desert chase loaded (DESLIZ, unchanged). Its lizard clips link to the lizard of the same level, so it is not in GAME (4.22). |
 | `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post reports our place, progress and result and the racers' progress (`mp-racer-progress`, `mp-race-ai-progress`, `mp-race-position`), waits for the other players' result (`mp-race-result-wait?`) and asks it (`mp-race-won?`) (4.15). |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`), the result waiting for the others (`#x159b`) and the acts of the
-mission pages (`#x159c`-`#x159f`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
+mission pages (`#x159c`-`#x159f`) and Daxter's L1 + triangle prompt (`#x15a0`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
 | `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`). |
+| `game/graphics/opengl_renderer/foreground/Shadow2.cpp` | An engine fix: a shadow too big for the VU program is skipped to the next bucket (`!=`); upstream's skip loop tested `==`, skipped nothing, and the bucket dispatch then asserted (`dma.current_tag_offset() == m_render_state.next_bucket`): the guest's game stopped in the palace ruins (2026-10-20 play test). |
 | `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
 
 Wrapped at load time, each calling the stock version kept by `define-perm`:
@@ -767,7 +768,9 @@ put away for him (`gun-type` 0) and `multiplayer-guns.gc` fires instead
 - *The mod:* the stock marking menu (`target-gun-marking-menu`, a pad engine connection) runs in
   his mode too and sets `using-gun-type` on the D-pad; R1 fires it. The ranges each mod's shots and
   aim use (`fire-range`, `track-*`), which `target-gun-type-set!` sets for Jak only, are set
-  when the gun comes out (`mp-daxter-gun-setup`).
+  when the gun comes out (`mp-daxter-gun-setup`). A D-pad press takes the gun out too, the mod
+  just chosen in his hand, without firing (2 s, as after R1); before, the mod changed unseen until
+  he fired (`daxter-moves`).
 - *Aim:* from his chest toward the nearest enemy, guard, civilian or crate within 40 m in a
   60-degree cone ahead (`fill-actor-list-for-box`, `find-nearest-focusable`, as
   `target-gun-find-track`), else straight ahead; the target found is the gun's tracked target
@@ -847,6 +850,12 @@ Online, nobody stops the shared world alone (multiplayer.gc, "Pause for everyone
   is the newest child of `*active-pool*`, which the kernel runs first) and hides pad 0 from
   everything after it (the player, the camera, the NPCs); the hook gives it back before the menu
   reads it (the display process runs the hook, reads the pads, then runs the menu, its child).
+  The PC port also keeps a high-fps history of the buttons (`*cpad-history-list*`, filled by
+  `service-cpads` before any process runs), which the buffered checks read
+  (`recently-pressed?`: the jump): it is emptied too. Before, X choosing a menu entry made the
+  player jump, and the test pad never showed it until X was pressed in the menu (`menu-buttons`).
+  The pad stays hidden while the menu process lives (not only in the `progress` master mode),
+  and 0.3 s after it closes (the button that closed it).
 - **The host's SELECT** (a tap; held 0.25 s, the player list) pauses every player's game: the
   stock pause (`'pause` master mode), "The host paused the game" on a guest's screen, "SELECT:
   resume the game for everyone" on the host's; START and SELECT do nothing there for a guest.
@@ -973,7 +982,10 @@ Jak's shoulder":
 - **Climbing on.** A Daxter player standing or walking in his mode, on the ground (not in the air,
   grabbed, hit or dead), presses triangle within 2.5 m of a crouching Jak (`mp-jak-crouching?`:
   Jak's duck animations 32 to 34, on foot) or 3.5 m of a driving one; in co-op, or with L1 held,
-  within 5 m of the vehicle a Jak drives (4.15). He goes into the stock grab state
+  within 5 m of the vehicle a Jak drives (4.15). Next to any other Jak on foot (standing,
+  walking), within 2.5 m: L1 + triangle, at any time ("Press L1 + triangle to jump on Jak's
+  shoulder", `#x15a0`, `mp-jak-on-foot?`, `*mp-perch-l1?*`); triangle alone stays the vehicle's
+  and the merchant's there. He goes into the stock grab state
   (`target-indax-grab`), following the puppet's root 1.25 m up and 0.22 m to its left
   (`mp-update-perch`), hidden: the Jak's own Daxter, shown again and wearing the rider's outfit
   (`mp-skin-add-copies`, `mp-update-skins`), sits there on every machine, so the camera and the
@@ -1059,8 +1071,14 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
   player finds him at the same place, for the session. His own minimap icon (class 116, his face,
   without the missions' trail, kept on the minimap's edge when far, on the big map too) is owned
   by the manager at that spot, and "Merchant" ("Marchand") is drawn in yellow over it within
-  80 m, as a player's name and above one standing there (`mp-draw-merchant-name`, `#x159a`). Only the spot: his model is not
-  loaded in Spargus. In free roam only: in co-op the host draws no spot (-1), so no icon, name or
+  80 m, as a player's name and above one standing there (`mp-draw-merchant-name`, `#x159a`).
+- **Kleiver's model** stands at the spot, idle (`mp-update-merchant-model`). His art
+  (`skel-kleever-highres`) is in the borrowed level `lkleever`, which his missions load into
+  waswide's borrow slot 0 (`game-task.gc`: `(waswide 0 lkleever special)`): while his spot is
+  out, the manager asks the same borrow with its own setting (`set-setting! 'borrow`;
+  `apply-settings` runs `update-task-masks` when the borrow changes, which loads it) and drops it
+  when the spot goes. The model is a `manipy` in `*entity-pool*`: when `lkleever` unloads, the
+  level kills it with its art (`check-for-rougue-process`). In free roam only: in co-op the host draws no spot (-1), so no icon, name or
   shop, on any machine.
 - **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
   Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
@@ -1318,6 +1336,7 @@ A script line is `<seconds> <command>`:
 | `log-seat` | Our model in a vehicle, in the vehicle's axes (x left, y up, z forward) from the seat point: as a passenger the model in the seat (its root, bone 3, its bones' extent, its clip), driving the model drawn (Daxter's in his mode) from the player's position. |
 | `log-joints`, `log-anim <daxter\|jak> <index>` | Daxter's joints (index, name, parent); the entry at that index of Daxter's or Jak's art group (a clip is loaded when it prints an `art-joint-anim`). |
 | `log-name` | The player name kept and the on-screen keyboard's text. |
+| `host-play-mission <name>`, `log-input` | The host's Choose a mission in game on that play-list name (`mp-host-play-mission`); what our buttons did: state, gun mod, ammo of each color, Daxter's shots, the START menu open. |
 | `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions`, `log-acts` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered; the missions of each act (count, first three). |
 | `gun [pickup-type]`, `board` | Every gun mod unlocked with ammo, the gun out, the mod `pickup-type` picked (26 red 1 ... 31 yellow 3 ... 35 dark 1 ... 37 dark 3); the hoverboard unlocked with its zap, the player on it. |
 | `mode <0\|1>`, `title` | Game mode when hosting (free roam, co-op); back to the title screen as the pause menu's quit does. |
@@ -1543,6 +1562,9 @@ passed, no crash.
 | `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
 | `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
+| `menu-buttons` | Buttons under the START menu | The menu opened with START, R1, square, L1, the D-pad, X (choosing entries) and triangle pressed, X again right after it closes: no shot, no gun change, no jump or attack, host (Jak, gun out) and guest (Daxter); X made both jump before the history fix (reproduced); 6 checks. |
+| `daxter-moves` | Daxter's D-pad and L1 + triangle | The D-pad takes his gun out, the mod chosen in his hand, no shot; next to the standing host's Jak the prompt asks L1 + triangle, triangle alone does nothing, L1 + triangle climbs on its shoulder (the host sees it), X puts him down; 6 checks (screenshots). |
+| `mission-switch` | The host changes mission in game | Co-op at the palace ruins' patrol; the host chooses the ruins' attack (Jak in the Rhino, "rubblea-rhino"): both players at its start, each in its own Rhino (the host sees the guest drive vehicle 17), no game stops; 7 checks (screenshots). |
 | `mission-select` | The host chooses a mission in game | Co-op at the jump training; START > Options > Multiplayer > Choose a mission, act 2, its second mission (the Hip Hog): the host's game starts there, the guest loads it again and stands 1.5 m from the host; no Kleiver in co-op; 7 checks (screenshots). |
 | `mounts-coop` | A lizard for every player | The kanga-rat hunt (as `mounts-dup`): two lizards at the hunt's spot on the host (the stock's count unchanged), the guest gets on one and the host's copy of it hides, the host rides the other, the guest gets off and a lizard waits there on the host; 8 checks (screenshots). |
 | `mounts-dup` | A lizard for each player in a mission | The kanga-rat hunt started by talking to Kleiver (as `mission-trigger`): the host gets on the hunt's lizard, the guest (Daxter) on its own copy of the same lizard and rides it 18 m away; the host draws the guest's lizard; 6 checks (screenshots). |
@@ -1608,8 +1630,10 @@ public IP.
 
 ## 6. Known limits
 
-- Kleiver as a merchant is a spot, his icon and his name: his model is only loaded for his
-  cutscenes, so nobody stands there.
+- Kleiver stands at his spot but does not move or talk: his model plays its idle clip, the shop is
+  the menu page.
+- Daxter's L1 + triangle prompt and the game's gun name (shown a moment when a mod is chosen)
+  share the bottom of the screen, as the game's own prompts do.
 - Co-op seconds are given to the lizards a level places. The leaper race and the desert's lizard
   roundup give the player their own lizard by other means (`was-leaper-race.gc`,
   `desert-lizard-task.gc`) and get none; the vehicles of the desert missions are spawned by the
@@ -1702,6 +1726,23 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-20 (night):** the user's play test of the round below (two instances, `local_pair.py`).
+  - *Crash.* The guest's game stopped in the palace ruins on a renderer assertion right after
+    "shadow overflow detected": the engine's skip of an overflowing shadow tested `==` and skipped
+    nothing (`Shadow2.cpp`, now `!=`; C++ table in 3).
+  - *START menu.* X choosing a menu entry made the player jump: the jump reads the PC port's
+    high-fps button history, now emptied with the pad (4.10). Square, R1, L1 and the D-pad were
+    already blocked; `menu-buttons` reproduced the jump on both players, then showed none.
+  - *Daxter.* The D-pad takes his gun out with the mod chosen (4.8); L1 + triangle climbs on any
+    Jak on foot within 2.5 m, at any time (4.16).
+  - *Kleiver* stands at his spot: his level `lkleever` borrowed into waswide while his spot is out
+    (4.20).
+  - *Changing mission in game* (the palace ruins' attack, Jak in the Rhino): reproduced as played
+    (`mission-switch`): both players at its start, each in its own Rhino, the host seeing the
+    guest drive; the user's log shows the same (the guest's Rhino, "pilot-on") until the crash.
+  - *Tests.* Scenarios `menu-buttons`, `daxter-moves`, `mission-switch`; `merchant` checks the
+    model; commands `host-play-mission`, `log-input`. Sweep on the rebuilt engine: 18 scenarios,
+    131 checks passed, 0 failed, no crash.
 - **2026-10-20:** the user's list of bugs and co-op rules (menus, eyes, weapons, sessions, co-op
   missions, races, the merchant). The parts that follow himstan's Jak and Daxter II Multiplayer
   (ISC) say so in the commits and the code.
