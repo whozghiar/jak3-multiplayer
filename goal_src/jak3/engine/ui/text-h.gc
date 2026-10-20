@@ -1754,6 +1754,9 @@
   (progress-mp-act-2 #x159e)
   (progress-mp-act-3 #x159f)
   (progress-mp-prompt-perch-l1 #x15a0)
+  (progress-mp-fail-votes #x15a1)
+  (progress-mp-fail-wait #x15a2)
+  (progress-mp-fail-quit #x15a3)
   )
 ;; ---text-id
 

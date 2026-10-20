@@ -58,6 +58,9 @@
   (perched 15)     ;; Daxter on a Jak's shoulder (ride-slot: that Jak)
   (race-wait 16)   ;; its machine holds a race start until every player is aboard ("Races")
   (flut 17)        ;; rides a leaper lizard ("A lizard for every player")
+  (fail-shown 18)  ;; its game shows a mission's failure, waiting for a choice ("A mission failed")
+  (fail-retry 19)  ;; ... its player chose to retry (or to go on, when there is no choice)
+  (fail-quit 20)   ;; ... its player chose to quit
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -100,6 +103,10 @@
                   ;; player does too; guest to the host: asks for it ("Restart for everyone")
   (mission-start 25) ;; co-op: the sender's mission started, its task node iarg 0 ("Missions
                      ;; started together")
+  (fail-spec 28)     ;; a mission failed on the sender's machine: its resetter's params (iarg 0
+                     ;; message, 1 flags, 2 task, 3 text; fvec x delay, y fail node, z retry node,
+                     ;; w reset modes; text the fail continue), then:
+  (fail-show 29)     ;; ... the retry continue (text): show that failure here too
   (world-reset 27)   ;; host to everyone: its world was started again (a mission chosen in game):
                      ;; each guest loads it again
   (race-progress 26) ;; the sender's race: its task node iarg 0, its result iarg 1 (0 racing, 1
@@ -1028,6 +1035,49 @@
     )
   )
 
+;; A mission failed (see "A mission failed, for every player"): the vote of this machine.
+(deftype mp-fail-state (structure)
+  ((vote        int32)      ;; 0 none, 1 retry (or go on), 2 quit
+   (inject      int32)      ;; the decision for the resetter: 0 none, 1 confirm, 2 triangle
+   (decided?    symbol)     ;; every player chose the same
+   (replaying?  symbol)     ;; spawning the resetter another player's failure asked (not sent back)
+   (since       time-frame) ;; when our failure screen showed
+   (regroup?    symbol)     ;; a guest goes next to the host once the reset is over
+   (spec-from   int32)      ;; the player whose params are kept below, -1 none
+   (params      resetter-params :inline)
+   (shown       int32)      ;; failures shown here, sent, received, decided (test log)
+   (sent        int32)
+   (received    int32)
+   (decisions   int32)
+   (last        int32)      ;; the last decision applied (1 retry, 2 quit)
+   )
+  )
+
+(define *mp-fail* (new 'global 'mp-fail-state))
+(set! (-> *mp-fail* decided?) #f)
+(set! (-> *mp-fail* replaying?) #f)
+(set! (-> *mp-fail* regroup?) #f)
+(set! (-> *mp-fail* spec-from) -1)
+(define *mp-fail-continue* (new 'global 'string 64 (the-as string #f)))  ;; continue names received
+(define *mp-retry-continue* (new 'global 'string 64 (the-as string #f)))
+
+(defun mp-fail-resetter ()
+  "Our resetter showing a mission's failure (grabbed the player, waiting for a choice), else #f. A
+   failure only: mission-fail or mission-fail-or-retry (a retry from the menu is not voted)."
+  (let ((r (the-as resetter (get-resetter *resetter-control*))))
+    (if (and r
+             (-> r next-state)
+             (= (-> r next-state name) 'idle)
+             (-> r grabbed-player?)
+             (or (= (-> r params message) (resetter-message mission-fail))
+                 (= (-> r params message) (resetter-message mission-fail-or-retry))
+                 )
+             )
+        r
+        )
+    )
+  )
+
 (defun mp-build-local-state ()
   "Describe the local player in *mp-local*. Runs every frame from the hook, even paused."
   (let ((st *mp-local*))
@@ -1073,6 +1123,14 @@
     (if (and *target* (focus-test? *target* flut))
         (logior! (-> st flags) (mp-flag flut))
         )
+    ;; a mission's failure shown here, and our vote
+    (when (mp-fail-resetter)
+      (logior! (-> st flags) (mp-flag fail-shown))
+      (case (-> *mp-fail* vote)
+        ((1) (logior! (-> st flags) (mp-flag fail-retry)))
+        ((2) (logior! (-> st flags) (mp-flag fail-quit)))
+        )
+      )
     ;; a cutscene we watch, and our vote to skip it
     (when (mp-skippable-scene)
       (logior! (-> st flags) (mp-flag in-scene))
@@ -2611,6 +2669,318 @@
   (none)
   )
 
+
+;; ------------------------------------------------------------------------------------------------
+;; A mission failed, for every player (co-op)
+;;
+;; The game shows a failure with a resetter (task-control.gc): spawn-resetter! (wrapped below)
+;; starts it, it grabs the player, slows the world down, then waits for X (retry, or go on when
+;; there is no choice) or triangle (quit), and resets: the mission's start (retry) or its fail
+;; continue (quit). In co-op a failure on one machine is sent to the others (its params: two
+;; events), which show it too. Every player's X or triangle is a vote (mp-fail-input, before the
+;; resetter reads the pad: it sees neither), carried by the player's state; once every player
+;; chose the same, each machine gives its resetter that button on the same frame: every player is
+;; put back at once. A guest far from the host after it goes next to it.
+;; ------------------------------------------------------------------------------------------------
+
+(define *mp-reset-modes* (new 'static 'boxed-array :type symbol 'life 'try 'game 'debug 'restart 'event 'level))
+
+(defun mp-reset-mode-index ((mode symbol))
+  "A resetter spec's reset mode as sent: its place in *mp-reset-modes* + 1, 0 none or unknown."
+  (dotimes (i (-> *mp-reset-modes* length))
+    (if (= (-> *mp-reset-modes* i) mode)
+        (return (+ i 1))
+        )
+    )
+  0
+  )
+
+(defun mp-continue-name ((cont basic))
+  "A resetter spec's continue (a name, or a continue point) as a name; #f none."
+  (cond
+    ((not cont)
+     (the-as string #f)
+     )
+    ((type? cont string)
+     (the-as string cont)
+     )
+    ((type? cont continue-point)
+     (-> (the-as continue-point cont) name)
+     )
+    (else
+      (the-as string #f)
+      )
+    )
+  )
+
+(defun mp-send-fail ((params resetter-params))
+  "Our mission failed: its resetter's params to every player (fail-spec, then fail-show)."
+  (let ((ev (new 'stack 'mp-event))
+        (fail-name (mp-continue-name (the-as basic (-> params fail continue))))
+        (retry-name (mp-continue-name (the-as basic (-> params retry continue))))
+        )
+    (set! (-> ev kind) (mp-event-kind fail-spec))
+    (set! (-> ev to) -1)
+    (set! (-> ev iarg 0) (the-as int (-> params message)))
+    (set! (-> ev iarg 1) (the-as int (-> params flags)))
+    (set! (-> ev iarg 2) (the-as int (-> params task)))
+    (set! (-> ev iarg 3) (the-as int (-> params text-message)))
+    (set-vector! (-> ev fvec)
+                 (the float (-> params reset-delay))
+                 (the float (-> params fail node))
+                 (the float (-> params retry node))
+                 (the float (+ (* 16 (mp-reset-mode-index (-> params fail reset-mode))) (mp-reset-mode-index (-> params retry reset-mode))))
+                 )
+    (copyn-charp<-string (-> ev text) (if fail-name fail-name "") 31)
+    (pc-mp-send-event ev)
+    (set! (-> ev kind) (mp-event-kind fail-show))
+    (copyn-charp<-string (-> ev text) (if retry-name retry-name "") 31)
+    (pc-mp-send-event ev)
+    (+! (-> *mp-fail* sent) 1)
+    (format 0 "[multiplayer] our mission failed: every player sees it (task ~D)~%" (-> params task))
+    )
+  (none)
+  )
+
+(defun mp-apply-fail-spec ((ev mp-event))
+  "Another player's mission failed: its params, kept until fail-show."
+  (let ((params (-> *mp-fail* params))
+        (modes (the int (-> ev fvec w)))
+        )
+    (set! (-> *mp-fail* spec-from) (-> ev from))
+    (set! (-> params message) (the-as resetter-message (-> ev iarg 0)))
+    (set! (-> params flags) (the-as resetter-flag (-> ev iarg 1)))
+    (set! (-> params task) (the-as game-task (-> ev iarg 2)))
+    (set! (-> params text-message) (the-as text-id (-> ev iarg 3)))
+    (set! (-> params reset-delay) (the-as uint (the int (-> ev fvec x))))
+    (set! (-> params fail node) (the-as game-task-node (the int (-> ev fvec y))))
+    (set! (-> params retry node) (the-as game-task-node (the int (-> ev fvec z))))
+    (set! (-> params fail reset-mode) (if (> (shr modes 4) 0) (-> *mp-reset-modes* (+ (shr modes 4) -1)) #f))
+    (set! (-> params retry reset-mode) (if (> (logand modes 15) 0) (-> *mp-reset-modes* (+ (logand modes 15) -1)) #f))
+    (set! (-> params fail execute) #f)
+    (set! (-> params retry execute) #f)
+    (string<-charp *mp-fail-continue* (-> ev text))
+    (set! (-> params fail continue) (if (zero? (length *mp-fail-continue*)) (the-as string #f) *mp-fail-continue*))
+    )
+  (none)
+  )
+
+(defun mp-apply-fail-show ((ev mp-event))
+  "Another player's mission failed: shown here too, with its params (fail-spec), unless our game
+   shows one already."
+  (let ((params (-> *mp-fail* params)))
+    (when (and (mp-coop?) (mp-in-game?) (= (-> *mp-fail* spec-from) (-> ev from)) (not (get-resetter *resetter-control*)))
+      (string<-charp *mp-retry-continue* (-> ev text))
+      (set! (-> params retry continue) (if (zero? (length *mp-retry-continue*)) (the-as string #f) *mp-retry-continue*))
+      (set! (-> *mp-fail* replaying?) #t)
+      (let ((ok (spawn-resetter! *resetter-control* params (the-as game-task-node-info #f))))
+        (set! (-> *mp-fail* replaying?) #f)
+        (when ok
+          (+! (-> *mp-fail* received) 1)
+          (format 0 "[multiplayer] player ~D's mission failed: shown here too~%" (-> ev from))
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- engine/game/task/task-control.gc
+(define-perm *mp-stock-spawn-resetter* (function resetter-control resetter-params game-task-node-info symbol)
+  (the-as (function resetter-control resetter-params game-task-node-info symbol) (method-of-type resetter-control spawn-resetter!))
+  )
+
+(defmethod spawn-resetter! ((this resetter-control) (arg0 resetter-params) (arg1 game-task-node-info))
+  "Stock; a failure shown starts a new vote, and in co-op our own failure is sent to every player
+   (not a retry from the menu, not one another player sent). In co-op a failure does not reset on
+   its own after a delay (auto-reset): every player's X goes on, together."
+  (when (and (mp-coop?)
+             (= (-> arg0 message) (resetter-message mission-fail))
+             (logtest? (-> arg0 flags) (resetter-flag auto-reset))
+             )
+    (let ((copy (new 'stack 'resetter-params)))
+      (mem-copy! (the-as pointer copy) (the-as pointer arg0) 48)
+      (logclear! (-> copy flags) (resetter-flag auto-reset))
+      (set! arg0 copy)
+      )
+    )
+  (let ((ok (*mp-stock-spawn-resetter* this arg0 arg1)))
+    (when (and ok
+               (or (= (-> arg0 message) (resetter-message mission-fail))
+                   (= (-> arg0 message) (resetter-message mission-fail-or-retry))
+                   )
+               )
+      (set! (-> *mp-fail* vote) 0)
+      (set! (-> *mp-fail* inject) 0)
+      (set! (-> *mp-fail* decided?) #f)
+      (set! (-> *mp-fail* since) (mp-now))
+      (+! (-> *mp-fail* shown) 1)
+      (if (and (mp-coop?) (not (-> *mp-fail* replaying?)))
+          (mp-send-fail arg0)
+          )
+      )
+    ok
+    )
+  )
+
+(define-extern pc-mp-clock (function int int)) ;; kmultiplayer.cpp
+
+(defun mp-fail-input ()
+  "Run first every frame (mp-input-update), before the resetter reads the pad: while a failure
+   waits for a choice in co-op, X (retry, or go on) and triangle (quit, when it offers to) are our
+   vote and the resetter sees neither; once decided, it gets the decision's button, once it reads
+   its choice (2 s after it grabbed the player)."
+  (let ((f *mp-fail*)
+        (r (mp-fail-resetter))
+        (pad (-> *cpad-list* cpads 0))
+        (history (-> *cpad-history-list* cpads 0))
+        )
+    (cond
+      ((not (and r (mp-coop?)))
+       (set! (-> f inject) 0)
+       )
+      ((nonzero? (-> f inject))
+       ;; the real clock, as the resetter's: the game's clocks are frozen meanwhile
+       (when (>= (- (-> *display* real-clock frame-counter) (-> r grabbed-time)) (seconds 2))
+         (let ((button (if (= (-> f inject) 2) (pad-buttons triangle) (pad-buttons confirm))))
+           (logior! (-> pad button0-rel 0) button)
+           (logior! (-> pad button0-abs 0) button)
+           )
+         (set! (-> f last) (-> f inject))
+         (set! (-> f inject) 0)
+         ;; when, in the host's time (a guest's estimate of it): every machine within a few frames
+         (format 0 "[multiplayer] the failure's choice given, host clock ~D~%"
+                 (if (= *mp-mode* (mp-mode client)) (pc-mp-clock 0) (pc-mp-clock -1))
+                 )
+         (if (= *mp-mode* (mp-mode client))
+             (set! (-> f regroup?) #t)
+             )
+         )
+       )
+      ((not (-> f decided?))
+       (cond
+         ((cpad-pressed? 0 confirm)
+          (set! (-> f vote) 1)
+          )
+         ((and (cpad-pressed? 0 triangle) (= (-> r params message) (resetter-message mission-fail-or-retry)))
+          (set! (-> f vote) 2)
+          )
+         )
+       (logclear! (-> pad button0-rel 0) (pad-buttons confirm triangle))
+       (logclear! (-> pad button0-abs 0) (pad-buttons confirm triangle))
+       (dotimes (i 15)
+         (logclear! (-> history button0-rel i) (pad-buttons confirm triangle))
+         (logclear! (-> history button0-abs i) (pad-buttons confirm triangle))
+         )
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-fail-players ()
+  "Every player online, us included."
+  (let ((n 1))
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (mp-remote-state i)
+          (+! n 1)
+          )
+      )
+    n
+    )
+  )
+
+(defun mp-fail-count ((vote int))
+  "Players whose failure screen shows with vote `vote`, us included."
+  (let ((same (if (= (-> *mp-fail* vote) vote) 1 0)))
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (when st
+          (if (and (logtest? (-> st flags) (mp-flag fail-shown))
+                   (case vote
+                     ((1) (logtest? (-> st flags) (mp-flag fail-retry)))
+                     ((2) (logtest? (-> st flags) (mp-flag fail-quit)))
+                     (else #f)
+                     )
+                   )
+              (+! same 1)
+              )
+          )
+        )
+      )
+    same
+    )
+  )
+
+(defun mp-update-fail ()
+  "Every frame from the hook: once every player chose the same for the failure shown, the
+   decision (mp-fail-input gives it to the resetter); a guest put back far from the host goes next
+   to it."
+  (let ((f *mp-fail*))
+    (when (and (mp-coop?) (mp-fail-resetter) (not (-> f decided?)) (nonzero? (-> f vote)))
+      (let ((same (mp-fail-count (-> f vote)))
+            (n (mp-fail-players))
+            )
+        (when (= same n)
+          (set! (-> f decided?) #t)
+          (set! (-> f inject) (-> f vote))
+          (+! (-> f decisions) 1)
+          (if (= (-> f vote) 2)
+              (format 0 "[multiplayer] every player chose to quit the failed mission~%")
+              (format 0 "[multiplayer] every player chose to retry the failed mission~%")
+              )
+          )
+        )
+      )
+    ;; the reset over: a guest far from the host goes next to it, as the mission's start or the
+    ;; continue may differ
+    (when (and (-> f regroup?) (not (get-resetter *resetter-control*)) (mp-in-game?))
+      (set! (-> f regroup?) #f)
+      (let ((host (mp-remote-state 0)))
+        (when (and host *target* (< (meters 40) (vector-vector-distance (-> *target* control trans) (-> host trans))))
+          (format 0 "[multiplayer] put back far from the host: we go next to it~%")
+          (set! *mp-request-teleport* 0)
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-fail-votes ()
+  "Under a failure shown in co-op: the players' choices (retry / quit), or the wait for the others."
+  (let ((r (mp-fail-resetter)))
+    (when (and r (mp-coop?) (>= (- (-> *display* real-clock frame-counter) (-> r grabbed-time)) (seconds 1.5)))
+      (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 250 0.0 (font-color default) (font-flags shadow kerning middle large))))
+        (set-width! ctx 512)
+        (set-height! ctx 70)
+        (set! (-> ctx scale) 0.5)
+        (cond
+          ((= (-> r params message) (resetter-message mission-fail-or-retry))
+           ;; two lines: retry, then quit below it
+           (format (clear *mp-temp-string*) (lookup-text! *common-text* (text-id progress-mp-fail-quit) #f) (mp-fail-count 2)
+                   (mp-fail-players)
+                   )
+           (+! (-> ctx origin y) 22.0)
+           (print-game-text *mp-temp-string* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+           (+! (-> ctx origin y) -22.0)
+           (format (clear *mp-temp-string*) (lookup-text! *common-text* (text-id progress-mp-fail-votes) #f) (mp-fail-count 1)
+                   (mp-fail-players)
+                   )
+           )
+          (else
+            (format (clear *mp-temp-string*) (lookup-text! *common-text* (text-id progress-mp-fail-wait) #f) (mp-fail-count 1)
+                    (mp-fail-players)
+                    )
+            )
+          )
+        (print-game-text *mp-temp-string* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-start-game ()
   "Host, X in the lobby: the game of the mode chosen (see above). #t when it starts."
   (let ((session *mp-session*))
@@ -3117,7 +3487,6 @@
    )
   )
 
-(define-extern pc-mp-clock (function int int))
 (define-extern pc-mp-player-ping (function int int))
 
 (define *mp-clock-sync* (new 'global 'mp-clock-sync))
@@ -3322,6 +3691,12 @@
          )
         (((mp-event-kind world-reset))
          (mp-apply-world-reset ev)
+         )
+        (((mp-event-kind fail-spec))
+         (mp-apply-fail-spec ev)
+         )
+        (((mp-event-kind fail-show))
+         (mp-apply-fail-show ev)
          )
         )
       )
@@ -5861,6 +6236,7 @@
    history (recently-pressed?). And triangle during a cutscene another player watches
    (mp-skip-input)."
   (mp-skip-input)
+  (mp-fail-input)
   (if *progress-process*
       (set! (-> *mp-pause* menu-at) (mp-now))
       )
@@ -7135,6 +7511,8 @@
      (mp-econ-update)
      (mp-update-merchant)
      (mp-update-fluts)
+     (mp-update-fail)
+     (mp-draw-fail-votes)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)

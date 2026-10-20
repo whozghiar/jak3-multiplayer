@@ -402,5 +402,8 @@
   "159d": "Act 1",
   "159e": "Act 2",
   "159f": "Act 3",
-  "15a0": "Press <PAD_L1> + <PAD_TRIANGLE> to jump on Jak's shoulder"
+  "15a0": "Press <PAD_L1> + <PAD_TRIANGLE> to jump on Jak's shoulder",
+  "15a1": "<PAD_X> Retry: ~D/~D",
+  "15a2": "<PAD_X> Waiting for the other players (~D/~D)",
+  "15a3": "<PAD_TRIANGLE> Quit: ~D/~D"
 }

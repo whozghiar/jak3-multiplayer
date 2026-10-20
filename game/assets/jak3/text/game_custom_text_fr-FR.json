@@ -402,5 +402,8 @@
   "159d": "Acte 1",
   "159e": "Acte 2",
   "159f": "Acte 3",
-  "15a0": "Appuyez sur <PAD_L1> + <PAD_TRIANGLE> pour sauter sur l'épaule de Jak"
+  "15a0": "Appuyez sur <PAD_L1> + <PAD_TRIANGLE> pour sauter sur l'épaule de Jak",
+  "15a1": "<PAD_X> Recommencer : ~D/~D",
+  "15a2": "<PAD_X> En attente des autres joueurs (~D/~D)",
+  "15a3": "<PAD_TRIANGLE> Abandonner : ~D/~D"
 }
