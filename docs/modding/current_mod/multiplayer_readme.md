@@ -1138,12 +1138,27 @@ lizard":
 
 A mission runs while its task manager lives: its node's `on-open` script spawns it when the node
 opens and its level is active (`engine/util/script.gc`), or `update-task-masks` does once that
-level loads. In co-op, a player whose manager starts (`task-manager-init-by-other`, wrapped: it
-reached the mission's spot, talked, watched the intro) sends `mission-start` with the node. A
-player without that mission's manager and more than 40 m away goes next to that player
-(`*mp-request-teleport*`, "A mission starts: you join the other player"); the shared story
-progress (1.5) opened the same node there, so its own manager starts once that level is loaded. A
-player already running it stays where it is.
+level loads. In co-op:
+
+- **Who announces.** `task-manager-init-by-other` (wrapped) sends `mission-start` with the node
+  when our own play started the mission: a story step closed here, not from another player's
+  progress (`*mp-progress-replaying*`), within 30 s (`mp-on-task-closed` keeps the time,
+  `step-at`). A manager started by another player's step or by a level loading later says nothing.
+- **Who moves.** A player more than 40 m away goes next to the announcer (`*mp-request-teleport*`,
+  "A mission starts: you join the other player"), even when the shared progress already started
+  the same mission there. If both announce it (each machine closed the step: a shared cutscene),
+  the host stays and the guest comes.
+- **When.** The teleport waits until no cutscene plays here and our player is not grabbed or dead
+  (`mp-update-pending-teleport`). Beyond 150 m it goes through the other player's continue point,
+  then to the player once that level is in (`mp-teleport-to-player`): far away, the level named in
+  the other player's state can be active while the ground it stands on is not, and our player fell.
+- **The intro on a far machine.** A shared cutscene (1.6) is only played where its scene is
+  loaded (`scene-lookup` in `mp-apply-scene`): far from it, the scene player stopped on "can not
+  find scene" and kept the player grabbed for good.
+
+Checked on a real start (`mission-trigger`): the host talks to Kleiver at the arena (the kanga-rat
+hunt's introduction), the intro plays there, the hunt's manager starts; the guest at Spargus's
+doors skips the intro it cannot load, is told, and comes next to the host, its own hunt running.
 
 ## 5. Testing in game
 
@@ -1282,6 +1297,7 @@ A script line is `<seconds> <command>`:
 | `log-motion [m]`, `log-paused [m]`, `run-near-others <0\|1>` | NPCs within 60 m (ours, copies) and how many moved since the last call; on the authority, its NPCs near another player, how many the stock rule pauses and how many run; whether they run (default 1). |
 | `open-menu <page>`, `econ-grant-self <0\|1>` | A START menu page; the host's Mods menu entries, +100 precursor orbs (0) or Metal Head trophies (1). |
 | `log-eyes` | Each remote puppet's eye slot and the process that wrote it last (the puppet, our player). |
+| `coop-mission-intro`, `goto-type <type>` | The next `coop-mission` starts at the mission's introduction (its pre-play node and continue point); stand 1.5 m in front of the first process of that type, facing it (a mission giver: `kleever-npc`). |
 | `trace-fx` | Log each effect another player's machine sent and we replay (group, parent, joint). |
 | `dark-bomb`, `log-dark`, `restart`, `log-restart` | The dark bomb and the dark blast ready (features and stages, full dark eco; jump then square sets the bomb off, `press l1 600` then `press l1+square 200` the blast); what the blast needs (stage, features, eco, state) and the bolts that followed a target's position; START > Restart; the restarts done and asked. |
 | `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
@@ -1468,6 +1484,7 @@ pass.
 | `race-result` | Places and results | The guest, 4th of its racers, reads 5th with the host ahead; the host finished first waits for the guest; both first: won on both; the guest behind a racer: lost on both; 8 checks. |
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
 | `race-finish`, `race-finish-win` | Kleiver's race to the finish | Co-op from the lobby; once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers: lost on both machines; the guest reads 5th (the host's 4 racers and the host ahead). With the host's racers removed (`race-stop-racers`): the host finishes first and waits ("our result waits for the other players"), the guest second, won on both machines; 7 checks each. |
+| `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
 | `pre-game` | Spargus's pre-game in co-op | Co-op from the lobby at `wascity-pre-game`: both machines run the bubble game, the guest wins (R1, the game's debug win) and its resolution streams; the host's effects replayed on the guest (7, `trace-fx`). Before the fix the guest stopped as in the user's log of 2026-10-19 (`*mp-stock-launch-spawn*` +#x143, two runs out of two); after it, three runs without a crash; 6 checks. `combat` and `props` pass again (their Daxter check now expects no Daxter of the game on a Jak player). |
 | `dark-blast`, `dark-blast-coop` | The dark blast | Dark Jak's L1 + square (`target-darkjak-bomb1`) 4 m from the other player: before the fix the host's game stopped (access violation in `vector<-cspace!` from `lightning-tracker`); now its bolt to the guest's hurtbox follows its position, the guest is hit (free roam), the guest's blast hits the host, no game stops; in co-op no damage; 7 and 6 checks. |
 | `race-real`, `race-real-daxter` (rewritten) | Kleiver's race | Both races report place and progress (the guest counts the host's 4 racers); Daxter leaving his turtle during the countdown holds the start, gets no shoulder, gets back in his own turtle: the countdown again, then the race; 8 and 10 checks. |
@@ -1634,7 +1651,9 @@ public IP.
     cutscene (4.21); a dead co-op player watches a teammate for 5 s, its body on the ground (4.19).
   - *Co-op.* No friendly fire, no blow on a teammate's vehicle, the ridden lizard seen by the
     others (4.23); Daxter rides lizards and fires from them and from a shoulder (4.22, 4.8); a
-    mission one player starts brings the others there (4.24); races with own vehicles, places
+    mission one player starts brings the others there, checked on a real start (4.24; a shared
+    cutscene is only played where it is loaded, a far teleport goes through the continue point);
+    races with own vehicles, places
     counting the players and a result won only in the first places (4.15).
   - *Merchant.* Kleiver at a random spot of four, his icon on the minimap, "Merchant" in yellow;
     the host's +100 orbs and trophies in the Mods menu (4.20).
@@ -1650,7 +1669,7 @@ public IP.
     address 0 + #x20. `mp-group-replayable?` refuses those groups: three runs, no crash.
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
-    `daxter-perch-fire`, `mission-start`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,
+    `daxter-perch-fire`, `mission-start`, `mission-trigger`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,
     `race-real-daxter` and `economy` rewritten or extended; commands in 5.3.
 
 - **2026-10-19 (night, second pass):** after the stop hook's review of the first pass.
