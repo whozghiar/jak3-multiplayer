@@ -834,6 +834,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "with two more players counted ahead, the guest's HUD place reaches 7th and 8th (sprites 7 and 8)",
                 6 in gp and 7 in gp, f"places {sorted(set(gp))}")
 
+    elif scenario == "yellow2-shot":
+        w = grab(client, r"\] weapons shown red2 \d+ dark2 \d+ arc \d+ blue3 \d+ yellow2 (\d+)")
+        c.check(scenario, "the host's beam reflexor shots draw their trail on the guest (screens every second)",
+                bool(w) and int(w[-1][0]) >= 10, f"{w}")
+
+    elif scenario == "mounts-dup":
+        hs = grab(host, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")
+        gf = grab(client, r"\] fldax on (\S+) rides (\d+) art-on (\S+) daxter (\S+) state (\S+)")
+        hc = grab(host, r"\] copy 1 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
+        gm = grab(client, r"\] me (\S+) \S+ (\S+) speed")
+        c.check(scenario, "in the kanga-rat hunt both players ride a lizard: Jak the hunt's, Daxter his own copy of it",
+                any(st == "target-flut-stance" for (st,) in hs) and any(on == "#t" and st == "target-flut-stance" for on, _, _, _, st in gf),
+                f"host {hs[-1:]}, guest {gf[-1:]}")
+        c.check(scenario, "the host draws the guest's lizard, the guest rides it away from the host's",
+                ("#f", "#t") in hc and len(gm) >= 2 and abs(float(gm[-1][0]) - float(gm[0][0])) + abs(float(gm[-1][1]) - float(gm[0][1])) > 5,
+                f"{hc[-1:]}, guest {gm[:1]} -> {gm[-1:]}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")

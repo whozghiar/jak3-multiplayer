@@ -1,0 +1,25 @@
+# The beam reflexor's shot seen by the other player, guest side: 8 m from the host, looking at it,
+# a screenshot every second while the host fires (its shot's trail drawn here).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+48 goto-player 0 8 0
+49 look-player 0
+50 screenshot shot-50
+51 screenshot shot-51
+52 screenshot shot-52
+53 screenshot shot-53
+54 screenshot shot-54
+55 screenshot shot-55
+56 screenshot shot-56
+57 screenshot shot-57
+58 screenshot shot-58
+59 screenshot shot-59
+60 screenshot shot-60
+61 screenshot shot-61
+62 screenshot shot-62
+63 screenshot shot-63
+64.5 log-weapons
+66 log

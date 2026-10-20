@@ -1,0 +1,26 @@
+# The beam reflexor's shot seen by the other player, host side: the yellow 2 mod fired 14 times
+# toward the guest, 8 m away.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 gun 30
+51 face-player 1
+52 press r1 150
+52.6 press r1 150
+53.2 press r1 150
+53.8 press r1 150
+54.4 press r1 150
+55 press r1 150
+55.6 press r1 150
+56.2 press r1 150
+56.8 press r1 150
+57.4 press r1 150
+58 press r1 150
+58.6 press r1 150
+59.2 press r1 150
+59.8 press r1 150
+60.4 press r1 150
+62 log-weapons
+66 log

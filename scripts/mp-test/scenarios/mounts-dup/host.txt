@@ -1,0 +1,32 @@
+# Mounts for every player in a mission, host side (Jak): the kanga-rat hunt started by talking to
+# Kleiver (as mission-trigger); the host gets on the hunt's lizard; the guest (Daxter) gets on its
+# own copy of the same lizard: both ride during the mission.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission-intro
+31.2 coop-mission wascity-chase
+63 press x 100
+70 wait-player 1
+72 log-state task-manager-kanga-lizard
+74 log-me
+76 goto-type kleever-npc
+76.5 screenshot kleiver
+77 goto-type kleever-npc
+78 press triangle 100
+100 goto-flut
+101 press triangle 100
+104 log-me
+122 log-copies 1
+122.5 look-player 1
+124 screenshot both-host
+124.5 log-me
+128 log-copies 1
+130 log
