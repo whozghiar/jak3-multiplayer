@@ -1,0 +1,28 @@
+# A lizard for every player, guest side: brought to the host when the hunt starts; gets on a lizard
+# (the host's copy of it hides), sees the host get on the other, then gets off.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+68 continue wasdoors-city
+104 goto-flut
+104.5 log-fluts
+106 press triangle 100
+109 log-fluts
+122 log-fluts
+124 end-flut
+128 log-fluts
+129 screenshot after-off
+135 log

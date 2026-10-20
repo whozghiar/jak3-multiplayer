@@ -57,6 +57,7 @@
   (skip-vote 14)   ;; ... and asks to skip it
   (perched 15)     ;; Daxter on a Jak's shoulder (ride-slot: that Jak)
   (race-wait 16)   ;; its machine holds a race start until every player is aboard ("Races")
+  (flut 17)        ;; rides a leaper lizard ("A lizard for every player")
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -1066,6 +1067,9 @@
       )
     (if (< (- (mp-now) (-> *mp-race* hold-time)) (seconds 0.3))
         (logior! (-> st flags) (mp-flag race-wait))
+        )
+    (if (and *target* (focus-test? *target* flut))
+        (logior! (-> st flags) (mp-flag flut))
         )
     ;; a cutscene we watch, and our vote to skip it
     (when (mp-skippable-scene)
@@ -3457,6 +3461,247 @@
          ;; the ride did not start
          (set! (-> fl on?) #f)
          )
+        )
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; A lizard for every player (co-op)
+;;
+;; The leaper lizards (flut) a level places are per machine: each player rides its own copy of one.
+;; In co-op each of them near the player gets a second one 5 m to its right, on every machine, as
+;; soon as it waits there: two players, two lizards, even while the other player is still loading
+;; the world. The seconds stay out of the stock's count of lizards (a lizard of the level waits while
+;; 10 are out): only those within 60 m are placed, and an idle one 100 m away goes. When
+;; another player gets on a lizard, the copy of it here (our idle lizard nearest to that player)
+;; hides as the stock hides a lizard ridden; when that player gets off, a lizard waits here where it
+;; got off, as the stock leaves one. The lizard's code is level code (flut.gc, in WWD, DESLIZ and
+;; VOCA): its type is in GAME (flut-h.gc), its init is found by name.
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_FLUT_SIDE (meters 5))   ;; the second lizard to the right of the level's (the stock
+                                        ;; waits while another lizard stands within 4 m)
+(defconstant MP_FLUT_TAKEN (meters 12)) ;; another player's lizard is the one of ours within this
+(defconstant MP_FLUT_NEAR (meters 60))  ;; a lizard of the level this close to our player gets its second
+(defconstant MP_FLUT_FAR (meters 100))  ;; an idle second this far from our player goes
+
+(deftype mp-flut-watch (structure)
+  ((rides   symbol 8)   ;; that remote player rode a lizard last frame
+   (hidden  handle 8)   ;; our lizard hidden meanwhile (the one it took), #f none
+   (scan    time-frame) ;; last search for the level's lizards
+   (seconds int32)      ;; second lizards placed (test log)
+   (hides   int32)      ;; lizards hidden for another player (test log)
+   (shows   int32)      ;; lizards left where another player got off (test log)
+   )
+  )
+
+(define *mp-flut-watch* (new 'global 'mp-flut-watch))
+(dotimes (i 8)
+  (set! (-> *mp-flut-watch* rides i) #f)
+  (set! (-> *mp-flut-watch* hidden i) (the-as handle #f))
+  )
+
+;; iterate-process-tree callbacks' input and result (a lambda keeps no variable)
+(define *mp-flut-near* (the-as flut #f))
+(define *mp-flut-near-dist* 0.0)
+(define *mp-flut-pos* (new 'global 'vector))
+(define *mp-flut-level* (the-as flut #f))
+
+(defun mp-flut-spawn ((ent entity-actor) (pos vector) (quat quaternion) (rider handle) (name string))
+  "A leaper lizard of entity `ent` at `pos` facing `quat`, named `name`. A live `rider` handle makes
+   it idle at once (the stock otherwise waits until its spot is out of view); the stock gives the
+   player's when it leaves one. Returns the lizard, #f when the lizard's code is not loaded."
+  (let ((init (-> 'flut-init value))
+        (tq (new 'stack 'transformq))
+        )
+    (when (and init (type? init function))
+      (vector-copy! (-> tq trans) pos)
+      (quaternion-copy! (-> tq quat) quat)
+      (let ((proc (process-spawn
+                    flut
+                    :init (the-as (function entity-actor transformq handle flut-flag symbol object) init)
+                    ent
+                    tq
+                    rider
+                    (the-as flut-flag (+ 1 (shl (rand-vu-int-range 0 12) 32)))
+                    'normal
+                    :name name
+                    :to *entity-pool*
+                    )
+                  )
+            )
+        (if proc
+            (the-as flut (ppointer->process proc))
+            )
+        )
+      )
+    )
+  )
+
+(defun mp-flut-find-second ((proc process))
+  "iterate-process-tree callback: an idle second lizard (named flut-mp) of the entity of
+   *mp-flut-level*, left from that lizard's last birth (its level kept it), in *mp-flut-near*."
+  (when (and (type? proc flut)
+             (string= (-> proc name) "flut-mp")
+             (= (-> (the-as flut proc) entity) (-> *mp-flut-level* entity))
+             (-> proc next-state)
+             (= (-> proc next-state name) 'idle)
+             )
+    (set! *mp-flut-near* (the-as flut proc))
+    )
+  #f
+  )
+
+(defun mp-flut-scan-level ((proc process))
+  "iterate-process-tree callback (co-op): a lizard of the level (its entity's own process) waiting to
+   be ridden within MP_FLUT_NEAR of our player gets its second, once: the idle second left from its
+   last birth, else a new one MP_FLUT_SIDE to its right. Its rider field (unused by the stock past
+   its init) keeps the second."
+  (when (and (type? proc flut)
+             *target*
+             (-> (the-as flut proc) entity)
+             (= (-> (the-as flut proc) entity extra process) proc)
+             (= (-> (the-as flut proc) rider) (the-as handle #f))
+             (-> proc next-state)
+             (= (-> proc next-state name) 'idle)
+             (< (vector-vector-distance (-> (the-as flut proc) root trans) (-> *target* control trans)) MP_FLUT_NEAR)
+             )
+    (let ((lizard (the-as flut proc)))
+      (set! *mp-flut-level* lizard)
+      (set! *mp-flut-near* #f)
+      (iterate-process-tree *entity-pool* (the-as (function object object) mp-flut-find-second) *null-kernel-context*)
+      (let ((second *mp-flut-near*))
+        (when (not second)
+          (let ((pos (vector-x-quaternion! (new 'stack-no-clear 'vector) (-> lizard root quat))))
+            (vector-normalize! pos MP_FLUT_SIDE)
+            (vector+! pos pos (-> lizard root trans))
+            (set! second (mp-flut-spawn (-> lizard entity) pos (-> lizard root quat) (process->handle lizard) "flut-mp"))
+            (when second
+              (+! (-> *mp-flut-watch* seconds) 1)
+              (format 0 "[multiplayer] co-op: a second lizard next to ~A~%" (-> lizard name))
+              )
+            )
+          )
+        (if second
+            (set! (-> lizard rider) (process->handle second))
+            )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-flut-cull ((proc process))
+  "iterate-process-tree callback (co-op), for the seconds: out of the stock's lizard count (its idle
+   state counted it once: uncounted here, nothing counts it again), and an idle one MP_FLUT_FAR from
+   our player goes (its level's lizard gets one again when our player comes back)."
+  (when (and (type? proc flut) (string= (-> proc name) "flut-mp") (-> (the-as flut proc) count-lock))
+    (set! (-> (the-as flut proc) count-lock) #f)
+    (+! (-> *game-info* flut-count) -1)
+    )
+  (when (and (type? proc flut)
+             *target*
+             (string= (-> proc name) "flut-mp")
+             (-> proc next-state)
+             (= (-> proc next-state name) 'idle)
+             (< MP_FLUT_FAR (vector-vector-distance (-> (the-as flut proc) root trans) (-> *target* control trans)))
+             )
+    (let ((lizard (the-as flut (handle->process (-> (the-as flut proc) rider)))))
+      (if (and lizard (type? lizard flut) (= (handle->process (-> lizard rider)) proc))
+          (set! (-> lizard rider) (the-as handle #f))
+          )
+      )
+    (deactivate proc)
+    )
+  #f
+  )
+
+(defun mp-flut-scan-near ((proc process))
+  "iterate-process-tree callback: the idle lizard nearest to *mp-flut-pos* in *mp-flut-near*."
+  (when (and (type? proc flut)
+             (nonzero? (-> (the-as flut proc) root))
+             (-> proc next-state)
+             (= (-> proc next-state name) 'idle)
+             )
+    (let ((d (vector-vector-distance (-> (the-as flut proc) root trans) *mp-flut-pos*)))
+      (when (or (not *mp-flut-near*) (< d *mp-flut-near-dist*))
+        (set! *mp-flut-near* (the-as flut proc))
+        (set! *mp-flut-near-dist* d)
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-flut-hide ((lizard flut))
+  "Our copy of the lizard another player got on, hidden as the stock hides one ridden (its
+   wait-for-return state: not drawn, no collision), off the minimap and out of the lizard count."
+  (when (-> lizard count-lock)
+    (set! (-> lizard count-lock) #f)
+    (+! (-> *game-info* flut-count) -1)
+    )
+  (when (-> lizard minimap)
+    (logior! (-> lizard minimap flags) (minimap-flag fade-out))
+    (set! (-> lizard minimap) #f)
+    )
+  (go-process lizard (method-of-object lizard wait-for-return))
+  (none)
+  )
+
+(defun mp-update-fluts ()
+  "Co-op in game, every frame: the level's lizards get their second (twice a second); the lizard
+   another player gets on hides here, and a lizard waits where that player gets off (see above)."
+  (let ((w *mp-flut-watch*))
+    (when (and (mp-coop?) (mp-in-game?))
+      (when (>= (- (mp-now) (-> w scan)) (seconds 0.5))
+        (set! (-> w scan) (mp-now))
+        (iterate-process-tree *entity-pool* (the-as (function object object) mp-flut-cull) *null-kernel-context*)
+        (iterate-process-tree *entity-pool* (the-as (function object object) mp-flut-scan-level) *null-kernel-context*)
+        )
+      (dotimes (slot MP_MAX_PLAYERS)
+        (let* ((st (mp-remote-state slot))
+               (rides (the-as symbol (and st (logtest? (-> st flags) (mp-flag flut)))))
+               )
+          (cond
+            ;; it gets on a lizard: ours nearest to it is that one
+            ((and rides (not (-> w rides slot)))
+             (set! *mp-flut-near* #f)
+             (vector-copy! *mp-flut-pos* (-> st trans))
+             (iterate-process-tree *entity-pool* (the-as (function object object) mp-flut-scan-near) *null-kernel-context*)
+             (when (and *mp-flut-near* (< *mp-flut-near-dist* MP_FLUT_TAKEN))
+               (set! (-> w hidden slot) (process->handle *mp-flut-near*))
+               (+! (-> w hides) 1)
+               (format 0 "[multiplayer] player ~D gets on a lizard: ours there hides~%" slot)
+               (mp-flut-hide *mp-flut-near*)
+               )
+             )
+            ;; it got off (or left): a lizard waits there; the hidden one goes, as the stock's (a
+            ;; level's own lizard stays hidden until its next birth). Only while the hidden one
+            ;; lives: its entity is then still loaded.
+            ((and (not rides) (-> w rides slot))
+             (let ((lizard (the-as flut (handle->process (-> w hidden slot)))))
+               (when lizard
+                 (mp-flut-spawn
+                   (-> lizard entity)
+                   (if st (-> st trans) (-> lizard root trans))
+                   (if st (-> st quat) (-> lizard root quat))
+                   (if *target* (process->handle *target*) (the-as handle #f))
+                   "flut"
+                   )
+                 (+! (-> w shows) 1)
+                 (format 0 "[multiplayer] player ~D got off its lizard: one waits there~%" slot)
+                 (if (!= (-> lizard entity extra process) lizard)
+                     (deactivate lizard)
+                     )
+                 )
+               )
+             (set! (-> w hidden slot) (the-as handle #f))
+             )
+            )
+          (set! (-> w rides slot) rides)
+          )
         )
       )
     )
@@ -6719,6 +6964,7 @@
      (mp-update-race)
      (mp-econ-update)
      (mp-update-merchant)
+     (mp-update-fluts)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)

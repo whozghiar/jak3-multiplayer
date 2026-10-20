@@ -1,0 +1,36 @@
+# A lizard for every player, host side (Jak): co-op at the kanga-rat hunt (Kleiver gives it); each
+# lizard of the level has a second one beside it here from the start. The guest gets on one: ours
+# there hides. The host gets on the other. The guest gets off: a lizard waits here where it did.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission-intro
+31.2 coop-mission wascity-chase
+63 press x 100
+66 log-fluts
+70 wait-player 1
+72 log-fluts
+76 goto-type kleever-npc
+77 goto-type kleever-npc
+78 press triangle 100
+100 goto-flut
+100.5 log-fluts
+101 screenshot two-lizards
+112 log-fluts
+114 log-fluts
+114.5 screenshot guest-took-one
+116 goto-flut
+117 press triangle 100
+119 log-fluts
+120 look-player 1
+120.5 screenshot both-riding
+132 log-fluts
+133 screenshot guest-left-one
+135 log

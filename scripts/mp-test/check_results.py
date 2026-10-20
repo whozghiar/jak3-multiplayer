@@ -851,6 +851,22 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 ("#f", "#t") in hc and len(gm) >= 2 and abs(float(gm[-1][0]) - float(gm[0][0])) + abs(float(gm[-1][1]) - float(gm[0][1])) > 5,
                 f"{hc[-1:]}, guest {gm[:1]} -> {gm[-1:]}")
 
+    elif scenario == "mounts-coop":
+        FL = r"\] fluts idle (\d+) hidden (\d+) seconds-near (\d+) riding (\S+) placed (\d+) hides (\d+) shows (\d+)"
+        hf = [(int(i), int(h), int(sn), r, int(pl), int(hd), int(sh)) for i, h, sn, r, pl, hd, sh in grab(host, FL)]
+        gf = [(int(i), int(h), int(sn), r, int(pl), int(hd), int(sh)) for i, h, sn, r, pl, hd, sh in grab(client, FL)]
+        c.check(scenario, "co-op: the host has a second lizard beside the hunt's, two waiting before anyone rides",
+                any(f[4] >= 1 and f[0] >= 2 and f[2] >= 1 for f in hf), f"{hf[:3]}")
+        c.check(scenario, "the guest gets on a lizard: the host's copy of it hides, one still waits for the host",
+                any("player 1 gets on a lizard: ours there hides" in l for l in host)
+                and any(f[5] >= 1 and f[1] >= 1 and f[0] >= 1 and f[3] == "#f" for f in hf), f"{hf}")
+        c.check(scenario, "both ride: the host gets on the other lizard; the guest's copy of it hides there",
+                any(f[3] == "#t" for f in hf) and any(f[3] == "#t" for f in gf)
+                and any("player 0 gets on a lizard: ours there hides" in l for l in client), f"host {hf}, guest {gf}")
+        c.check(scenario, "the guest gets off: a lizard waits on the host's screen where it did",
+                any("player 1 got off its lizard: one waits there" in l for l in host) and bool(hf) and hf[-1][6] >= 1,
+                f"{hf[-1:]}")
+
     elif scenario == "eyes-before":
         ey = grab(client, r"\] eyes player 0 slot \d+ by \S+ puppet (\S+) target (\S+)")
         c.check(scenario, "with the fix undone, the host's Jak takes the eyes our hidden model writes (the bug, screenshot)",
