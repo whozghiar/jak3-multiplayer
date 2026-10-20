@@ -97,6 +97,8 @@
   (econ-buy 23)   ;; to the host: the sender buys shop item iarg 0
   (restart 24)    ;; host to everyone: the host restarted the mission (or its checkpoint), each
                   ;; player does too; guest to the host: asks for it ("Restart for everyone")
+  (mission-start 25) ;; co-op: the sender's mission started, its task node iarg 0 ("Missions
+                     ;; started together")
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -2678,6 +2680,7 @@
 (define-extern mp-econ-apply (function mp-event none))
 (define-extern mp-econ-buy (function int int none))
 (define-extern mp-apply-restart (function mp-event none)) ;; "Restart for everyone", below
+(define-extern mp-apply-mission-start (function mp-event none)) ;; "Missions started together", below
 (define *mp-prompt-replica* -1) ;; replica table index of the NPC vehicle the player stands next to
 
 ;; Lives in *pc-pool*, so it is frozen while the game is paused. Created by the hook when the mod
@@ -3158,6 +3161,9 @@
          )
         (((mp-event-kind restart))
          (mp-apply-restart ev)
+         )
+        (((mp-event-kind mission-start))
+         (mp-apply-mission-start ev)
          )
         )
       )
@@ -3889,6 +3895,65 @@
      (set! (-> *mp-session* restarting?) #f)
      (set! *mp-request-teleport* 0)
      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
+;; Missions started together
+;;
+;; A mission runs while its task manager lives: its node's on-open script spawns it when the node
+;; opens and its level is active (engine/util/script.gc), or update-task-masks does once that level
+;; loads. In co-op, a player whose manager starts (it reached the mission's spot, talked, watched
+;; the intro) tells the others: a player without that mission's manager, more than 40 m away, goes
+;; next to it. The shared story progress (1.5) opened the same node there, so its own manager
+;; starts once that level is loaded. A player already running the mission stays where it is.
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_MISSION_GATHER (meters 40))
+
+(define *mp-missions-gathered* 0) ;; times we went to another player's mission (test log)
+
+;; MOD multiplayer -- engine/game/task/task-control.gc
+(define-perm *mp-stock-task-manager-init-by-other* (function game-task-node-info symbol object :behavior task-manager)
+  task-manager-init-by-other
+  )
+
+(defbehavior task-manager-init-by-other task-manager ((arg0 game-task-node-info) (arg1 symbol))
+  "Stock (it does not return: it goes to the manager's wait state); in co-op the others are told
+   that this mission starts here (above)."
+  (when (mp-coop?)
+    (format 0 "[multiplayer] mission ~S starts here~%" (-> arg0 name))
+    (mp-send-event (mp-event-kind mission-start) -1 (get-idx-in-task-list arg0) 0.0)
+    )
+  (*mp-stock-task-manager-init-by-other* arg0 arg1)
+  )
+
+(defun mp-apply-mission-start ((ev mp-event))
+  "Another player's mission started: we go next to that player, unless the mission runs here too or
+   we stand within 40 m."
+  (let ((nodes (-> *game-info* sub-task-list))
+        (n (-> ev iarg 0))
+        (st (mp-remote-state (-> ev from)))
+        )
+    (when (and (mp-coop?) *target* st (> n 0) (< n (-> nodes length)))
+      (let ((node (-> nodes n)))
+        (cond
+          ((and (-> node manager) (handle->process (-> node manager manager)))
+           (format 0 "[multiplayer] player ~D starts ~S, which runs here too~%" (-> ev from) (-> node name))
+           )
+          ((< (vector-vector-distance (-> *target* control trans) (-> st trans)) MP_MISSION_GATHER)
+           (format 0 "[multiplayer] player ~D starts ~S next to us~%" (-> ev from) (-> node name))
+           )
+          (else
+            (format 0 "[multiplayer] player ~D starts ~S: we go there~%" (-> ev from) (-> node name))
+            (+! *mp-missions-gathered* 1)
+            (mp-show-message "A mission starts: you join the other player")
+            (set! *mp-request-teleport* (-> ev from))
+            )
+          )
+        )
+      )
     )
   (none)
   )

@@ -754,6 +754,21 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "mission-start":
+        me = grab(client, r"\] me (\S+) (\S+) (\S+) speed")
+        hme = grab(host, r"\] me (\S+) (\S+) (\S+) speed")
+        c.check(scenario, "the guest went far from the host's mission (another level)",
+                len(me) >= 2 and abs(float(me[0][0]) - 2270.8) + abs(float(me[0][2]) + 447.0) > 100.0, f"{me[:1]}")
+        c.check(scenario, "the host's mission starts: the guest is told and goes next to the host",
+                any("mission arena-training-1-collect starts here" in l for l in host)
+                and any("player 0 starts arena-training-1-collect: we go there" in l for l in client)
+                and bool(hme) and len(me) >= 2
+                and abs(float(me[-1][0]) - float(hme[-1][0])) + abs(float(me[-1][2]) - float(hme[-1][2])) < 10.0,
+                f"guest {me[-1:]}, host {hme[-1:]}")
+        st = grab(client, r"\] state task-manager-arena-training (\S+)")
+        c.check(scenario, "the mission runs on the guest too (its own task manager)",
+                sum(1 for l in client if "mission arena-training-1-collect starts here" in l) >= 2 and bool(st) and st[-1][0] != "none", f"{st}")
+
     elif scenario == "daxter-flut":
         fl = grab(client, r"\] fldax on (\S+) rides (\d+) art-on (\S+) daxter (\S+) state (\S+)")
         me = grab(client, r"\] me \S+ \S+ (\S+) speed \S+ state (\S+)")

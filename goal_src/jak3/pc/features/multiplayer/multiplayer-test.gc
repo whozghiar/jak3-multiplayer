@@ -73,6 +73,7 @@
 ;;   open-menu <page> | econ-grant-self <0|1>                a START page; the host's +100 orbs / trophies
 ;;   log-eyes                                                the remote puppets' eye slots and their last writer
 ;;   ride-flut | end-flut                                    ride a lizard where we stand (a level with lizards); off it
+;;   respawn-manager <type>                                  kill that mission's task manager, which starts again
 ;;   goto-flut | log-fldax                                   stand 2 m from the nearest lizard waiting, facing it; Daxter on it
 ;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   restart | log-restart                                   START > Restart; restarts done, mode, master mode
@@ -1873,6 +1874,19 @@
                  *mp-end-text* (= (level-status? *level* 'title #f) 'active)
                  (if *progress-process* (-> *progress-process* 0 current) 'none)
                  )
+         )
+        ((string= cmd "respawn-manager")
+         ;; respawn-manager <process type>: that task manager killed, then spawned again by the
+         ;; task masks, as when its mission starts (its node open, its level active)
+         (mp-test-word)
+         (set! *mp-test-type-name* (string->symbol (-> *mp-test* word)))
+         (let ((proc (search-process-tree *active-pool* (lambda ((p process)) (= (-> p type symbol) *mp-test-type-name*)))))
+           (when proc
+             (deactivate proc)
+             (update-task-masks 'event)
+             )
+           (format 0 "[mp-test] manager ~A respawned ~A gathered ~D~%" *mp-test-type-name* (if proc #t #f) *mp-missions-gathered*)
+           )
          )
         ((string= cmd "log-state")
          ;; log-state <process type>: the state of the first process of that type, and where we stand

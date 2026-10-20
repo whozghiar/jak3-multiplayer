@@ -1,0 +1,21 @@
+# A mission started by one player starts for the other, host side: co-op at the arena's jump
+# training (arena-training-1); once the guest went far away (Spargus's doors), the mission's task
+# manager starts again here, as when the host reaches a mission's spot: the guest is told.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission arena-training-1
+63 press x 100
+70 wait-player 1
+72 log-state task-manager-arena-training
+88 respawn-manager task-manager-arena-training
+85 log-state task-manager-arena-training
+100 log-me
+104 log
