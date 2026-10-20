@@ -1,0 +1,38 @@
+# Spargus's pre-game in co-op, guest side: follows into the host's pre-game and wins its own game
+# (R1, the game's debug win): its resolution plays while the host is in its own game, as in the
+# user's crash of 2026-10-19; no game stops.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+62.5 trace-fx
+64 press r1 100
+65 press r1 100
+66 press r1 100
+67 press r1 100
+68 press r1 100
+69 press r1 100
+70 log-me
+71 screenshot pre-game
+72 press r1 100
+74 press r1 100
+76 press r1 100
+78 press r1 100
+85 log-me
+86 log-state was-pre-game
+100 log-me
+101 screenshot pre-game-2
+115 log-me
+120 log

@@ -2801,7 +2801,13 @@
 
 (defun mp-group-replayable? ((group sparticle-launch-group) (parent process))
   "#t when a copy of particle group `group` can play on a part-tracker under `parent` (#f: in the
-   world): every particle of it can (mp-launcher-replayable?)."
+   world): every particle of it can (mp-launcher-replayable?), and it is not drawn in an object's
+   local space (sp-group-flag sp12: its launch control copies a matrix from the binding the object
+   sets with set-local-space-info; a copy has none, and the launch read address 0 + #x20: the game
+   stopped in the spawn of a part-tracker-subsampler, seen in Spargus's pre-game)."
+  (if (logtest? (-> group flags) (sp-group-flag sp12))
+      (return #f)
+      )
   (dotimes (i (-> group length))
     (let ((launcher (-> *part-id-table* (-> group launcher i launcher))))
       (if (and (nonzero? launcher) launcher (type? launcher sparticle-launcher) (not (mp-launcher-replayable? launcher parent)))
@@ -2916,6 +2922,8 @@
 
 (define *mp-fx-joint-clamped* 0) ;; effects whose joint the copy lacks, played in the world (test log)
 
+(define *mp-trace-fx* #f) ;; trace-fx: log each effect replayed (test)
+
 (defun mp-replay-effect ((ev mp-event))
   "Start an effect another player saw start, unless an identical one just started here: on the copy
    of what it belongs to (following the same joint), else in the world; never for a player whose
@@ -2965,6 +2973,11 @@
                 (set! parent (the-as process #f))
                 )
             (when (and (or parent (= owner -1) (>= owner 0)) (mp-group-replayable? group parent))
+              (if *mp-trace-fx*
+                  (format 0 "[mp-test] fx replay ~D ~S parent ~A joint ~D sub ~A~%" index (-> group name) parent joint
+                          (logtest? (-> group flags) (sp-group-flag sp13))
+                          )
+                  )
               (set! (-> fx replaying?) #t)
               (+! (-> fx total-effects-shown) 1)
               (vector-copy! (-> *launch-matrix* trans) (-> ev fvec))

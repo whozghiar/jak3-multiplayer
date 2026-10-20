@@ -193,7 +193,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
     elif scenario in ("props", "combat"):
         cp = copies(client, 0)
         dax = cp.get("skel-sidekick", [])
-        c.check(scenario, "the guest draws the host's Daxter", "#t" in dax, f"skel-sidekick drawn {dax}")
+        # since 2026-10-19 a Jak played online carries no Daxter of the game (Daxter is a player, 4.16)
+        c.check(scenario, "the host, a Jak player, carries no Daxter of the game: none drawn on the guest",
+                "#t" not in dax, f"skel-sidekick drawn {dax}")
         if scenario == "combat":
             # the host takes its gun out here (props does not)
             guns = {k: v for k, v in cp.items() if "gun" in k}
@@ -797,6 +799,16 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                     and hres[-1:] == [("won",)] and gres[-1:] == [("won",)]
                     and {hp[-1][0], gp[-1][0]} == {"0", "1"}, f"host {hres} {hp[-1:]}, guest {gres} {gp[-1:]}")
 
+    elif scenario == "pre-game":
+        crashed = [l for l in host + client if "crash:" in l]
+        replays = [l for l in client if "fx replay" in l]
+        c.check(scenario, "co-op at Spargus's pre-game: both machines play it, the guest wins (its resolution streams)",
+                any("starts wascity-pre-game-resolution" in l for l in host + client)
+                and any("pre-game-res" in l for l in client),
+                f"{len(replays)} effects replayed on the guest")
+        c.check(scenario, "the host's effects replayed on the guest, none in an object's local space; no game stops (before the fix: access violation in *mp-stock-launch-spawn* +#x143)",
+                bool(replays) and not crashed, f"{crashed[:1]}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")
@@ -835,8 +847,8 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and len(me) >= 2 and abs(float(me[1][0]) - float(me[0][0])) > 5.0, f"gun {gun}, z {[z for z, _ in me]}")
         c.check(scenario, "off the lizard he is Daxter again, his art back",
                 bool(fl) and fl[-1] == ("#f", "1", "#f", "#t", "target-indax-stance"), f"{fl[-1:]}")
-        copies = grab(host, r"\] copy 1 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
-        c.check(scenario, "the host draws the guest's lizard under him", bool(copies) and copies[0] == ("#f", "#t"), f"{copies}")
+        lizards = grab(host, r"\] copy 1 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
+        c.check(scenario, "the host draws the guest's lizard under him", bool(lizards) and lizards[0] == ("#f", "#t"), f"{lizards}")
 
     elif scenario == "daxter-perch-fire":
         co = grab(client, r"\] coop #t authority \S+ character \S+ perch (-?\d+) perched \S+ state (\S+)")

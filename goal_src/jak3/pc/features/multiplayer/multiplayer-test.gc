@@ -2044,6 +2044,10 @@
                  (-> *mp-world-state* faded-near)
                  )
          )
+        ((string= cmd "trace-fx")
+         ;; trace-fx: log each effect another player's machine sent and we replay
+         (set! *mp-trace-fx* #t)
+         )
         ((string= cmd "trace-vanish")
          (set! *mp-trace-vanish* #t)
          )
