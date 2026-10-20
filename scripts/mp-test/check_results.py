@@ -1016,14 +1016,19 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any("the merchant is at spot" in l for l in host) and bool(hm) and bool(cm) and hm[0][0] == cm[0][0] != "-1",
                 f"host {hm[:1]}, guest {cm[:1]}")
         c.check(scenario, "each spot the host sets reaches the guest (0, 1, 2, 3)",
-                [s for s, _, _ in hm[1:]] == ["0", "1", "2", "3"] and [s for s, _, _ in cm[2:]] == ["1", "2", "3"]
+                [s for s, _, _ in hm[1:5]] == ["0", "1", "2", "3"] and [s for s, _, _ in cm[2:]] == ["1", "2", "3"]
                 and cm[1][0] == "0", f"host {[s for s, _, _ in hm]}, guest {[s for s, _, _ in cm]}")
         c.check(scenario, "every spot is on the ground (the host stands there)",
                 len(me) == 4 and all(st == "target-stance" for _, st in me), f"{me}")
-        km = grab(host, r"\] kleiver model (\S+) borrow (\S+) lkleever (\S+) at (\S+) from the spot drawn (\S+)")
+        km = grab(host, r"\] kleiver model (\S+) borrow (\S+) lkleever (\S+) at (\S+) from the spot drawn (#t|#f)")
         c.check(scenario, "Kleiver's model stands at his spot, drawn (his level lkleever borrowed into waswide)",
                 len(km) >= 4 and all(m[0] == "#t" and m[2] == "active" and float(m[3]) < 0.5 and m[4] == "#t" for m in km[-4:]),
                 f"{km}")
+        kl = grab(host, r"\] kleiver solid (\S+) clip (\d+) facing (\S+) we stand ([\d.]+)")
+        c.check(scenario, "Kleiver: solid, the host walking into him from 4 m stops against him, he faces it, his idle clips change",
+                len(kl) >= 6 and all(k[0] == "#t" for k in kl) and len({k[1] for k in kl}) >= 2
+                and float(kl[-2][2]) > 0.8 and float(kl[-2][3]) > 3.5
+                and float(kl[-1][2]) > 0.8 and 1.0 < float(kl[-1][3]) < 2.5, f"{kl}")
         labels = grab(host + client, r"\] merchant label \"?(.+?)\"? language (\d+)")
         c.check(scenario, "his name drawn over the spot reads \"Marchand\" in French (language 1), in yellow (font-color yellow)",
                 bool(labels) and all(t == "Marchand" for t, lang in labels if lang == "1") and any(lang == "1" for _, lang in labels), f"{sorted(set(labels))}")

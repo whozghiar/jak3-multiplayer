@@ -725,6 +725,8 @@
   (none)
   )
 
+(define *mp-test-walk-frames* 0) ;; walk-to-merchant: frames left walking toward Kleiver's spot
+
 (defun mp-test-own-flush ()
   "Print the bones of our objects asked by log-pose-own, once per frame for as many frames as asked.
    Called by the manager, at the point of the frame where the batch reads them (before this frame's
@@ -1722,6 +1724,22 @@
                          )
                  )
              (format 0 "~%")
+             ;; solid, his clip, how much he faces us (1 = straight at us), how far we stand
+             (when (and k *target* (type? (-> k root) collide-shape))
+               (let ((fwd (vector-z-quaternion! (new 'stack-no-clear 'vector) (-> k root quat)))
+                     (to (vector-! (new 'stack-no-clear 'vector) (-> *target* control trans) (-> k root trans)))
+                     )
+                 (set! (-> fwd y) 0.0)
+                 (set! (-> to y) 0.0)
+                 (vector-normalize! fwd 1.0)
+                 (format 0 "[mp-test] kleiver solid ~A clip ~D facing ~,,2f we stand ~m~%"
+                         (logtest? (-> (the-as collide-shape (-> k root)) root-prim prim-core action) (collide-action solid))
+                         (-> mgr kleiver-anim)
+                         (vector-dot fwd (vector-normalize! to 1.0))
+                         (vector-vector-xz-distance (-> *target* control trans) (-> k root trans))
+                         )
+                 )
+               )
              )
            (format 0 "[mp-test] merchant label ~S language ~D~%" (lookup-text! *common-text* (text-id progress-mp-merchant) #f)
                    (-> *setting-control* user-default language)
@@ -1739,11 +1757,31 @@
            (set! (-> *mp-econ* sent) (the-as uint 0))
            )
          )
+        ((string= cmd "walk-to-merchant")
+         ;; walk-to-merchant <frames>: walk toward Kleiver's spot that many frames (the stick follows
+         ;; the camera)
+         (set! *mp-test-walk-frames* (mp-test-int))
+         )
         ((string= cmd "goto-merchant")
-         ;; goto-merchant: stand at Kleiver's spot in Spargus (his shop)
-         (when *target*
-           (move-to-point! (-> *target* control) *mp-merchant-pos*)
-           (vector-reset! (-> *target* control transv))
+         ;; goto-merchant [m]: stand at Kleiver's spot in Spargus (his shop), or m meters from it along
+         ;; x, facing it
+         (let ((m (mp-test-int)))
+           (when *target*
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) *mp-merchant-pos*)))
+               (+! (-> pos x) (* (meters 1) (the float m)))
+               (move-to-point! (-> *target* control) pos)
+               (vector-reset! (-> *target* control transv))
+               (when (> m 0)
+                 (let ((dir (vector-! (new 'stack-no-clear 'vector) *mp-merchant-pos* pos)))
+                   (set! (-> dir y) 0.0)
+                   (vector-normalize! dir 1.0)
+                   (forward-up->quaternion (-> *target* control quat-for-control) dir (new 'static 'vector :y 1.0 :w 1.0))
+                   (quaternion-copy! (-> *target* control quat) (-> *target* control quat-for-control))
+                   (quaternion-copy! (-> *target* control dir-targ) (-> *target* control quat))
+                   )
+                 )
+               )
+             )
            )
          )
         ((string= cmd "goto-orb")
@@ -3465,9 +3503,30 @@
     )
   )
 
+(defun mp-test-walk-stick ()
+  "walk-to-merchant: the left stick pushed toward Kleiver's spot as the camera sees it (the stick is
+   camera relative): the angle from the camera's ground heading to the spot's, as the stick's."
+  (when (and (> *mp-test-walk-frames* 0) *target*)
+    (+! *mp-test-walk-frames* -1)
+    (let* ((cam (camera-pos))
+           (me (-> *target* control trans))
+           (fx (- (-> me x) (-> cam x)))
+           (fz (- (-> me z) (-> cam z)))
+           (dx (- (-> *mp-merchant-pos* x) (-> me x)))
+           (dz (- (-> *mp-merchant-pos* z) (-> me z)))
+           (a (atan (- (* fz dx) (* fx dz)) (+ (* fx dx) (* fz dz))))
+           )
+      (pc-mp-test-pad 0 (- 128 (the int (* 127.0 (sin a)))) (- 128 (the int (* 127.0 (cos a)))) 128 128)
+      (set! (-> *mp-test* pad-until) (+ (mp-now) (seconds 0.1)))
+      )
+    )
+  (none)
+  )
+
 (defun mp-test-update ()
   "Release forced input when its time is over, end a wait when it is over, then run the due script
    commands."
+  (mp-test-walk-stick)
   (when (and (nonzero? (-> *mp-test* pad-until)) (>= (mp-now) (-> *mp-test* pad-until)))
     (pc-mp-test-pad 0 128 128 128 128)
     (set! (-> *mp-test* pad-until) 0)
