@@ -41,7 +41,9 @@ Daxter co-op duo with its own multiplayer save.
     on foot while the other one is alive nearby watches them for 5 seconds ("Spectating"), their
     body on the ground, then comes back next to them, and the mission goes on. When one player
     starts a mission (reaching its spot, talking to someone), the other is brought there and the
-    mission starts for both. Players cannot hurt each other or each other's vehicles, and where the
+    mission starts for both. When a mission fails, the failure shows for both players at once and
+    waits for both: when both chose to retry (or to quit), both are put back together, at the
+    mission's start or at the respawn point. Players cannot hurt each other or each other's vehicles, and where the
     game leaves a lizard, two wait side by side, one for each player. A cutscene is skipped once both players asked
     (triangle); only the host can pause it. A waypoint (the yellow beam) waits for both players to
     stand on it ("Players here: 1/2"). In a race each player drives their own vehicle (no riding

@@ -544,7 +544,7 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/wwd.gd`, `voca.gd` | `jak-fldax+0-ag.go` added after `jak-flut+0-ag.go`: Daxter's lizard clips (`daxter-fldax-*`) and the lizard's under him (`flut-saddle-fldax-*`), which only the desert chase loaded (DESLIZ, unchanged). Its lizard clips link to the lizard of the same level, so it is not in GAME (4.22). |
 | `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post reports our place, progress and result and the racers' progress (`mp-racer-progress`, `mp-race-ai-progress`, `mp-race-position`), waits for the other players' result (`mp-race-result-wait?`) and asks it (`mp-race-won?`) (4.15). |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`), the result waiting for the others (`#x159b`) and the acts of the
-mission pages (`#x159c`-`#x159f`) and Daxter's L1 + triangle prompt (`#x15a0`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
+mission pages (`#x159c`-`#x159f`), Daxter's L1 + triangle prompt (`#x15a0`) and a failure's votes (`#x15a1`-`#x15a3`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
@@ -582,6 +582,7 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `game-info` `give` | `engine/game/game-info.gc` | A precursor orb taken is claimed from the host for our account (4.20). |
 | `merc-eye-anim` | `engine/gfx/foreground/eye.gc` | Our player's own model feeds no eyes while it plays Daxter online: it wrote Daxter's eyes into the eye slot every Jak shares (4.2). |
 | `restart-mission` | `engine/game/task/task-control.gc` | START > Restart restarts every player (4.21). |
+| `spawn-resetter!` (`resetter-control`) | same file | A mission's failure shown on every machine, no auto-reset in co-op, a new vote (4.26). |
 | `task-manager-init-by-other` | same file | A mission starting tells the others (4.24). |
 | `lightning-tracker-init` | `engine/common-obs/generic-obs.gc` | A bolt to a focusable without the joint asked follows its position (joint 256): the dark blast sent one to another player's hurtbox at joint 3 and the game stopped (4.23). |
 | `target-indax-stance`, `target-indax-walk` `event` | `engine/target/indax/target-indax.gc` | Their handler is replaced (a state keeps the one it was defined with): a lizard offered to a Daxter player starts the stock ride (4.22). |
@@ -1230,6 +1231,39 @@ Checked by `mounts-coop`: at the kanga-rat hunt the host has two lizards at the 
 count stays at 10); the guest gets on one, the host's copy of it hides, the host rides the other;
 the guest gets off and a lizard waits there on the host's screen.
 
+### 4.26 Co-op: a mission failed, for every player
+
+The game shows a failure with a resetter (`engine/game/task/task-control.gc`): `spawn-resetter!`
+starts it; it grabs the player, slows the world down, then waits for X (retry, or go on when the
+failure offers no choice) or triangle (quit, when it offers to), and resets: the mission's start
+or its fail continue. Story missions fail without a choice (`mission-fail`, the game's fallback:
+back to the mission's start, reset by itself after a delay); the minigames offer retry or quit
+(`mission-fail-or-retry`, their `fail-info`). multiplayer.gc "A mission failed, for every player":
+
+- **Shown everywhere.** The `spawn-resetter!` wrapper sends our failure (not a retry from the
+  menu, not one another player sent) in two events: `fail-spec` (message, flags, task, text,
+  delay, nodes, reset modes, the fail continue's name) and `fail-show` (the retry continue's
+  name). Another player spawns the same resetter (`mp-apply-fail-show`), unless its game shows one
+  already. A spec's `execute` script is not sent.
+- **No reset by itself.** In co-op the `auto-reset` flag is taken off: the failure waits for every
+  player.
+- **The vote.** `mp-fail-input`, in the input process that runs first every frame, takes X and
+  triangle from pad 0 (and its high-fps history) before the resetter reads them: they are our vote
+  (1 retry or go on, 2 quit), carried by the state (`fail-shown`, `fail-retry`, `fail-quit`, bits
+  18 to 20). Under the failure, the count shows ("Retry: 1/2" and "Quit: 0/2", `#x15a1`, `#x15a3`;
+  "Waiting for the other players (1/2)" without a choice, `#x15a2`). Votes that differ decide
+  nothing; a player may change its vote.
+- **Together.** Once every player chose the same (`mp-update-fail`), each machine gives its
+  resetter that button (X or triangle) on its next frame, once the resetter reads its choice (2 s
+  after it grabbed the player, on the real clock: the game's clocks are frozen meanwhile). Every
+  player is put back at once: the mission's start (retry) or the fail continue (quit). A guest
+  then more than 40 m from the host goes next to it.
+
+Checked by `mission-fail` (the jump training's failure, no choice: it stays until both pressed X)
+and `mission-fail-retry` (a failure offering retry or quit, `spawn-fail-or-retry`): the failure on
+both machines, votes that differ deciding nothing, then retry (and quit) decided on both; each
+machine gave its decision within 0.2 s of the other (host time), both players at the same spot.
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1342,6 +1376,7 @@ A script line is `<seconds> <command>`:
 | `log-seat` | Our model in a vehicle, in the vehicle's axes (x left, y up, z forward) from the seat point: as a passenger the model in the seat (its root, bone 3, its bones' extent, its clip), driving the model drawn (Daxter's in his mode) from the player's position. |
 | `log-joints`, `log-anim <daxter\|jak> <index>` | Daxter's joints (index, name, parent); the entry at that index of Daxter's or Jak's art group (a clip is loaded when it prints an `art-joint-anim`). |
 | `log-name` | The player name kept and the on-screen keyboard's text. |
+| `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
 | `goto-merchant [m]`, `walk-to-merchant <frames>` | Stand at Kleiver's spot, or m meters from it facing it; walk toward it (the stick follows the camera). `log-econ` prints his model (alive, level, drawn), whether he is solid, his idle clip, how much he faces us and how far we stand. |
 | `host-play-mission <name>`, `log-input` | The host's Choose a mission in game on that play-list name (`mp-host-play-mission`); what our buttons did: state, gun mod, ammo of each color, Daxter's shots, the START menu open. |
 | `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions`, `log-acts` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered; the missions of each act (count, first three). |
@@ -1569,6 +1604,7 @@ passed, no crash.
 | `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
 | `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
+| `mission-fail`, `mission-fail-retry` | A mission failed, for every player | The jump training's failure (no choice) or a retry-or-quit one: shown on host and guest; it does not reset by itself; votes that differ decide nothing; both retry (or go on), then a second failure both quit (or go on): decided on both machines within 0.2 s (host time), both at the same spot; 8 checks each. |
 | `menu-buttons` | Buttons under the START menu | The menu opened with START, R1, square, L1, the D-pad, X (choosing entries) and triangle pressed, X again right after it closes: no shot, no gun change, no jump or attack, host (Jak, gun out) and guest (Daxter); X made both jump before the history fix (reproduced); 6 checks. |
 | `daxter-moves` | Daxter's D-pad and L1 + triangle | The D-pad takes his gun out, the mod chosen in his hand, no shot; next to the standing host's Jak the prompt asks L1 + triangle, triangle alone does nothing, L1 + triangle climbs on its shoulder (the host sees it), X puts him down; 6 checks (screenshots). |
 | `mission-switch` | The host changes mission in game | Co-op at the palace ruins' patrol; the host chooses the ruins' attack (Jak in the Rhino, "rubblea-rhino"): both players at its start, each in its own Rhino (the host sees the guest drive vehicle 17), no game stops; 7 checks (screenshots). |
@@ -1637,6 +1673,9 @@ public IP.
 
 ## 6. Known limits
 
+- A failure keeps the game's choices: a story mission's offers only to go on (the game puts the
+  players back at the mission's start), a minigame's retry or quit. A failure's `execute` script
+  runs only on the machine whose mission failed.
 - Kleiver does not speak: his art group has no talking clip (only idles and a walk), so his line
   is text and the shop is the menu page.
 - Co-op seconds are given to the lizards a level places. The leaper race and the desert's lizard
@@ -1731,6 +1770,10 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-21:** after the user's play test: a mission's failure shows for every player at once,
+  waits for every player's choice (retry or quit, or go on), and puts every player back together
+  (4.26). Scenarios `mission-fail`, `mission-fail-retry`; commands `send-fail`,
+  `spawn-fail-or-retry`, `log-fail`.
 - **2026-10-20 (night):** the user's play test of the round below (two instances, `local_pair.py`).
   - *Crash.* The guest's game stopped in the palace ruins on a renderer assertion right after
     "shadow overflow detected": the engine's skip of an overflowing shadow tested `==` and skipped
