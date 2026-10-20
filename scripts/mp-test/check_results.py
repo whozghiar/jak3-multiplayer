@@ -803,7 +803,8 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         crashed = [l for l in host + client if "crash:" in l]
         replays = [l for l in client if "fx replay" in l]
         c.check(scenario, "co-op at Spargus's pre-game: both machines play it, the guest wins (its resolution streams)",
-                any("starts wascity-pre-game-resolution" in l for l in host + client)
+                any("mission wascity-pre-game-resolution starts here" in l for l in host)
+                and any("cutscene wascity-pre-game-res of player 1 starts here too" in l for l in host)
                 and any("pre-game-res" in l for l in client),
                 f"{len(replays)} effects replayed on the guest")
         c.check(scenario, "the host's effects replayed on the guest, none in an object's local space; no game stops (before the fix: access violation in *mp-stock-launch-spawn* +#x143)",

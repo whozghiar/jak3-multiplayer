@@ -1749,8 +1749,10 @@ public IP.
     every lizard of a level near the player has a second one beside it on every machine, the one
     another player takes hides, and one waits where it gets off (4.25). `coop-campaign` pressed
     up from Continue the campaign (where the lobby now starts) and chose a new one; `mission-start`
-    counted the guest's announcement while joining, now silent. Scenarios `mission-select`,
-    `mounts-coop`.
+    counted the guest's announcement while joining, now silent (as did `pre-game`, which now checks
+    the host's mission and the guest's resolution cutscene). Scenarios `mission-select`,
+    `mounts-coop`. Full sweep of the bug list on cbb70bd3f: 34 scenarios, 233 checks passed,
+    0 failed, no crash (`skin-title` and `host-quit` from a retail boot).
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
     `daxter-perch-fire`, `mission-start`, `mission-trigger`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,
