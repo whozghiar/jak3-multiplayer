@@ -1,0 +1,31 @@
+# A mission started by walking to whoever gives it, host side: co-op from the lobby at the kanga-rat
+# hunt's introduction (next to Kleiver at the arena); once the guest went to Spargus's doors, the
+# host talks to Kleiver (triangle): the intro cutscene, then the hunt's task manager starts here
+# and the guest is taken there, its own manager running too.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission-intro
+31.2 coop-mission wascity-chase
+63 press x 100
+70 wait-player 1
+72 log-state task-manager-kanga-lizard
+74 log-me
+76 goto-type kleever-npc
+76.5 screenshot kleiver
+77 goto-type kleever-npc
+78 press triangle 100
+92 press triangle 100
+142 log-state task-manager-kanga-lizard
+143 log-me
+150 log-state task-manager-kanga-lizard
+151 log-me
+152 screenshot hunt
+156 log

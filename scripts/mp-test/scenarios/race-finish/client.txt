@@ -35,12 +35,14 @@
 130 race-autopilot
 135 race-autopilot
 137 log-race
+137.5 screenshot place-mid
 140 race-autopilot
 152 log-race
 167 log-race
 182 log-race
 197 log-race
 212 log-race
+212.5 screenshot place-late
 227 log-race
 242 log-race
 257 log-race

@@ -5433,9 +5433,13 @@
   (none)
   )
 
+(define *mp-scene-not-here* 0) ;; another player's cutscenes not loaded here, so not played (test log)
+
 (defbehavior mp-apply-scene mp-manager ((ev mp-event))
   "Part of another player's cutscene; on its last part, start the same cutscene here when that
-   player shares our region and no cutscene plays here."
+   player shares our region, no cutscene plays here and its scene is loaded here (scene-lookup,
+   as the scene player finds it: far from it, the scene player stopped on \"can not find scene\"
+   and kept our player grabbed for good)."
   (let ((sc *mp-scene*)
         (index (-> ev iarg 0))
         )
@@ -5463,21 +5467,29 @@
                           )
                       )
               )
-         (format 0 "[multiplayer] cutscene ~S of player ~D starts here too~%" (-> sc names 0) (-> ev from))
-         (set! (-> sc replaying?) #t)
-         (process-spawn
-           scene-player
-           :init scene-player-init
-           scenes
-           (nonzero? (-> ev iarg 2))
-           (if (nonzero? (length (-> sc continue)))
-               (-> sc continue)
-               (the-as string #f)
+         (cond
+           ((not (scene-lookup (-> sc names 0)))
+            (+! *mp-scene-not-here* 1)
+            (format 0 "[multiplayer] cutscene ~S of player ~D is not loaded here: not played~%" (-> sc names 0) (-> ev from))
+            )
+           (else
+             (format 0 "[multiplayer] cutscene ~S of player ~D starts here too~%" (-> sc names 0) (-> ev from))
+             (set! (-> sc replaying?) #t)
+             (process-spawn
+               scene-player
+               :init scene-player-init
+               scenes
+               (nonzero? (-> ev iarg 2))
+               (if (nonzero? (length (-> sc continue)))
+                   (-> sc continue)
+                   (the-as string #f)
+                   )
+               :name "scene-player"
                )
-           :name "scene-player"
+             (set! (-> sc replaying?) #f)
+             (+! (-> sc shown) 1)
+             )
            )
-         (set! (-> sc replaying?) #f)
-         (+! (-> sc shown) 1)
          )
        )
       )

@@ -809,6 +809,26 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the host's effects replayed on the guest, none in an object's local space; no game stops (before the fix: access violation in *mp-stock-launch-spawn* +#x143)",
                 bool(replays) and not crashed, f"{crashed[:1]}")
 
+    elif scenario == "mission-trigger":
+        hme = grab(host, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
+        gme = grab(client, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
+        hs = grab(host, r"\] state task-manager-kanga-lizard (\S+)")
+        gs = grab(client, r"\] state task-manager-kanga-lizard (\S+)")
+        c.check(scenario, "the guest went to Spargus's doors, far from Kleiver",
+                any(abs(float(x) - 2359.3) + abs(float(z) + 376.4) > 300 for x, _, z, _ in gme[:1]), f"{gme[:1]}")
+        c.check(scenario, "the host talks to Kleiver: no hunt before, its task manager runs after (a real start)",
+                bool(hs) and hs[0][0] == "none" and hs[-1][0] == "active"
+                and any("mission wascity-chase-resolution starts here" in l for l in host), f"{hs}")
+        c.check(scenario, "the guest skips the intro it cannot load (no grab left), is told and taken next to the host",
+                any("cutscene wascity-chase-intro of player 0 is not loaded here: not played" in l for l in client)
+                and any("player 0 starts wascity-chase-resolution: we go there" in l for l in client)
+                and bool(gme) and bool(hme)
+                and abs(float(gme[-1][0]) - float(hme[-1][0])) + abs(float(gme[-1][2]) - float(hme[-1][2])) < 10
+                and not gme[-1][3].endswith("grab"), f"guest {gme[-1:]}, host {hme[-1:]}")
+        c.check(scenario, "the hunt runs on the guest too (its own task manager), the host stays (it started it)",
+                bool(gs) and gs[-1][0] == "active" and not any("player 1 starts wascity-chase-resolution: we go there" in l for l in host),
+                f"{gs[-1:]}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")

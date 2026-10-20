@@ -242,6 +242,7 @@
 (define *mp-stolen-until* 0)
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
+(define *mp-test-coop-intro* #f) ;; test (coop-mission-intro): co-op starts at the chosen mission's introduction
 
 ;; Joining the host's world, and co-op (both described with their code, below).
 (deftype mp-join-state (structure)
@@ -803,6 +804,9 @@
    (guest-played?    symbol)     ;; guest: it played in the host's world since it joined
    (restarting?      symbol)     ;; a restart the host sent is running here (not sent back)
    (restarts         int32)      ;; restarts done here (test log)
+   (step-at          time-frame) ;; last story step our own play closed here (not another player's)
+   (announced-node   int32)      ;; the mission start we announced last (its node), and when
+   (announced-at     time-frame)
    )
   )
 
@@ -2176,7 +2180,12 @@
   )
 
 (defun mp-on-task-closed ((node game-task-node-info))
-  "A task node closed here: the other players close it too, unless they told us to."
+  "A task node closed here: the other players close it too, unless they told us to. Closed by our
+   own play, its time is kept: a mission it starts is ours to announce (\"Missions started
+   together\")."
+  (if (not *mp-progress-replaying*)
+      (set! (-> *mp-session* step-at) (mp-now))
+      )
   (when (and (mp-online?) (logtest? *mp-world* (mp-world-flag progress)) (not *mp-progress-replaying*))
     (let ((index (get-idx-in-task-list node)))
       (if (> index 0)
@@ -2539,10 +2548,16 @@
              )
          (set! (-> spec continue) (-> info play-continue))
          (set! (-> spec node) (-> info play-node))
+         ;; a test starts at the mission's introduction instead, next to whoever gives it
+         ;; (coop-mission-intro, multiplayer-test.gc)
+         (when (and *mp-test-coop-intro* (-> info pre-play-continue))
+           (set! (-> spec continue) (-> info pre-play-continue))
+           (set! (-> spec node) (-> info pre-play-node))
+           )
          (set! (-> spec reset-mode) 'life)
          (set! (-> spec execute) #f)
          (set! (-> session kind) 'campaign)
-         (initialize! *game-info* 'game (the-as game-save #f) (-> info play-continue) spec)
+         (initialize! *game-info* 'game (the-as game-save #f) (-> spec continue) spec)
          )
        )
       (else
@@ -2817,8 +2832,10 @@
   )
 
 (defbehavior mp-teleport-to-player mp-manager ((slot int))
-  "Go to player `slot`: directly when its level is loaded here, else through its continue point,
-   then to the player once that level is in."
+  "Go to player `slot`: directly when its level is loaded here and it stands within 150 m, else
+   through its continue point, then to the player once that level is in. Far away, the level named
+   in its state can be active here while the ground it stands on belongs to one that is not (a
+   corridor of the arena seen from Spargus's doors): moved there directly, our player fell."
   (let ((st (mp-remote-state slot)))
     (cond
       ((not st)
@@ -2827,7 +2844,7 @@
       ((focus-test? *target* pilot)
        (mp-show-message "Get out of your vehicle first")
        )
-      ((mp-level-active? (-> st level))
+      ((and (mp-level-active? (-> st level)) (< (vector-vector-distance (-> *target* control trans) (-> st trans)) (meters 150)))
        (mp-move-target-to (-> st trans))
        )
       (else
@@ -3772,8 +3789,13 @@
   )
 
 (defbehavior mp-update-pending-teleport mp-manager ()
-  "Finish a teleport to a player once the continue point loaded its level."
-  (when (>= *mp-request-teleport* 0)
+  "A teleport to a player asked (*mp-request-teleport*), once no cutscene plays here and our player
+   is free (a cutscene holds it grabbed: moved then, it fell through the world); finished once the
+   continue point loaded that player's level."
+  (when (and (>= *mp-request-teleport* 0)
+             (not (and *scene-player* (ppointer->process *scene-player*)))
+             (not (focus-test? *target* grabbed dead))
+             )
     (mp-teleport-to-player *mp-request-teleport*)
     (set! *mp-request-teleport* -1)
     )
@@ -3942,10 +3964,13 @@
 ;;
 ;; A mission runs while its task manager lives: its node's on-open script spawns it when the node
 ;; opens and its level is active (engine/util/script.gc), or update-task-masks does once that level
-;; loads. In co-op, a player whose manager starts (it reached the mission's spot, talked, watched
-;; the intro) tells the others: a player without that mission's manager, more than 40 m away, goes
-;; next to it. The shared story progress (1.5) opened the same node there, so its own manager
-;; starts once that level is loaded. A player already running the mission stays where it is.
+;; loads. In co-op, the player whose own play started it (a story step it closed within 30 s: it
+;; reached the mission's spot, talked, watched the intro) tells the others; a manager started by a
+;; step another player closed (*mp-progress-replaying*) or by a level loading later says nothing. A
+;; player more than 40 m away goes next to it, whether the shared story progress (1.5) already
+;; started the same mission there or its manager starts once that level is loaded; it goes once no
+;; cutscene plays there (a shared intro holds it). When both announce the same mission (a shared
+;; cutscene closes the step on each machine), the host stays and the guest comes.
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_MISSION_GATHER (meters 40))
@@ -3959,17 +3984,23 @@
 
 (defbehavior task-manager-init-by-other task-manager ((arg0 game-task-node-info) (arg1 symbol))
   "Stock (it does not return: it goes to the manager's wait state); in co-op the others are told
-   that this mission starts here (above)."
-  (when (mp-coop?)
+   that this mission starts here when our own play started it (above)."
+  (when (and (mp-coop?)
+             (not *mp-progress-replaying*)
+             (nonzero? (-> *mp-session* step-at))
+             (< (- (mp-now) (-> *mp-session* step-at)) (seconds 30))
+             )
     (format 0 "[multiplayer] mission ~S starts here~%" (-> arg0 name))
+    (set! (-> *mp-session* announced-node) (get-idx-in-task-list arg0))
+    (set! (-> *mp-session* announced-at) (mp-now))
     (mp-send-event (mp-event-kind mission-start) -1 (get-idx-in-task-list arg0) 0.0)
     )
   (*mp-stock-task-manager-init-by-other* arg0 arg1)
   )
 
 (defun mp-apply-mission-start ((ev mp-event))
-  "Another player's mission started: we go next to that player, unless the mission runs here too or
-   we stand within 40 m."
+  "Another player's mission started by its play: we go next to that player, unless we stand within
+   40 m (the mission may already run here too: the shared progress opened its node)."
   (let ((nodes (-> *game-info* sub-task-list))
         (n (-> ev iarg 0))
         (st (mp-remote-state (-> ev from)))
@@ -3977,8 +4008,13 @@
     (when (and (mp-coop?) *target* st (> n 0) (< n (-> nodes length)))
       (let ((node (-> nodes n)))
         (cond
-          ((and (-> node manager) (handle->process (-> node manager manager)))
-           (format 0 "[multiplayer] player ~D starts ~S, which runs here too~%" (-> ev from) (-> node name))
+          ;; both started it by their own play (a shared cutscene closes the step on each machine):
+          ;; the host stays, the guest comes
+          ((and (= *mp-mode* (mp-mode host))
+                (= (-> *mp-session* announced-node) n)
+                (< (- (mp-now) (-> *mp-session* announced-at)) (seconds 30))
+                )
+           (format 0 "[multiplayer] player ~D starts ~S too: the host's start stands~%" (-> ev from) (-> node name))
            )
           ((< (vector-vector-distance (-> *target* control trans) (-> st trans)) MP_MISSION_GATHER)
            (format 0 "[multiplayer] player ~D starts ~S next to us~%" (-> ev from) (-> node name))

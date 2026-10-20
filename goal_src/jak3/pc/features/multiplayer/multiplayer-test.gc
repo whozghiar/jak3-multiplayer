@@ -74,6 +74,7 @@
 ;;   log-eyes                                                the remote puppets' eye slots and their last writer
 ;;   ride-flut | end-flut                                    ride a lizard where we stand (a level with lizards); off it
 ;;   respawn-manager <type>                                  kill that mission's task manager, which starts again
+;;   goto-type <type>                                        stand in front of the first process of that type (a mission giver)
 ;;   race-sim <progress x 1000> <result> <place>             our race reports a place, progress and result (node 999)
 ;;   goto-own-vehicle                                        stand beside the vehicle we drove last (and left)
 ;;   race-autopilot                                          a running race: our vehicle driven by the racers' AI
@@ -1900,6 +1901,36 @@
                  (if *progress-process* (-> *progress-process* 0 current) 'none)
                  )
          )
+        ((string= cmd "goto-type")
+         ;; goto-type <process type>: stand 1.5 m in front of the first process of that type, facing it
+         ;; (a mission giver to talk to)
+         (mp-test-word)
+         (set! *mp-test-type-name* (string->symbol (-> *mp-test* word)))
+         (let ((proc (the-as process-drawable
+                             (search-process-tree *active-pool* (lambda ((p process)) (= (-> p type symbol) *mp-test-type-name*)))
+                             )
+                     )
+               )
+           (cond
+             ((and proc *target* (type? proc process-drawable) (nonzero? (-> proc root)))
+              (let ((pos (new 'stack-no-clear 'vector))
+                    (fwd (vector-z-quaternion! (new 'stack-no-clear 'vector) (-> proc root quat)))
+                    )
+                (vector+float*! pos (-> proc root trans) fwd (meters 1.5))
+                (move-to-point! (-> *target* control) pos)
+                (vector-reset! (-> *target* control transv))
+                (vector-negate! fwd fwd)
+                (forward-up->quaternion (-> *target* control quat-for-control) fwd (new 'static 'vector :y 1.0))
+                (quaternion-copy! (-> *target* control quat) (-> *target* control quat-for-control))
+                (format 0 "[mp-test] at ~A~%" proc)
+                )
+              )
+             (else
+               (format 0 "[mp-test] no ~A~%" *mp-test-type-name*)
+               )
+             )
+           )
+         )
         ((string= cmd "respawn-manager")
          ;; respawn-manager <process type>: that task manager killed, then spawned again by the
          ;; task masks, as when its mission starts (its node open, its level active)
@@ -1908,6 +1939,8 @@
          (let ((proc (search-process-tree *active-pool* (lambda ((p process)) (= (-> p type symbol) *mp-test-type-name*)))))
            (when proc
              (deactivate proc)
+             ;; as after a story step our play closed (what a mission start follows)
+             (set! (-> *mp-session* step-at) (mp-now))
              (update-task-masks 'event)
              )
            (format 0 "[mp-test] manager ~A respawned ~A gathered ~D~%" *mp-test-type-name* (if proc #t #f) *mp-missions-gathered*)
@@ -1920,6 +1953,11 @@
          (let ((proc (search-process-tree *active-pool* (lambda ((p process)) (= (-> p type symbol) *mp-test-type-name*)))))
            (format 0 "[mp-test] state ~A ~A~%" *mp-test-type-name* (if (and proc (-> proc state)) (-> proc state name) 'none))
            )
+         )
+        ((string= cmd "coop-mission-intro")
+         ;; coop-mission-intro: the next coop-mission starts at its introduction (its pre-play node
+         ;; and continue point, next to whoever gives the mission), not at the mission itself
+         (set! *mp-test-coop-intro* #t)
          )
         ((string= cmd "coop-mission")
          ;; coop-mission <name>: co-op starts at the mission of that play-list name (desert-course-race...)
