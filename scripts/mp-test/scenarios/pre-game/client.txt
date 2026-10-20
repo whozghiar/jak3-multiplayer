@@ -30,9 +30,16 @@
 74 press r1 100
 76 press r1 100
 78 press r1 100
-85 log-me
-86 log-state was-pre-game
+80 log-fail
+82 press x 100
+86 log-fail
+90 press r1 100
+92 press r1 100
+94 press r1 100
+96 press r1 100
+98 press r1 100
 100 log-me
+100.5 log-state was-pre-game
 101 screenshot pre-game-2
 115 log-me
 120 log

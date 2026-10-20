@@ -1,6 +1,8 @@
 # Spargus's pre-game (the precursor bubble game) in co-op, host side: co-op from the lobby at
 # wascity-pre-game; the game console takes the player into its game, the guest's too; their
-# effects (subsampled particle groups) are replayed on each other's machine: no game stops.
+# effects (subsampled particle groups) are replayed on each other's machine: no game stops. The
+# host's bubble game fails while it waits (nobody plays it there): the failure shows on both
+# machines until both press X (retry), then the guest wins.
 1 enable
 1 name Host
 1 color 1
@@ -13,10 +15,13 @@
 30 wait-menu mp-lobby-host
 31 coop-mission wascity-pre-game
 63 press x 100
-70 wait-player 1
 70.5 trace-fx
+72 log-fail
+73 press x 100
 75 log-me
 76 screenshot pre-game
+77 press x 100
+80 log-fail
 90 log-me
 91 log-state was-pre-game
 105 log-me
