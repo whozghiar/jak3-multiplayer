@@ -1,0 +1,18 @@
+# Daxter attacks the lizard Jak rides (the user's report), host side (co-op, Jak): gets on a lizard of
+# Spargus and stays on it while the guest (Daxter) punches it and fires at it: Jak keeps riding,
+# unhurt, and the guest keeps seeing the lizard under Jak.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+49 merchant-spot 0
+50 goto-flut
+51 press triangle 100
+55 log-me
+70 log-me
+70.5 log-copies 1
+78 log-me
+80 log

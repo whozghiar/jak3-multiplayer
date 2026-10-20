@@ -1298,6 +1298,7 @@ A script line is `<seconds> <command>`:
 | `open-menu <page>`, `econ-grant-self <0\|1>` | A START menu page; the host's Mods menu entries, +100 precursor orbs (0) or Metal Head trophies (1). |
 | `log-eyes` | Each remote puppet's eye slot and the process that wrote it last (the puppet, our player). |
 | `coop-mission-intro`, `goto-type <type>` | The next `coop-mission` starts at the mission's introduction (its pre-play node and continue point); stand 1.5 m in front of the first process of that type, facing it (a mission giver: `kleever-npc`). |
+| `eye-fix-off` | The eye fix undone: our model of Jak playing Daxter writes its eyes again, the puppets feed none (before / after screenshots). |
 | `log-mount` | The lizard we ride as we send it: its process, the skeleton found for it, its draw status. |
 | `trace-fx` | Log each effect another player's machine sent and we replay (group, parent, joint). |
 | `dark-bomb`, `log-dark`, `restart`, `log-restart` | The dark bomb and the dark blast ready (features and stages, full dark eco; jump then square sets the bomb off, `press l1 600` then `press l1+square 200` the blast); what the blast needs (stage, features, eco, state) and the bolts that followed a target's position; START > Restart; the restarts done and asked. |
@@ -1492,6 +1493,8 @@ scenarios, 185 checks, 0 failed, no crash.
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
 | `race-finish`, `race-finish-win` | Kleiver's race to the finish | Co-op from the lobby; once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers: lost on both machines; the guest reads 5th (the host's 4 racers and the host ahead). With the host's racers removed (`race-stop-racers`): the host finishes first and waits ("our result waits for the other players"), the guest second, won on both machines; 7 checks each. |
 | `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
+| `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
+| `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
 | `mounts-dup` | A lizard for each player in a mission | The kanga-rat hunt started by talking to Kleiver (as `mission-trigger`): the host gets on the hunt's lizard, the guest (Daxter) on its own copy of the same lizard and rides it 18 m away; the host draws the guest's lizard; 6 checks (screenshots). |
 | `yellow2-shot` | The beam reflexor's shot | The host fires the yellow 2 mod 14 times at the guest 8 m away: 15 trails drawn on the guest, the beam from the host's gun seen in its screenshots (`--shot-size 2560x1440`); 5 checks. |
 | `race-seventh` | Places beyond a race's own count | Jak 3's races have 5 participants at most (4 racers and the player), so two co-op players reach 6th at most (seen on the guest's HUD in `race-finish`); with two more players counted ahead (`race-extra-ahead 2`, a session of four), the guest's HUD shows the 7th, then the 8th place sprite; 5 checks. |
@@ -1677,6 +1680,11 @@ public IP.
     control copies a matrix from `local-space-binding`, which overlays `fade` and only the
     object's `set-local-space-info` sets; replayed on a tracker without it, the launch read
     address 0 + #x20. `mp-group-replayable?` refuses those groups: three runs, no crash.
+  - *himstan's Jak and Daxter II Multiplayer (ISC)* inspired three parts of this round, credited in
+    their commits: hosting only from the title screen and the in-game page limited to the player's
+    own settings (49b868411), the host's restart for every player (cc508a1ba), the dead player
+    watching a teammate (8d4d2046d). Missions, races, lizards, the merchant and the fixes are this
+    mod's own.
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
     `daxter-perch-fire`, `mission-start`, `mission-trigger`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,

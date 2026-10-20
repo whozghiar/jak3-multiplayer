@@ -72,6 +72,7 @@
 ;;   net <ms> <jitter> <loss %> | log-net                    the test network from now on; each peer's network pressure
 ;;   open-menu <page> | econ-grant-self <0|1>                a START page; the host's +100 orbs / trophies
 ;;   log-eyes                                                the remote puppets' eye slots and their last writer
+;;   eye-fix-off                                             the eye fix undone (before / after screenshots)
 ;;   ride-flut | end-flut                                    ride a lizard where we stand (a level with lizards); off it
 ;;   respawn-manager <type>                                  kill that mission's task manager, which starts again
 ;;   goto-type <type>                                        stand in front of the first process of that type (a mission giver)
@@ -1853,6 +1854,22 @@
          (if *target*
              (send-event *target* 'end-mode 'flut)
              )
+         )
+        ((string= cmd "eye-fix-off")
+         ;; eye-fix-off: the eye fix undone, to see the bug again: our model of Jak playing Daxter
+         ;; writes its eyes, the puppets feed none
+         (set! *mp-test-eye-fix-off* #t)
+         (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+           (when mgr
+             (dotimes (i MP_MAX_PLAYERS)
+               (let ((pp (the-as process-drawable (handle->process (-> mgr puppets i)))))
+                 (if (and pp (nonzero? (-> pp skel)))
+                     (logclear! (-> pp skel status) (joint-control-status eye-anim))
+                     )
+                 )
+               )
+             )
+           )
          )
         ((string= cmd "log-eyes")
          ;; log-eyes: each remote player's puppet, its eye slot and which process wrote it last

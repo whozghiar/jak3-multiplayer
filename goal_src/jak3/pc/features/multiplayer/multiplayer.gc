@@ -1368,9 +1368,11 @@
 ;; no eyes; the Jak puppets do.
 (define-perm *mp-stock-merc-eye-anim* (function process-drawable none) merc-eye-anim)
 
+(define *mp-test-eye-fix-off* #f) ;; test (eye-fix-off): the stock behavior back, for a before / after look
+
 (defun merc-eye-anim ((arg0 process-drawable))
   "Stock, except our player's own model while it plays Daxter online (see above)."
-  (if (not (and (= arg0 *target*) (mp-online?) (mp-target-as-daxter?)))
+  (if (not (and (= arg0 *target*) (mp-online?) (mp-target-as-daxter?) (not *mp-test-eye-fix-off*)))
       (*mp-stock-merc-eye-anim* arg0)
       )
   (none)

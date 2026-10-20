@@ -1,0 +1,10 @@
+# Eyes with the fix undone, host side: as eyes.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+51 face-player 1
+53 face-player 1
+60 log

@@ -851,6 +851,21 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 ("#f", "#t") in hc and len(gm) >= 2 and abs(float(gm[-1][0]) - float(gm[0][0])) + abs(float(gm[-1][1]) - float(gm[0][1])) > 5,
                 f"{hc[-1:]}, guest {gm[:1]} -> {gm[-1:]}")
 
+    elif scenario == "eyes-before":
+        ey = grab(client, r"\] eyes player 0 slot \d+ by \S+ puppet (\S+) target (\S+)")
+        c.check(scenario, "with the fix undone, the host's Jak takes the eyes our hidden model writes (the bug, screenshot)",
+                bool(ey) and ey[-1] == ("#f", "#t"), f"{ey}")
+
+    elif scenario == "lizard-attack":
+        hs = grab(host, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")
+        gc = grab(client, r"\] copy 0 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
+        hits = counter(host, r"pvp hits taken (\d+) reacted (\d+) last pushed " + NUM)
+        c.check(scenario, "Daxter punches and shoots the lizard Jak rides: Jak keeps riding, unhurt",
+                len(hs) >= 3 and all(st == "target-flut-stance" for (st,) in hs) and bool(hits) and hits[-1][0] == 0
+                and not any("player 1 hit" in l for l in host), f"{hs}, {hits[-1:]}")
+        c.check(scenario, "the guest keeps seeing the lizard under Jak, before, during and after",
+                len(gc) >= 3 and all(x == ("#f", "#t") for x in gc), f"{gc}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")
