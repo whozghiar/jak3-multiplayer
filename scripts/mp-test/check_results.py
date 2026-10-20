@@ -911,11 +911,14 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         hme = grab(host, r"\] me (\S+) \S+ (\S+) speed \S+ state (\S+)")
         gme = grab(client, r"\] me (\S+) \S+ (\S+) speed \S+ state (\S+)")
         gj = grab(client, r"\] join continue (\S+) title")
-        c.check(scenario, "the host chooses the palace ruins' attack in game: both players at its start, each in its own Rhino",
+        # the start (rubblea-rhino, -142.9 -285.6) is on a slope: idle Rhinos roll on it, the host's
+        # (the game's own) as the guest's, so their distance afterwards depends on the load times
+        c.check(scenario, "the host chooses the palace ruins' attack in game: both players put at its start (the guest's Rhino 6 m behind the host's), each in its own Rhino",
                 any("host plays mission palace-ruins-attack" in l for l in host) and gj[-1:] == [("rubblea-rhino",)]
+                and any("race start: our vehicle 6.0 behind" in l for l in client)
                 and len(hme) >= 2 and hme[-1][2] == "target-pilot-stance" and len(gme) >= 2 and gme[-1][2] == "target-pilot-stance"
-                and math.dist((float(hme[-1][0]), float(hme[-1][1])), (float(gme[-1][0]), float(gme[-1][1]))) < 40.0,
-                f"host {hme[-1:]}, guest {gme[-1:]}, guest continue {gj}")
+                and any(r[2] == "target-pilot-stance" and math.dist((float(r[0]), float(r[1])), (-142.9, -285.6)) < 60.0 for r in gme),
+                f"host {hme[-1:]}, guest {[r for r in gme if r[2] == 'target-pilot-stance'][:1]} -> {gme[-1:]}, guest continue {gj}")
         hv = grab(host, r"\] remote 1 flags #x([0-9a-fA-F]+) anim \S+ veh (-?\d+) puppet \S+ drawn (\S+)")
         c.check(scenario, "the host sees the guest drive its Rhino (vehicle 17)",
                 bool(hv) and int(hv[-1][0], 16) & 1 and hv[-1][1] == "17" and hv[-1][2] == "#t", f"{hv[-1:]}")
@@ -1207,9 +1210,15 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
             return out
         hb, gb = bodies(host, 1), bodies(client, 0)
         # the death clip moves the body about 1 m (a fall), then it lies still until the player is back
-        still = lambda b: (len(b) >= 4 and all(d == "#t" for *_, d in b)
-                           and max(math.dist(b[-4][:3], r[:3]) for r in b[-4:]) < 0.1
-                           and math.dist(b[0][:3], b[-1][:3]) < 2.0)
+        def still(b):
+            """Drawn all along, and still at least 3 s in a row (the last row may be the respawn's
+            first move), within 2 m of where it fell."""
+            run = best = 1
+            for i in range(1, len(b)):
+                run = run + 1 if math.dist(b[i - 1][:3], b[i][:3]) < 0.1 else 1
+                best = max(best, run)
+            return (len(b) >= 4 and all(d == "#t" for *_, d in b) and best >= 3
+                    and math.dist(b[0][:3], b[-1][:3]) < 2.0)
         c.check(scenario, "the dead player's body stays on the ground, drawn where it fell, on the other machine (logged each second)",
                 still(hb) and still(gb), f"host sees the guest {len(hb)} s dead {hb[0][:3] if hb else None} -> {hb[-1:]}, "
                 f"guest sees the host {len(gb)} s dead {gb[0][:3] if gb else None} -> {gb[-1:]}")
