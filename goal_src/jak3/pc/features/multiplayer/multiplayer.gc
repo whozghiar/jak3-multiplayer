@@ -2848,6 +2848,8 @@
    (merchant-icon connection-minimap) ;; Kleiver's icon on the minimap while he is out, #f
    (kleiver     handle)     ;; his model at his spot (mp-update-merchant-model), #f
    (kleiver-borrow? symbol) ;; our borrow setting asks for his level (lkleever)
+   (kleiver-anim int32)     ;; his idle clip now (*mp-kleiver-idles*)
+   (kleiver-time time-frame) ;; when it started
    (gift-slot   int32)      ;; Daxter out of his mode for a vehicle at that player's race start, -1
    (event       mp-event :inline)
    )
@@ -4650,6 +4652,7 @@
   (set! (-> self merchant-icon) #f)
   (set! (-> self kleiver) (the-as handle #f))
   (set! (-> self kleiver-borrow?) #f)
+  (set! (-> self kleiver-anim) 0)
   (set! (-> self gift-slot) -1)
   (go mp-manager-active)
   )
@@ -6852,12 +6855,74 @@
 
 (define *mp-kleiver-borrow* '((waswide 0 lkleever special))) ;; his missions' borrow (game-task.gc)
 
+;; his idle clips (kleever-highres-ag), one after the other
+(define *mp-kleiver-idles* (new 'static 'boxed-array :type string
+                             "kleever-highres-idle"
+                             "kleever-highres-idle-breathing-a"
+                             "kleever-highres-idle-shift-a"
+                             "kleever-highres-idle-breathing-b"
+                             "kleever-highres-idle-shift-b"
+                             )
+        )
+
+(defun mp-kleiver-solid! ((proc manipy))
+  "His collision sphere (manipy-init's, a pickup's) made a solid obstacle for the players, as a
+   lizard's: they walk around him, not through him."
+  (let* ((cs (the-as collide-shape (-> proc root)))
+         (prim (-> cs root-prim))
+         )
+    (set! (-> prim prim-core collide-as) (collide-spec obstacle obstacle-for-jak))
+    (set! (-> prim prim-core collide-with) (collide-spec jak player-list))
+    (set! (-> prim prim-core action) (collide-action solid))
+    (set! (-> cs backup-collide-as) (-> prim prim-core collide-as))
+    (set! (-> cs backup-collide-with) (-> prim prim-core collide-with))
+    (update-transforms cs)
+    )
+  (none)
+  )
+
+(defbehavior mp-kleiver-live mp-manager ((proc manipy))
+  "Kleiver alive at his spot: he turns toward our player when it is within 12 m, and his idle clips
+   follow one another every 6 s, blended. Our player inside his sphere (put there by a teleport or
+   his spot moving onto it) would be stuck: his collision is off while it stands within 1.2 m
+   (walking into him stops farther out)."
+  (let* ((cs (the-as collide-shape (-> proc root)))
+         (inside? (and *target* (< (vector-vector-xz-distance (-> *target* control trans) (-> proc root trans)) (meters 1.2))))
+         (want (if inside? (collide-spec) (-> cs backup-collide-as)))
+         )
+    (when (!= (-> cs root-prim prim-core collide-as) want)
+      (set! (-> cs root-prim prim-core collide-as) want)
+      (update-transforms cs)
+      )
+    )
+  (when (and *target* (< (vector-vector-distance (-> *target* control trans) (-> proc root trans)) (meters 12)))
+    (let ((dir (vector-! (new 'stack-no-clear 'vector) (-> *target* control trans) (-> proc root trans)))
+          (want (new 'stack-no-clear 'quaternion))
+          )
+      (set! (-> dir y) 0.0)
+      (when (< 409.6 (vector-length dir))
+        (vector-normalize! dir 1.0)
+        (forward-up->quaternion want dir (new 'static 'vector :y 1.0 :w 1.0))
+        (quaternion-slerp! (-> proc root quat) (-> proc root quat) want 0.08)
+        )
+      )
+    )
+  (when (time-elapsed? (-> self kleiver-time) (seconds 6))
+    (set-time! (-> self kleiver-time))
+    (set! (-> self kleiver-anim) (mod (+ (-> self kleiver-anim) 1) (-> *mp-kleiver-idles* length)))
+    (send-event proc 'art-joint-anim (-> *mp-kleiver-idles* (-> self kleiver-anim)) 30)
+    (send-event proc 'anim-mode 'loop)
+    )
+  (none)
+  )
+
 (defbehavior mp-update-merchant-model mp-manager ()
   "Free roam: Kleiver's model stands at his spot, idle. His art (skel-kleever-highres) is in the
    borrowed level lkleever, which his missions load into waswide's slot 0: the manager asks the same
    borrow with its setting while his spot is out (apply-settings runs update-task-masks, which
    loads it), and drops it when the spot goes. The model lives in *entity-pool*: when lkleever
-   unloads, its art goes and the level kills it (check-for-rougue-process)."
+   unloads, its art goes and the level kills it (check-for-rougue-process). He is solid, turns
+   toward the player near him and shifts between his idle clips (mp-kleiver-live)."
   (let ((want? (if (>= (-> *mp-econ* spot) 0) #t #f)))
     (when (!= want? (-> self kleiver-borrow?))
       (set! (-> self kleiver-borrow?) want?)
@@ -6888,7 +6953,8 @@
                      *mp-merchant-pos*
                      (the-as entity-actor #f)
                      sg
-                     (the-as vector #f)
+                     ;; a collision sphere around his body (1.2 m up, 0.9 m wide), made solid below
+                     (new 'static 'vector :y 4915.2 :w 3686.4)
                      (the-as manipy-options 0)
                      :name "mp-kleiver"
                      :to *entity-pool*
@@ -6899,6 +6965,9 @@
                )
            (when pp
              (set! (-> self kleiver) (ppointer->handle pp))
+             (mp-kleiver-solid! (the-as manipy (ppointer->process pp)))
+             (set! (-> self kleiver-anim) 0)
+             (set-time! (-> self kleiver-time))
              (send-event (ppointer->process pp) 'art-joint-anim "kleever-highres-idle" 0)
              (send-event (ppointer->process pp) 'anim-mode 'loop)
              (format 0 "[multiplayer] Kleiver stands at spot ~D~%" (-> *mp-econ* spot))
@@ -6909,7 +6978,9 @@
           ;; his spot changed (the host's, or a test's)
           (when (< (meters 0.5) (vector-vector-distance (-> proc root trans) *mp-merchant-pos*))
             (vector-copy! (-> proc root trans) *mp-merchant-pos*)
+            (update-transforms (the-as collide-shape (-> proc root)))
             )
+          (mp-kleiver-live proc)
           )
         )
       )

@@ -808,7 +808,8 @@
                 (lookup-text! *common-text* (the-as text-id (+ #x06e0 (+ (-> dg gun-type) -26))) #f)
                 (the int (-> *game-info* gun-ammo (+ ammo -15)))
                 )
-        (mp-draw-text buf *mp-temp-string* 256 330 0.55)
+        ;; above the prompts (mp-draw-prompt and the game's, at 320): they share the bottom otherwise
+        (mp-draw-text buf *mp-temp-string* 256 292 0.55)
         )
       )
     )
