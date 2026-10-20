@@ -32,15 +32,17 @@ Daxter co-op duo with its own multiplayer save.
     hoverboard, the vehicles. Everyone plays Jak or Daxter and goes where they want. Nothing is
     saved.
   - **Co-op (2 players):** the story as Jak and Daxter. The host starts a new campaign, continues
-    it, or picks any mission of the story (everything before it done). The campaign is saved on
+    it, or picks any mission of the story, act by act (everything before it done). In game, the
+    host can start another mission for both players (START > Options > Multiplayer > Choose a
+    mission). The campaign is saved on
     the host's computer as a multiplayer save of its own, apart from the memory card's save
     slots. A guest who picks the host's character is offered the other one. In cutscenes, Jak
     wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
     on foot while the other one is alive nearby watches them for 5 seconds ("Spectating"), their
     body on the ground, then comes back next to them, and the mission goes on. When one player
     starts a mission (reaching its spot, talking to someone), the other is brought there and the
-    mission starts for both. Players cannot hurt each other or each other's vehicles, and each one
-    has their own lizard where the game gives one. A cutscene is skipped once both players asked
+    mission starts for both. Players cannot hurt each other or each other's vehicles, and where the
+    game leaves a lizard, two wait side by side, one for each player. A cutscene is skipped once both players asked
     (triangle); only the host can pause it. A waypoint (the yellow beam) waits for both players to
     stand on it ("Players here: 1/2"). In a race each player drives their own vehicle (no riding
     along, no shoulder): the start waits until both drive, the place on screen counts the other
@@ -109,7 +111,7 @@ Daxter co-op duo with its own multiplayer save.
 - **Precursor orbs and Metal Head trophies:** every precursor orb you take and every Metal Head
   you kill counts for you. The host's game keeps every player's count, saves it every minute
   and when the session ends, and gives it back when it hosts that session again; each orb counts
-  once. Spend your orbs at **Kleiver's shop** in Spargus: he stands at one of four places, the
+  once. In free roam, spend your orbs at **Kleiver's shop** in Spargus: he stands at one of four places, the
   same for every player and drawn at random for each session, marked by his icon on the minimap
   and by "Merchant" in yellow over his spot. Stand there and press triangle to buy and wear new
   outfits. The host's Mods menu can give the host 100 orbs or 100 trophies.
@@ -124,11 +126,13 @@ Daxter co-op duo with its own multiplayer save.
    cancels.
 3. In the lobby, everyone picks Jak or Daxter (L1 / R1) and the guests say they are ready (X).
    The host opens the game modes with square: **Free roam**, or **Co-op**, which then asks for a
-   new campaign, the campaign continued, or a mission of the story. The host starts the
+   new campaign, the campaign continued, or a mission of the story (an act, then one of its
+   missions). The host starts the
    countdown (X) once everyone is ready, and the guests follow into its world when it ends. Circle opens the multiplayer options
    (name, color, address), triangle leaves the lobby.
 4. In game, START > **Options > Multiplayer** changes your name, character, color and
-   appearance. The server administration, hosting and joining are at the title screen and in the
+   appearance. In co-op the host also finds **Choose a mission** there: an act, then a mission,
+   started for both players (the guest loads the host's world again). The server administration, hosting and joining are at the title screen and in the
    lobby.
 
 | Action | Control |

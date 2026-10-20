@@ -16,7 +16,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 | Renderer (C++) | `TextureAnimator.cpp`, `.h`, `foreground/Merc2.cpp`, `shaders/merc2.vert`, `.frag` | Another player's Dark Jak skin at its own level (4.11); each player's outfit colors (4.12). |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
-| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, Daxter on a shoulder (4.16), cutscene outfits (4.17), the co-op return next to a teammate (4.19), the economy and Kleiver's spot (4.20), per-frame hook. |
+| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, Daxter on a shoulder (4.16), cutscene outfits (4.17), the co-op return next to a teammate (4.19), the economy and Kleiver's spot (4.20), missions started together and the host's choice in game (4.24), a lizard for every player (4.25), per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
 | GAME | `.../multiplayer-guns.gc` | Every weapon (Mods menu), and Daxter's guns (4.8). |
 | GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby and its game mode, co-op and mission pages, the on-screen keyboard, START > Options > Multiplayer and its administration page, Kleiver's shop page (4.20), the Mods menu entries. |
@@ -403,8 +403,10 @@ The way into a session follows himstan's Jak and Daxter II Multiplayer
   then Connect: `mp-join!` and `mp-lobby-join`), the lobby, `mp-mode` (the eight game modes, as
   `menu-mp-mode-option` buttons grayed out by `should-disable?` with the reason after the name),
   `mp-coop-start` (the campaign's completion, New campaign, Continue the campaign (grayed out
-  without a campaign), Choose a mission), `mp-mission` (a carousel of the story's missions: the
-  `play-list` entries with a `play-continue` and a name, as the stock mission list),
+  without a campaign), Choose a mission), `mp-mission` (two carousels: the act, 1 to 3
+  (`*mp-mission-act*`), then that act's missions: the `play-list` entries with a `play-continue`
+  and a name, as the stock mission list, whose play node carries the act's flag, `mp-mission-act`),
+  `mp-mission-ingame` (the host's page in game, the same two carousels, 4.24),
   `mp-keyboard` and `mp-skin` (the Appearance page, 4.12). The mode page is reached with `push-state` from the lobby; the co-op and
   mission pages replace it (`set-next-state`), so their choice goes back to the lobby with one
   `pop-state`. Each page resets its selection and scroll when it opens (the generic store keeps
@@ -541,7 +543,8 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
 | `goal_src/jak3/dgos/wwd.gd`, `voca.gd` | `jak-fldax+0-ag.go` added after `jak-flut+0-ag.go`: Daxter's lizard clips (`daxter-fldax-*`) and the lizard's under him (`flut-saddle-fldax-*`), which only the desert chase loaded (DESLIZ, unchanged). Its lizard clips link to the lizard of the same level, so it is not in GAME (4.22). |
 | `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post reports our place, progress and result and the racers' progress (`mp-racer-progress`, `mp-race-ai-progress`, `mp-race-position`), waits for the other players' result (`mp-race-result-wait?`) and asks it (`mp-race-won?`) (4.15). |
-| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`) and the result waiting for the others (`#x159b`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
+| `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`), the result waiting for the others (`#x159b`) and the acts of the
+mission pages (`#x159c`-`#x159f`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
@@ -1057,7 +1060,8 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
   without the missions' trail, kept on the minimap's edge when far, on the big map too) is owned
   by the manager at that spot, and "Merchant" ("Marchand") is drawn in yellow over it within
   80 m, as a player's name and above one standing there (`mp-draw-merchant-name`, `#x159a`). Only the spot: his model is not
-  loaded in Spargus.
+  loaded in Spargus. In free roam only: in co-op the host draws no spot (-1), so no icon, name or
+  shop, on any machine.
 - **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
   Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
 - **Kleiver's shop.** At Kleiver's spot, within 4 m, on foot: his line ("Kleiver: Got orbs? I've
@@ -1112,7 +1116,8 @@ lizard":
   find a master slot"), and the lizard under Daxter was hidden.
 - **Firing:** R1, as on foot (4.8). **The others** see Daxter's puppet on the lizard (4.23).
 - **Each player its own lizard.** A lizard is no NPC the host shares (`mp-actor-kind` 0): every
-  machine runs its own, so in a mission (the kanga-rat hunt's `flut-1`) each player has one.
+  machine runs its own. In co-op each lizard of a level near the player has a second one beside it
+  (4.25).
 
 ### 4.23 Co-op: teammates and their vehicles
 
@@ -1156,9 +1161,50 @@ level loads. In co-op:
   loaded (`scene-lookup` in `mp-apply-scene`): far from it, the scene player stopped on "can not
   find scene" and kept the player grabbed for good.
 
+- **A guest joining** the host's world (`mp-joining?`: not yet next to the host in it, join stage
+  below 4) announces no mission and follows no announcement; until it has the host's world (stage
+  2) it skips the host's story steps too: that world holds them.
+- **The host chooses a mission in game.** START > Options > Multiplayer shows the host in co-op a
+  sixth entry, Choose a mission (`*mp-menu-ingame-host*`): an act, then one of its missions, as the
+  lobby's page. X on a mission (`mp-host-play-mission`) sends `world-reset` to every guest first,
+  then starts the host's game there as the lobby does (`mp-start-game`, co-op start 2). A guest
+  (`mp-apply-world-reset`) loads the host's world again (join stage 0, its last story step
+  forgotten) and comes next to the host. Sent first, the event reaches the guests before the story
+  steps the new game closes, which they then skip.
+
 Checked on a real start (`mission-trigger`): the host talks to Kleiver at the arena (the kanga-rat
 hunt's introduction), the intro plays there, the hunt's manager starts; the guest at Spargus's
 doors skips the intro it cannot load, is told, and comes next to the host, its own hunt running.
+Checked in game (`mission-select`): the host, at the jump training, chooses act 2's second mission
+(the Hip Hog); its game starts there, the guest loads it and stands 1.5 m from the host.
+
+### 4.25 Co-op: a lizard for every player
+
+The leaper lizards (`flut`) a level places are per machine (4.22). multiplayer.gc "A lizard for
+every player":
+
+- **A second lizard.** Twice a second, each lizard of the level (its entity's own process) waiting
+  to be ridden within 60 m of our player gets a second one 5 m to its right (`mp-flut-scan-level`),
+  on every machine, whoever is connected: the host sees two before the guest has loaded. The
+  second is a stock lizard of the same entity (`flut-init`, level code found by name: `flut.gc` is
+  in WWD, DESLIZ and VOCA, its type in GAME), named `flut-mp`, given a live handle so it waits at
+  once (the stock otherwise waits until its spot is out of view). The level's lizard keeps it in its
+  `rider` field, unused by the stock past its init; a second left from the lizard's last birth is
+  taken back instead of a new one.
+- **The stock's count.** A lizard of the level waits while 10 are out (`flut-count`, its
+  `wait-for-start`). The seconds are taken out of that count (`mp-flut-cull`), so they never hold
+  one of the level's lizards back; an idle second 100 m from our player goes, and comes back with
+  the player.
+- **Another player's ride.** The state carries `mp-flag flut` while its player rides a lizard.
+  When it appears, our idle lizard nearest to that player (within 12 m) is the one it took: it
+  hides as the stock hides a lizard ridden (`wait-for-return`: not drawn, no collision), off the
+  minimap and out of the count (`mp-flut-hide`). When the flag goes, a lizard waits here where the
+  player got off, as the stock leaves one, and the hidden one goes (a level's own lizard stays
+  hidden until its next birth, as the stock's).
+
+Checked by `mounts-coop`: at the kanga-rat hunt the host has two lizards at the hunt's spot (the
+count stays at 10); the guest gets on one, the host's copy of it hides, the host rides the other;
+the guest gets off and a lizard waits there on the host's screen.
 
 ## 5. Testing in game
 
@@ -1272,7 +1318,7 @@ A script line is `<seconds> <command>`:
 | `log-seat` | Our model in a vehicle, in the vehicle's axes (x left, y up, z forward) from the seat point: as a passenger the model in the seat (its root, bone 3, its bones' extent, its clip), driving the model drawn (Daxter's in his mode) from the player's position. |
 | `log-joints`, `log-anim <daxter\|jak> <index>` | Daxter's joints (index, name, parent); the entry at that index of Daxter's or Jak's art group (a clip is loaded when it prints an `art-joint-anim`). |
 | `log-name` | The player name kept and the on-screen keyboard's text. |
-| `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered. |
+| `log-session`, `coop-start <0\|1\|2> [n]`, `log-missions`, `log-acts` | The game the host started (free roam, campaign), unlocks, campaign saves and completion, story nodes closed, the server's status, the shoulder Daxter; how co-op starts (the n-th mission); the missions offered; the missions of each act (count, first three). |
 | `gun [pickup-type]`, `board` | Every gun mod unlocked with ammo, the gun out, the mod `pickup-type` picked (26 red 1 ... 31 yellow 3 ... 35 dark 1 ... 37 dark 3); the hoverboard unlocked with its zap, the player on it. |
 | `mode <0\|1>`, `title` | Game mode when hosting (free roam, co-op); back to the title screen as the pause menu's quit does. |
 | `log-join`, `try-save` | Joining the host's world: stage, world sent or loaded and its size, saves refused, continue point, title screen or in game, language, distance to the host; an auto-save, as a checkpoint asks it. |
@@ -1303,7 +1349,7 @@ A script line is `<seconds> <command>`:
 | `trace-fx` | Log each effect another player's machine sent and we replay (group, parent, joint). |
 | `dark-bomb`, `log-dark`, `restart`, `log-restart` | The dark bomb and the dark blast ready (features and stages, full dark eco; jump then square sets the bomb off, `press l1 600` then `press l1+square 200` the blast); what the blast needs (stage, features, eco, state) and the bolts that followed a target's position; START > Restart; the restarts done and asked. |
 | `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
-| `ride-flut`, `end-flut`, `goto-flut`, `log-fldax` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state. |
+| `ride-flut`, `end-flut`, `goto-flut`, `log-fldax`, `log-fluts` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state; the lizards within 40 m (each one's name, state, distance, drawn), whether we ride, the co-op counters (seconds placed, hidden, left) and the stock's count. |
 | `respawn-manager <type>` | That task manager killed, then spawned again by the task masks, as when its mission starts. |
 | `race-extra-ahead <n>` | n more players counted ahead of us in a race (the HUD's place of a session larger than co-op allows). |
 | `race-autopilot`, `race-stop-racers` | Once a race runs (its timer going), the vehicle we drive is driven by the racers' AI to the finish (`'set-control-hook-race-ai`); every vehicle of ours but our player's removed (a race's racers: the race drives them every frame, a speed of 0 does not hold), their places frozen. |
@@ -1382,7 +1428,7 @@ pass, the reliable channel's under 20 % loss included): `smoke`, `pvp`, `join-wo
 | Scenario | Checks | Result |
 |---|---|---|
 | `lobby` (rewritten) | Host Game, joining before the start, keyboard, mode list, free roam | Host Game opens the lobby; the guest is listed there before any game starts (2 players); on the keyboard the host's name goes from "Host" to "Jak3"; square opens the mode list (six modes grayed out); X is refused until the guest is ready, then starts free roam: 254 story nodes closed, `city-win-resolution` done, every feature, the eight vehicles; the guest follows into it with the same. |
-| `coop-campaign` | Co-op from the lobby, three players | Co-op from the mode list, the co-op page, the mission list (first mission: the arena's jump training): the mission starts with 4 nodes closed; a third player is refused ("The server is full"); the host's auto-save goes to `multiplayer-campaign.bin`, the guest's is refused; while the guest plays Daxter the host's Jak has no Daxter (sidekick off), he is back once the guest leaves; after 3 more nodes closed (7), "Continue the campaign" loads the save: 4 again. |
+| `coop-campaign` | Co-op from the lobby, three players | Co-op from the mode list, the co-op page, the mission list (act 1's first mission: the arena's jump training): the mission starts with 4 nodes closed; a third player is refused ("The server is full"); the host's auto-save goes to `multiplayer-campaign.bin`, the guest's is refused; while the guest plays Daxter the host's Jak has no Daxter (sidekick off), he is back once the guest leaves; after 3 more nodes closed (7), "Continue the campaign" loads the save: 4 again. |
 | `daxter-fire` | Daxter fires every weapon | The weapons cheat gives the twelve mods; Daxter fires each one at the host 4 to 7 m away: 47 hits taken, by ten kinds of shots (scatter gun, wave concussor, blaster, beam reflexor, gyro burster, vulcan fury, needle lazer, peace maker, mass inverter, super nova); screenshots of the blaster and the arc wielder fired by Daxter. |
 | `outline` | Another player through a vehicle | In the open 9 m away, about 107 pixels of fill and outline (its feet in the ground); behind a Rhino buggy spawned between the players, 1770 to 1848: its red outline shows through the buggy (screenshot). |
 | `player-list` | Health | The list gives each player's health (8/8) next to its ping (16 ms). |
@@ -1497,6 +1543,8 @@ passed, no crash.
 | `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
 | `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
+| `mission-select` | The host chooses a mission in game | Co-op at the jump training; START > Options > Multiplayer > Choose a mission, act 2, its second mission (the Hip Hog): the host's game starts there, the guest loads it again and stands 1.5 m from the host; no Kleiver in co-op; 7 checks (screenshots). |
+| `mounts-coop` | A lizard for every player | The kanga-rat hunt (as `mounts-dup`): two lizards at the hunt's spot on the host (the stock's count unchanged), the guest gets on one and the host's copy of it hides, the host rides the other, the guest gets off and a lizard waits there on the host; 8 checks (screenshots). |
 | `mounts-dup` | A lizard for each player in a mission | The kanga-rat hunt started by talking to Kleiver (as `mission-trigger`): the host gets on the hunt's lizard, the guest (Daxter) on its own copy of the same lizard and rides it 18 m away; the host draws the guest's lizard; 6 checks (screenshots). |
 | `yellow2-shot` | The beam reflexor's shot | The host fires the yellow 2 mod 14 times at the guest 8 m away: 15 trails drawn on the guest, the beam from the host's gun seen in its screenshots (`--shot-size 2560x1440`); 5 checks. |
 | `race-seventh` | Places beyond a race's own count | Jak 3's races have 5 participants at most (4 racers and the player), so two co-op players reach 6th at most (seen on the guest's HUD in `race-finish`); with two more players counted ahead (`race-extra-ahead 2`, a session of four), the guest's HUD shows the 7th, then the 8th place sprite; 5 checks. |
@@ -1562,6 +1610,12 @@ public IP.
 
 - Kleiver as a merchant is a spot, his icon and his name: his model is only loaded for his
   cutscenes, so nobody stands there.
+- Co-op seconds are given to the lizards a level places. The leaper race and the desert's lizard
+  roundup give the player their own lizard by other means (`was-leaper-race.gc`,
+  `desert-lizard-task.gc`) and get none; the vehicles of the desert missions are spawned by the
+  mission's manager, which runs on each machine: one per player already.
+- Hovered, Choose a mission draws gray instead of white, in the lobby's co-op page as in game; it
+  works.
 - Effects drawn in an object's local space (`sp-group-flag sp12`) are not replayed on the other
   machines: they need the object's binding (see the change log of 2026-10-20).
 - A guest's parked vehicle is not sent: the other players only see the vehicles one drives.
@@ -1687,6 +1741,16 @@ public IP.
     own settings (49b868411), the host's restart for every player (cc508a1ba), the dead player
     watching a teammate (8d4d2046d). Missions, races, lizards, the merchant and the fixes are this
     mod's own.
+  - *After the user's review.* Kleiver trades in free roam only (4.20). The mission pages list the
+    missions by act, and the host chooses one in game, started for every player (4.24): a guest
+    loading the host's world again skipped nothing before, so the steps the host's new game closed
+    started missions in its old world and their announcements pulled the host to it; a guest
+    joining now neither announces nor follows, nor applies steps before it has the world. In co-op
+    every lizard of a level near the player has a second one beside it on every machine, the one
+    another player takes hides, and one waits where it gets off (4.25). `coop-campaign` pressed
+    up from Continue the campaign (where the lobby now starts) and chose a new one; `mission-start`
+    counted the guest's announcement while joining, now silent. Scenarios `mission-select`,
+    `mounts-coop`.
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
     `daxter-perch-fire`, `mission-start`, `mission-trigger`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,
