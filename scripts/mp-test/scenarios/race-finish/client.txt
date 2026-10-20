@@ -1,0 +1,63 @@
+# A real race to the finish in co-op, guest side: follows into Kleiver's race; once it runs, the
+# racers' AI drives its turtle to the finish; it counts the host's racers and the host.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+63 character 0
+75 race-autopilot
+77 log-race
+80 race-autopilot
+85 race-autopilot
+90 race-autopilot
+92 log-race
+95 race-autopilot
+100 race-autopilot
+105 race-autopilot
+107 log-race
+110 race-autopilot
+115 race-autopilot
+120 race-autopilot
+122 log-race
+125 race-autopilot
+130 race-autopilot
+135 race-autopilot
+137 log-race
+140 race-autopilot
+152 log-race
+167 log-race
+182 log-race
+197 log-race
+212 log-race
+227 log-race
+242 log-race
+257 log-race
+272 log-race
+287 log-race
+302 log-race
+317 log-race
+332 log-race
+347 log-race
+362 log-race
+377 log-race
+392 log-race
+407 log-race
+422 log-race
+437 log-race
+452 log-race
+467 log-race
+482 log-race
+500 screenshot finish
+505 log

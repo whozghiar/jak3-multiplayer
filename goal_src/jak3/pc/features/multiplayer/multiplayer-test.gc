@@ -76,6 +76,8 @@
 ;;   respawn-manager <type>                                  kill that mission's task manager, which starts again
 ;;   race-sim <progress x 1000> <result> <place>             our race reports a place, progress and result (node 999)
 ;;   goto-own-vehicle                                        stand beside the vehicle we drove last (and left)
+;;   race-autopilot                                          a running race: our vehicle driven by the racers' AI
+;;   race-stop-racers                                        every vehicle of ours but our player's removed
 ;;   goto-flut | log-fldax                                   stand 2 m from the nearest lizard waiting, facing it; Daxter on it
 ;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   restart | log-restart                                   START > Restart; restarts done, mode, master mode
@@ -1381,6 +1383,23 @@
   #f
   )
 
+(define *mp-test-racers-stopped* 0)
+
+(defun mp-test-stop-racer ((proc process-drawable))
+  "iterate-process-tree callback (race-stop-racers): a vehicle of ours not driven by our player is
+   removed (a race drives its racers every frame: they would not stop); its place in the race stays
+   where it was."
+  (when (and (type? proc process-drawable)
+             (not (type? proc mp-replica))
+             (mp-inherits? (-> proc type) 'vehicle)
+             (!= proc (mp-local-vehicle))
+             )
+    (deactivate proc)
+    (+! *mp-test-racers-stopped* 1)
+    )
+  #f
+  )
+
 (defun mp-test-flut-scan ((proc process-drawable))
   "iterate-process-tree callback: keep the nearest lizard waiting to be ridden (its idle state)."
   (when (and (type? proc flut) *target* (nonzero? (-> proc root)) (-> proc next-state)
@@ -2384,6 +2403,25 @@
          (format 0 "[mp-test] race racers ahead ~D host racers ~D sent ~,,1f s ago~%" (-> *mp-race* ai-ahead)
                  (-> *mp-race* host-ai-count) (* 0.0033333334 (the float (- (mp-now) (-> *mp-race* host-ai-time))))
                  )
+         )
+        ((string= cmd "race-stop-racers")
+         ;; race-stop-racers: every vehicle of ours but our player's stops (a race's racers), so the
+         ;; players finish first
+         (set! *mp-test-racers-stopped* 0)
+         (iterate-process-tree *active-pool* (the-as (function object object) mp-test-stop-racer) *null-kernel-context*)
+         (format 0 "[mp-test] racers stopped ~D~%" *mp-test-racers-stopped*)
+         )
+        ((string= cmd "race-autopilot")
+         ;; race-autopilot: once a race runs (its timer going), the vehicle we drive is driven by the
+         ;; racers' AI ('set-control-hook-race-ai, wvehicle.gc), to the finish
+         (let ((veh (mp-local-vehicle)))
+           (when (and veh (> (-> *game-info* race-timer) 0))
+             (send-event veh 'set-control-hook-race-ai)
+             )
+           (format 0 "[mp-test] race autopilot ~A timer ~D~%" (if (and veh (> (-> *game-info* race-timer) 0)) #t #f)
+                   (-> *game-info* race-timer)
+                   )
+           )
          )
         ((string= cmd "goto-own-vehicle")
          ;; goto-own-vehicle: stand 2.5 m beside the vehicle we drove last (and left)

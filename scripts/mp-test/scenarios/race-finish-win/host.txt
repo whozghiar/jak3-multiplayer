@@ -1,0 +1,70 @@
+# A real race won in co-op, host side: as race-finish, but the host's racers (the ones every
+# player races against) are removed once the race runs: both players finish ahead of every racer, the
+# first to finish waits for the other, the race is won on both machines.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission desert-course-race
+63 press x 100
+64 log-lobby
+95 race-autopilot
+97 log-race
+100 race-autopilot
+105 race-autopilot
+105 race-stop-racers
+110 race-autopilot
+112 log-race
+115 race-autopilot
+115 race-stop-racers
+120 race-autopilot
+125 race-autopilot
+125 race-stop-racers
+127 log-race
+130 race-autopilot
+135 race-autopilot
+135 race-stop-racers
+140 race-autopilot
+142 log-race
+145 race-autopilot
+145 race-stop-racers
+150 race-autopilot
+155 race-autopilot
+155 race-stop-racers
+157 log-race
+160 race-autopilot
+165 race-stop-racers
+172 log-race
+175 race-stop-racers
+185 race-stop-racers
+187 log-race
+195 race-stop-racers
+202 log-race
+217 log-race
+232 log-race
+247 log-race
+262 log-race
+277 log-race
+292 log-race
+307 log-race
+322 log-race
+337 log-race
+352 log-race
+367 log-race
+382 log-race
+397 log-race
+412 log-race
+427 log-race
+442 log-race
+457 log-race
+472 log-race
+487 log-race
+502 log-race
+520 screenshot finish
+525 log

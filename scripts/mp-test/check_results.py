@@ -778,6 +778,25 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "co-op: the teammate takes no damage, no game stops",
                 bool(hits) and hits[-1][0] == 0 and not crashed, f"{hits[-1:]}, {crashed[:2]}")
 
+    elif scenario in ("race-finish", "race-finish-win"):
+        hp = grab(host, r"\] race place (\d+) progress (\S+) done (\d+)")
+        gp = grab(client, r"\] race place (\d+) progress (\S+) done (\d+)")
+        c.check(scenario, "Kleiver's real race runs to the finish on both machines (the racers' AI drives the players)",
+                any(d != "0" for _, _, d in hp) and any(d != "0" for _, _, d in gp) and float(hp[-1][1]) > 900 and float(gp[-1][1]) > 900,
+                f"host {hp[-1:]}, guest {gp[-1:]}")
+        c.check(scenario, "the guest's place counts the host's racers and the host ahead of it",
+                any(int(p) >= 1 for p, prog, d in gp if d == "0" and float(prog) > 0.5), f"{sorted(set(p for p, _, _ in gp))}")
+        hres = grab(host, r"race result: (\S+)")
+        gres = grab(client, r"race result: (\S+)")
+        if scenario == "race-finish":
+            c.check(scenario, "both finished behind a racer: lost on both machines",
+                    hres[-1:] == [("lost",)] and gres[-1:] == [("lost",)], f"host {hres}, guest {gres}")
+        else:
+            c.check(scenario, "the racers gone, the first to finish waits for the other, then won on both machines",
+                    any("our result waits for the other players" in l for l in host + client)
+                    and hres[-1:] == [("won",)] and gres[-1:] == [("won",)]
+                    and {hp[-1][0], gp[-1][0]} == {"0", "1"}, f"host {hres} {hp[-1:]}, guest {gres} {gp[-1:]}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")

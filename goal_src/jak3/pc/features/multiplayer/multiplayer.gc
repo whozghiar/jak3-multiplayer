@@ -5153,7 +5153,7 @@
             (set! won? #f)
             )
         )
-      (format 0 "[multiplayer] race result: ~S (ours ~S)~%" (if won? "won" "lost") (if first? "first" "behind a racer"))
+      (format 0 "[multiplayer] race result: ~S (ours ~S)~%" (if won? "won" "lost") (if (= (-> r own-done) 1) "ahead of every racer" "behind a racer"))
       )
     won?
     )
