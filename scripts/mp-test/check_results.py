@@ -943,6 +943,8 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(fl) and fl[-1] == ("#f", "1", "#f", "#t", "target-indax-stance"), f"{fl[-1:]}")
         lizards = grab(host, r"\] copy 1 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
         c.check(scenario, "the host draws the guest's lizard under him", bool(lizards) and lizards[0] == ("#f", "#t"), f"{lizards}")
+        shots = [int(v) for (v,) in grab(host, r"shot copies (\d+)")]
+        c.check(scenario, "the host draws the blaster shots Daxter fires from the lizard", bool(shots) and shots[-1] >= 1, f"shot copies {shots[-1:]}")
 
     elif scenario == "daxter-perch-fire":
         co = grab(client, r"\] coop #t authority \S+ character \S+ perch (-?\d+) perched \S+ state (\S+)")
@@ -951,6 +953,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(co) and co[0] == ("0", "target-indax-grab") and bool(gun) and gun[0][0] == "#t" and int(gun[0][2]) >= 1,
                 f"{co[:1]}, gun {gun}")
         c.check(scenario, "X puts him down, in his mode", bool(co) and co[-1] == ("-1", "target-indax-stance"), f"{co[-1:]}")
+        rows = [l for l in host if "] remote 1 flags #x" in l]
+        flags = [(int(l.split("flags #x")[1].split()[0], 16), "drawn #f" in l) for l in rows]
+        c.check(scenario, "the host sees him climb on its shoulder: its own Daxter stands for him there (his puppet hidden)",
+                any("player 1 climbs on our shoulder" in l for l in host) and any(f & 0x8000 and hidden for f, hidden in flags),
+                f"flags {[(hex(f), hidden) for f, hidden in flags]}")
+        shots = [int(v) for (v,) in grab(host, r"shot copies (\d+)")]
+        c.check(scenario, "the host draws the blaster shots Daxter fires from its shoulder", bool(shots) and shots[-1] >= 1, f"shot copies {shots[-1:]}")
 
     elif scenario == "coop-protect":
         hits = counter(host, r"pvp hits taken (\d+) reacted (\d+) last pushed " + NUM)
@@ -975,6 +984,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and cm[1][0] == "0", f"host {[s for s, _, _ in hm]}, guest {[s for s, _, _ in cm]}")
         c.check(scenario, "every spot is on the ground (the host stands there)",
                 len(me) == 4 and all(st == "target-stance" for _, st in me), f"{me}")
+        labels = grab(host + client, r"\] merchant label \"?(.+?)\"? language (\d+)")
+        c.check(scenario, "his name drawn over the spot reads \"Marchand\" in French (language 1), in yellow (font-color yellow)",
+                bool(labels) and all(t == "Marchand" for t, lang in labels if lang == "1") and any(lang == "1" for _, lang in labels), f"{sorted(set(labels))}")
         c.check(scenario, "his icon is on the minimap, his name drawn, his shop's line at his spot (guest)",
                 all(i == "#t" for _, i, _ in hm + cm) and int(hm[-1][2]) > int(hm[1][2]) > 0 and int(cm[1][2]) > 0
                 and len(ce) > 1 and ce[1][0] == "#t", f"host {hm}, guest near {ce}")
@@ -1103,6 +1115,25 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "before coming back each dead player watches its teammate 5 s (\"Spectating: <name>\" drawn about 300 frames)",
                 any("dead, watching player 0 for 5 s" in l for l in client) and any("dead, watching player 1 for 5 s" in l for l in host)
                 and bool(gs) and int(gs[-1][0]) >= 250 and bool(hs) and int(hs[-1][0]) >= 250, f"guest {gs[-1:]}, host {hs[-1:]}")
+        def bodies(lines, slot):
+            """The remote player's rows while dead: (x, y, z, drawn)."""
+            out, pos = [], None
+            for l in lines:
+                m = re.search(r"\] remote %d \S+ pos (\S+) (\S+) (\S+) hp" % slot, l)
+                if m:
+                    pos = tuple(float(v) for v in m.groups())
+                m = re.search(r"\] remote %d flags #x([0-9a-fA-F]+) .* drawn (\S+)" % slot, l)
+                if m and pos and int(m.group(1), 16) & 0x4:
+                    out.append(pos + (m.group(2),))
+            return out
+        hb, gb = bodies(host, 1), bodies(client, 0)
+        # the death clip moves the body about 1 m (a fall), then it lies still until the player is back
+        still = lambda b: (len(b) >= 4 and all(d == "#t" for *_, d in b)
+                           and max(math.dist(b[-4][:3], r[:3]) for r in b[-4:]) < 0.1
+                           and math.dist(b[0][:3], b[-1][:3]) < 2.0)
+        c.check(scenario, "the dead player's body stays on the ground, drawn where it fell, on the other machine (logged each second)",
+                still(hb) and still(gb), f"host sees the guest {len(hb)} s dead {hb[0][:3] if hb else None} -> {hb[-1:]}, "
+                f"guest sees the host {len(gb)} s dead {gb[0][:3] if gb else None} -> {gb[-1:]}")
 
     elif scenario == "economy-trophy":
         c.check(scenario, "a Metal Head killed by the host's blow: a trophy for the host",

@@ -14,6 +14,18 @@
 63 log-respawn
 63.5 log-me
 64 screenshot back-guest
+64.7 log
+65.7 log
+66.7 log
+67.7 log
+68.7 log
+69.7 log
+70.7 log
+71.7 log
+72.7 log
+73.7 log
+74.7 log
+75.7 log
 69 screenshot host-body
 76 log-respawn
 80 log

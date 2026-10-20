@@ -1,5 +1,6 @@
 # Co-op respawn, host side: the guest dies next to the host, watches it 5 s, comes back next to it;
 # then the host dies, watches the guest 5 s (its body on the ground), comes back next to the guest.
+# Each one logs the other once a second while it lies dead: its body stays drawn where it fell.
 1 enable
 1 name Host
 1 color 1
@@ -8,6 +9,18 @@
 38 host 0.0.0.0:7777
 44.9 wait-player 1
 50 log-respawn
+51.2 log
+52.2 log
+53.2 log
+54.2 log
+55.2 log
+56.2 log
+57.2 log
+58.2 log
+59.2 log
+60.2 log
+61.2 log
+62.2 log
 64 die
 69 log-respawn
 69.5 screenshot spectating-host

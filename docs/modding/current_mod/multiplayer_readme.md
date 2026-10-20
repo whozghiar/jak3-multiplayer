@@ -1531,11 +1531,11 @@ passed, no crash.
 | `eyes` | Eye slots | Each Jak puppet feeds its eye slot; our Daxter player's model writes none (close-up). |
 | `weapons-fx`, `dark-smack` | Trails, dark blast | The beam reflexor's and the plasmite RPG's trails counted on the guest; the host's dark blast hits the guest, no crash. |
 | `session-flow` | Restart, quitting | The host's Restart restarts the guest next to it; a guest's asks the host; a guest's Quit leaves the server; 7 checks. |
-| `coop-respawn` (rewritten) | Spectating | The dead guest watches the host 5 s ("Spectateur : Host", "Retour dans 5", camera on the host), its body on the ground, then comes back next to it; then the host the same; 7 checks. |
-| `merchant` | Kleiver's spot | The host draws a spot, the guest gets the same; each of the four spots set by the host reaches the guest and stands on the ground; his icon on the minimap, "Marchand" in yellow over him, his line at his spot (screenshots); 8 checks. |
+| `coop-respawn` (rewritten) | Spectating | The dead guest watches the host 5 s ("Spectateur : Host", "Retour dans 5", camera on the host), its body on the ground, then comes back next to it; then the host the same; 7 checks. Each machine logs the other player once a second while it lies dead: drawn, still once its fall is over, until it comes back (2026-10-20 evening). |
+| `merchant` | Kleiver's spot | The host draws a spot, the guest gets the same; each of the four spots set by the host reaches the guest and stands on the ground; his icon on the minimap, "Marchand" in yellow over him, his line at his spot (screenshots); 8 checks. His label as drawn reads "Marchand" in French, in yellow (`log-econ`, 2026-10-20 evening). |
 | `coop-protect` | Teammates | The guest's punch does not hurt the host; the host's lizard drawn under it on the guest; no blow on the host's buggy sent; 7 checks (`pvp` and `vehicle-hit` in free roam unchanged). |
-| `daxter-flut` | Daxter on a lizard | Daxter gets on the lizard the host left (triangle), drawn as Daxter, fires the scatter gun from it, jumps, rides 22 m, gets off and is Daxter again; the host draws the guest's lizard under him; 8 checks (screenshots). |
-| `daxter-perch-fire` | Firing from a shoulder | Daxter on the host's shoulder fires the blaster, the host sees him there; X puts him down; 6 checks. |
+| `daxter-flut` | Daxter on a lizard | Daxter gets on the lizard the host left (triangle), drawn as Daxter, fires the scatter gun from it, jumps, rides 22 m, gets off and is Daxter again; the host draws the guest's lizard under him; 8 checks (screenshots). Since 2026-10-20 evening he fires the blaster (yellow 1, a projectile): the host draws its shots. |
+| `daxter-perch-fire` | Firing from a shoulder | Daxter on the host's shoulder fires the blaster, the host sees him there; X puts him down; 6 checks. The host logs him climbing on and its own Daxter standing for him (his puppet hidden), and draws his blaster shots (2026-10-20 evening). |
 | `mission-start` | A mission started by one player | Co-op at the arena training; the guest goes to Spargus's doors; the host's mission manager starts again: the guest is told, taken next to the host, and its own manager runs; 7 checks. |
 | `race-result` | Places and results | The guest, 4th of its racers, reads 5th with the host ahead; the host finished first waits for the guest; both first: won on both; the guest behind a racer: lost on both; 8 checks. |
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
@@ -1752,7 +1752,10 @@ public IP.
     counted the guest's announcement while joining, now silent (as did `pre-game`, which now checks
     the host's mission and the guest's resolution cutscene). Scenarios `mission-select`,
     `mounts-coop`. Full sweep of the bug list on cbb70bd3f: 34 scenarios, 233 checks passed,
-    0 failed, no crash (`skin-title` and `host-quit` from a retail boot).
+    0 failed, no crash (`skin-title` and `host-quit` from a retail boot). Then, for evidence seen
+    from the other machine: Daxter's blaster shots from a lizard and from a shoulder drawn on the
+    host, the dead player's body still and drawn on the other machine, the "Marchand" label
+    checked as drawn, and `mission-start` / `mission-trigger` passed three times each.
   - *Tests.* Scenarios `skin-title`, `lobby-text`, `ui-ingame`, `menu-still`, `eyes`,
     `weapons-fx`, `dark-smack`, `session-flow`, `merchant`, `coop-protect`, `daxter-flut`,
     `daxter-perch-fire`, `mission-start`, `mission-trigger`, `race-result`, `race-finish`, `race-finish-win`, `dark-blast`, `dark-blast-coop`, `pre-game`; `coop-respawn`, `race-board`,

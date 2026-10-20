@@ -1685,6 +1685,10 @@
                  (-> *mp-econ* credits) (-> *mp-econ* refused) (pc-mp-econ-saves) (-> *game-info* skill)
                  )
          (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+           ;; the label drawn over his spot (in yellow, mp-draw-merchant-name) in the game's language
+           (format 0 "[mp-test] merchant label ~S language ~D~%" (lookup-text! *common-text* (text-id progress-mp-merchant) #f)
+                   (-> *setting-control* user-default language)
+                   )
            (format 0 "[mp-test] merchant spot ~D at ~m ~m ~m icon ~A name-drawn ~D~%" (-> *mp-econ* spot)
                    (-> *mp-merchant-pos* x) (-> *mp-merchant-pos* y) (-> *mp-merchant-pos* z)
                    (and mgr (-> mgr merchant-icon) #t) (-> *mp-econ* tag-drawn)

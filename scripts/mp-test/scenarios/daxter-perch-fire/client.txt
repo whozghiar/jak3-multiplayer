@@ -10,7 +10,7 @@
 60 goto-player 0 1 0
 66 press triangle 100
 68 log-coop
-69 daxter-mod 26
+69 daxter-mod 29
 70 press r1 1500
 70.2 log-me
 70.5 log-me
