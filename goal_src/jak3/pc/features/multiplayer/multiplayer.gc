@@ -6414,13 +6414,15 @@
   )
 
 (defun mp-draw-merchant-name ((buf dma-buffer))
-  "\"Merchant\" in yellow over his spot within 80 m, as a player's name (mp-draw-nameplate)."
+  "\"Merchant\" in yellow over his spot within 80 m, as a player's name (mp-draw-nameplate), above
+   the name of a player standing there."
   (when (>= (-> *mp-econ* spot) 0)
     (let ((pos (new 'stack-no-clear 'vector))
           (scr (new 'stack-no-clear 'vector))
           )
       (vector-copy! pos *mp-merchant-pos*)
-      (+! (-> pos y) (meters 2.6))
+      ;; above a player's name (2.6 m) when a player stands on his spot
+      (+! (-> pos y) (meters 3.4))
       (when (and (< (vector-vector-distance pos (math-camera-pos)) (meters 80)) (transform-point-vector! scr pos))
         (let ((x (the int (+ -1792.0 (-> scr x))))
               (y (the int (+ -1840.0 (-> scr y))))

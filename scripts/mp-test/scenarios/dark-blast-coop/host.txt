@@ -1,0 +1,18 @@
+# The dark blast in co-op, host side: Dark Jak sets off its dark blast 4 m from the guest (Daxter in
+# co-op): its bolt to the guest's hurtbox follows its position, the teammate takes no damage, no game
+# stops.
+1 enable
+1 name Host
+1 color 1
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 power dark
+53 dark-bomb
+54 press l1 600
+54.4 press l1+square 200
+55 log-dark
+57 log-dark
+60 log-dark
+62 log-me
+66 log

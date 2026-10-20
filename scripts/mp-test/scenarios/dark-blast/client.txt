@@ -1,0 +1,24 @@
+# The dark blast, guest side: 4 m from the host, which sets off its dark blast: the guest is hit,
+# the blast's effects replayed on the host's puppet, its game goes on. Then the guest, Dark Jak,
+# sets off its own next to the host.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 goto-player 0 4 0
+51 look-player 0
+56 screenshot blast-guest
+58 log-me
+58.5 log-weapons
+62 log-me
+66 power dark
+69 dark-bomb
+70 goto-player 0 4 0
+71 press l1 600
+71.4 press l1+square 200
+72 log-dark
+74 log-dark
+77 log-dark
+78 log-me
+84 log

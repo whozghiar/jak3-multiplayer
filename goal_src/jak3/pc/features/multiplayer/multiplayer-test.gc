@@ -242,9 +242,13 @@
   )
 
 (defun mp-test-button ((name string))
-  "pad-buttons bit for a button name (the order of the PS2 pad, select = bit 0); l1+triangle for both."
+  "pad-buttons bit for a button name (the order of the PS2 pad, select = bit 0); l1+triangle and
+   l1+square for both (the dark blast: an uppercut, square while ducking)."
   (if (string= name "l1+triangle")
       (return (logior (ash 1 10) (ash 1 12)))
+      )
+  (if (string= name "l1+square")
+      (return (logior (ash 1 10) (ash 1 15)))
       )
   (let ((names (new 'static 'boxed-array :type string
                  "select" "l3" "r3" "start" "up" "right" "down" "left"
@@ -2716,6 +2720,20 @@
            (logior! (-> *game-info* features) (game-feature darkjak-bomb0 darkjak-bomb1))
            (logior! (-> *target* darkjak stage) (darkjak-stage bomb0 bomb1))
            (set! (-> *game-info* eco-pill-dark) (-> *FACT-bank* eco-pill-dark-max-default))
+           )
+         )
+        ((string= cmd "log-dark")
+         ;; log-dark: what the dark blast needs (target-attack-uppercut, engine/target/target.gc)
+         (when (and *target* (nonzero? (-> *target* darkjak)))
+           (format 0 "[mp-test] dark focus ~A stage #x~X ext-anim ~D features ~A ~A~%"
+                   (focus-test? *target* dark) (-> *target* darkjak stage) (-> *target* ext-anim)
+                   (logtest? (game-feature darkjak-bomb1) (-> *setting-control* user-current features))
+                   (logtest? (game-feature darkjak-bomb1) (-> *target* game features))
+                   )
+           (format 0 "[mp-test] dark latch ~D eco ~,,1f min ~,,1f state ~A bolts retargeted ~D~%"
+                   (-> *target* darkjak latch-out-time) (-> *target* game eco-pill-dark) (-> *FACT-bank* darkjak-bomb-min)
+                   (mp-target-state-name) *mp-lightning-retargeted*
+                   )
            )
          )
         ((string= cmd "log-power")

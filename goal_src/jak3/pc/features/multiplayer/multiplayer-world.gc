@@ -3122,6 +3122,37 @@
   (none)
   )
 
+;; MOD multiplayer -- engine/common-obs/generic-obs.gc: a lightning bolt follows a joint of its
+;; target (lightning-tracker update reads its node-list). The dark blast (target-bomb1-fire-shot,
+;; engine/target/target-darkjak.gc) sends one to every focusable of kind crate, enemy, guard or
+;; vehicle within 80 m, at joint 3: another player's hurtbox (mp-hurtbox, a crate with no skeleton)
+;; is one, and the bolt read a joint it does not have: the game stopped (access violation in
+;; vector<-cspace! from the tracker). A target without that joint is followed by its position
+;; instead (joint 256: its get-trans, which the hurtbox gives).
+(define *mp-lightning-retargeted* 0) ;; bolts that followed a target's position instead (test log)
+
+(define-perm *mp-stock-lightning-tracker-init*
+             (function lightning-spec time-frame symbol process-drawable vector vector none :behavior lightning-tracker)
+  lightning-tracker-init
+  )
+
+(defbehavior lightning-tracker-init lightning-tracker ((arg0 lightning-spec) (arg1 time-frame) (arg2 symbol) (arg3 process-drawable) (arg4 vector) (arg5 vector))
+  "Stock, except a focusable target without the joint asked (above): its position instead."
+  (let ((joint (the-as int arg4)))
+    (when (and arg3
+               (< joint 256)
+               (>= joint 0)
+               (type? arg3 process-focusable)
+               (or (zero? (-> arg3 node-list)) (>= joint (-> arg3 node-list length)))
+               )
+      (+! *mp-lightning-retargeted* 1)
+      (set! arg4 (the-as vector 256))
+      )
+    )
+  (*mp-stock-lightning-tracker-init* arg0 arg1 arg2 arg3 arg4 arg5)
+  (none)
+  )
+
 (define-perm *mp-stock-projectile-init-by-other* (function projectile-init-by-other-params object :behavior projectile)
   projectile-init-by-other
   )

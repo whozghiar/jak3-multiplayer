@@ -757,6 +757,27 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "dark-blast":
+        hd = grab(host, r"\] dark latch \S+ eco \S+ min \S+ state (\S+) bolts retargeted (\d+)")
+        gd = grab(client, r"\] dark latch \S+ eco \S+ min \S+ state (\S+) bolts retargeted (\d+)")
+        crashed = [l for l in host + client if "crash:" in l]
+        c.check(scenario, "the host's dark blast goes off next to the guest, its bolt to the guest's hurtbox follows its position",
+                any(st == "target-darkjak-bomb1" for st, _ in hd) and bool(hd) and int(hd[-1][1]) >= 1, f"{hd[-2:]}")
+        c.check(scenario, "the guest is hit by it, and its own blast hits the host",
+                any("pvp hit by player 0" in l for l in client) and any("pvp hit by player 1" in l for l in host)
+                and any(st == "target-darkjak-bomb1" for st, _ in gd), f"guest {gd[-1:]}")
+        c.check(scenario, "no game stops (before the fix: access violation in vector<-cspace! from lightning-tracker)",
+                not crashed, f"{crashed[:2]}")
+
+    elif scenario == "dark-blast-coop":
+        hd = grab(host, r"\] dark latch \S+ eco \S+ min \S+ state (\S+) bolts retargeted (\d+)")
+        hits = counter(client, r"pvp hits taken (\d+) reacted (\d+) last pushed " + NUM)
+        crashed = [l for l in host + client if "crash:" in l]
+        c.check(scenario, "co-op: the host's dark blast goes off next to the guest, its bolt follows the guest's position",
+                any(st == "target-darkjak-bomb1" for st, _ in hd) and bool(hd) and int(hd[-1][1]) >= 1, f"{hd[-2:]}")
+        c.check(scenario, "co-op: the teammate takes no damage, no game stops",
+                bool(hits) and hits[-1][0] == 0 and not crashed, f"{hits[-1:]}, {crashed[:2]}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")

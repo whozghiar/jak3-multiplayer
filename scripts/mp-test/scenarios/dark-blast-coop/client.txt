@@ -1,0 +1,12 @@
+# The dark blast in co-op, guest side: Daxter 4 m from the host, which sets off its dark blast: no
+# damage, its game goes on.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 goto-player 0 4 0
+51 look-player 0
+58 log-me
+62 log-me
+66 log

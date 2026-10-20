@@ -1,0 +1,24 @@
+# The dark blast, host side: Dark Jak with the dark blast ready (dark-bomb), 4 m from the guest,
+# holds L1 and presses square (target-attack-uppercut, then target-darkjak-bomb1): its bolts reach
+# the guest's hurtbox (followed by its position), the guest is hit, no game stops. Then the guest
+# sets off its own next to the host.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 power dark
+53 dark-bomb
+53.5 log-dark
+54 press l1 600
+54.4 press l1+square 200
+54.6 log-dark
+55 log-dark
+56 log-dark
+57 screenshot blast
+60 log-dark
+62 log-me
+80 log-me
+80.5 log-weapons
+81 screenshot blast-guest-seen
+84 log
