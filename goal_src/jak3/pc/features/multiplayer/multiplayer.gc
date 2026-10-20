@@ -242,6 +242,7 @@
 (define *mp-stolen-until* 0)
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
+(define *mp-test-race-extra* 0) ;; test (race-extra-ahead): players counted ahead in a race that are not there
 (define *mp-test-coop-intro* #f) ;; test (coop-mission-intro): co-op starts at the chosen mission's introduction
 
 ;; Joining the host's world, and co-op (both described with their code, below).
@@ -5122,6 +5123,8 @@
           (+! place 1)
           )
       )
+    ;; a test counts players that are not there (race-extra-ahead): a third or fourth player's place
+    (+! place *mp-test-race-extra*)
     (set! (-> r place) place)
     (set! (-> r ai-count) 0)
     (min place 7)

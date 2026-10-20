@@ -829,6 +829,11 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(gs) and gs[-1][0] == "active" and not any("player 1 starts wascity-chase-resolution: we go there" in l for l in host),
                 f"{gs[-1:]}")
 
+    elif scenario == "race-seventh":
+        gp = [int(p) for (p,) in grab(client, r"\] race place (\d+) progress \S+ done 0")]
+        c.check(scenario, "with two more players counted ahead, the guest's HUD place reaches 7th and 8th (sprites 7 and 8)",
+                6 in gp and 7 in gp, f"places {sorted(set(gp))}")
+
     elif scenario == "race-result":
         hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
         gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")

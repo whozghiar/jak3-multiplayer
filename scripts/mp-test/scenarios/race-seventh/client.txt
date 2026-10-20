@@ -1,0 +1,92 @@
+# The 7th place on the HUD, guest side: two more players counted ahead (race-extra-ahead 2), as in a
+# session of four: behind the host's racers and the players, the guest reads 7th or 8th (screens).
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+62.5 race-extra-ahead 2
+63 character 0
+75 race-autopilot
+77 log-race
+77.3 screenshot place-77
+80 race-autopilot
+85 race-autopilot
+90 race-autopilot
+92 log-race
+92.3 screenshot place-92
+95 race-autopilot
+100 race-autopilot
+105 race-autopilot
+107 log-race
+107.3 screenshot place-107
+110 race-autopilot
+115 race-autopilot
+120 race-autopilot
+122 log-race
+122.3 screenshot place-122
+125 race-autopilot
+130 race-autopilot
+135 race-autopilot
+137 log-race
+137.3 screenshot place-137
+140 race-autopilot
+152 log-race
+152.3 screenshot place-152
+167 log-race
+167.3 screenshot place-167
+182 log-race
+182.3 screenshot place-182
+197 log-race
+197.3 screenshot place-197
+212 log-race
+212.3 screenshot place-212
+227 log-race
+227.3 screenshot place-227
+242 log-race
+242.3 screenshot place-242
+257 log-race
+257.3 screenshot place-257
+272 log-race
+272.3 screenshot place-272
+287 log-race
+287.3 screenshot place-287
+302 log-race
+302.3 screenshot place-302
+317 log-race
+317.3 screenshot place-317
+332 log-race
+332.3 screenshot place-332
+347 log-race
+347.3 screenshot place-347
+362 log-race
+362.3 screenshot place-362
+377 log-race
+377.3 screenshot place-377
+392 log-race
+392.3 screenshot place-392
+407 log-race
+407.3 screenshot place-407
+422 log-race
+422.3 screenshot place-422
+437 log-race
+437.3 screenshot place-437
+452 log-race
+452.3 screenshot place-452
+467 log-race
+467.3 screenshot place-467
+482 log-race
+482.3 screenshot place-482
+500 screenshot finish
+505 log

@@ -79,6 +79,7 @@
 ;;   goto-own-vehicle                                        stand beside the vehicle we drove last (and left)
 ;;   race-autopilot                                          a running race: our vehicle driven by the racers' AI
 ;;   race-stop-racers                                        every vehicle of ours but our player's removed
+;;   race-extra-ahead <n>                                    n more players counted ahead of us in a race
 ;;   goto-flut | log-fldax                                   stand 2 m from the nearest lizard waiting, facing it; Daxter on it
 ;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   restart | log-restart                                   START > Restart; restarts done, mode, master mode
@@ -2445,6 +2446,11 @@
          (format 0 "[mp-test] race racers ahead ~D host racers ~D sent ~,,1f s ago~%" (-> *mp-race* ai-ahead)
                  (-> *mp-race* host-ai-count) (* 0.0033333334 (the float (- (mp-now) (-> *mp-race* host-ai-time))))
                  )
+         )
+        ((string= cmd "race-extra-ahead")
+         ;; race-extra-ahead <n>: n more players counted ahead of us in a race (the HUD's place of a
+         ;; session with more players than co-op allows)
+         (set! *mp-test-race-extra* (mp-test-int))
          )
         ((string= cmd "race-stop-racers")
          ;; race-stop-racers: every vehicle of ours but our player's stops (a race's racers), so the
