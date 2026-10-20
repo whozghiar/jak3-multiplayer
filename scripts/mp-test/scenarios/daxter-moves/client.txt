@@ -1,0 +1,25 @@
+# Daxter's moves, guest side (Daxter): every gun given; the D-pad chooses a mod and takes the gun
+# out in his hand without firing; next to the standing host's Jak, the prompt asks L1 + triangle,
+# triangle alone does nothing, L1 + triangle climbs on its shoulder; X puts him down.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 cheat weapons
+51 log-daxter-gun
+52 press right 100
+52.5 log-daxter-gun
+53 log-input
+53.5 screenshot dpad-gun
+56 goto-player 0 2 0
+57.5 log-coop
+58 press triangle 100
+59.5 log-coop
+60 press l1+triangle 200
+62 log-coop
+62.5 screenshot perched
+64 press x 100
+66 log-coop
+80 log

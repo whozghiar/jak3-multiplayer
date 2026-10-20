@@ -1,0 +1,15 @@
+# Daxter's moves, host side (Jak, co-op): stands still, not crouched, while the guest's Daxter
+# chooses a gun with the D-pad (it shows in his hand) and climbs on its shoulder with L1 + triangle.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+49 merchant-spot 0
+60 log
+60.5 screenshot dpad-gun-host
+68 log
+68.5 screenshot perched-host
+80 log

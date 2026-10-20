@@ -1632,6 +1632,31 @@
              )
            )
          )
+        ((string= cmd "host-play-mission")
+         ;; host-play-mission <name>: the host's Choose a mission in game, on the mission of that
+         ;; play-list name (mp-host-play-mission), as X on it in START > Options > Multiplayer does
+         (mp-test-word)
+         (dotimes (i (-> *game-info* play-list length))
+           (when (string= (-> *game-info* play-list i name) (-> *mp-test* word))
+             (format 0 "[mp-test] host plays mission ~S (task ~D)~%" (-> *mp-test* word) i)
+             (mp-host-play-mission i)
+             )
+           )
+         )
+        ((string= cmd "log-input")
+         ;; log-input: what our buttons did: our state, the gun mod in use, the ammo of each color,
+         ;; Daxter's shots, and whether the START menu is open over the running world
+         (when *target*
+           (format 0 "[mp-test] input state ~A gun ~D ammo ~,,1f ~,,1f ~,,1f ~,,1f " (mp-target-state-name)
+                   (if (nonzero? (-> *target* gun)) (-> *target* gun using-gun-type) -1)
+                   (-> *game-info* gun-ammo 0) (-> *game-info* gun-ammo 1) (-> *game-info* gun-ammo 2)
+                   (-> *game-info* gun-ammo 3)
+                   )
+           (format 0 "daxter-shots ~D menu ~A live ~A~%" (-> *mp-daxter-gun* shots) (if *progress-process* #t #f)
+                   (-> *mp-pause* live?)
+                   )
+           )
+         )
         ((string= cmd "log-acts")
          ;; log-acts: the missions the mission pages offer, by act (count, the first three's tasks and names)
          (dotimes (a 3)
@@ -1686,6 +1711,18 @@
                  )
          (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
            ;; the label drawn over his spot (in yellow, mp-draw-merchant-name) in the game's language
+           ;; his model at the spot (mp-update-merchant-model): alive, drawn, where, his level's state
+           (let ((k (if mgr (the-as process-drawable (handle->process (-> mgr kleiver))))))
+             (format 0 "[mp-test] kleiver model ~A borrow ~A lkleever ~A" (if k #t #f) (and mgr (-> mgr kleiver-borrow?))
+                     (level-status? *level* 'lkleever #f)
+                     )
+             (if k
+                 (format 0 " at ~m from the spot drawn ~A" (vector-vector-distance (-> k root trans) *mp-merchant-pos*)
+                         (not (logtest? (-> k draw status) (draw-control-status no-draw)))
+                         )
+                 )
+             (format 0 "~%")
+             )
            (format 0 "[mp-test] merchant label ~S language ~D~%" (lookup-text! *common-text* (text-id progress-mp-merchant) #f)
                    (-> *setting-control* user-default language)
                    )

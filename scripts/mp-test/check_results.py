@@ -852,6 +852,42 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 ("#f", "#t") in hc and len(gm) >= 2 and abs(float(gm[-1][0]) - float(gm[0][0])) + abs(float(gm[-1][1]) - float(gm[0][1])) > 5,
                 f"{hc[-1:]}, guest {gm[:1]} -> {gm[-1:]}")
 
+    elif scenario == "menu-buttons":
+        for side, lines in (("host", host), ("guest", client)):
+            inp = grab(lines, r"\] input state (\S+) gun (-?\d+) ammo (\S+) (\S+) (\S+) (\S+) daxter-shots (\d+) menu (\S+)")
+            states = [st for (st,) in grab(lines, r"\] me \S+ \S+ \S+ speed \S+ state (\S+)")]
+            under = [r for r in inp if r[7] == "#t"]
+            c.check(scenario, f"{side}: under the START menu (opened with START), R1, square, L1, the D-pad, X and triangle do nothing: no shot, no gun change, no jump or attack, also with X just after it closes",
+                    bool(inp) and len(under) >= 2 and all(r[1:7] == inp[0][1:7] for r in inp)
+                    and not any("jump" in st or "attack" in st for st in states) and len(states) >= 4,
+                    f"inputs {[(r[0], r[1], r[2], r[7]) for r in inp]}, states {states}")
+
+    elif scenario == "daxter-moves":
+        guns = grab(client, r"\] daxter-gun out (\S+) mod (\d+) shots (\d+)")
+        c.check(scenario, "Daxter: the D-pad takes his gun out, the mod just chosen in his hand, without firing",
+                len(guns) >= 2 and guns[0][0] == "#f" and guns[1][0] == "#t" and guns[1][1] != guns[0][1] and guns[1][2] == "0",
+                f"{guns}")
+        co = grab(client, r"\] coop #t authority \S+ character \S+ perch (-?\d+) perched \S+ state (\S+)")
+        c.check(scenario, "next to the standing host's Jak, triangle alone does nothing, L1 + triangle climbs on its shoulder, X puts him down",
+                len(co) >= 4 and co[0][0] == "-1" and co[1][0] == "-1" and co[2] == ("0", "target-indax-grab")
+                and co[3] == ("-1", "target-indax-stance") and any("player 1 climbs on our shoulder" in l for l in host),
+                f"{co}")
+
+    elif scenario == "mission-switch":
+        hme = grab(host, r"\] me (\S+) \S+ (\S+) speed \S+ state (\S+)")
+        gme = grab(client, r"\] me (\S+) \S+ (\S+) speed \S+ state (\S+)")
+        gj = grab(client, r"\] join continue (\S+) title")
+        c.check(scenario, "the host chooses the palace ruins' attack in game: both players at its start, each in its own Rhino",
+                any("host plays mission palace-ruins-attack" in l for l in host) and gj[-1:] == [("rubblea-rhino",)]
+                and len(hme) >= 2 and hme[-1][2] == "target-pilot-stance" and len(gme) >= 2 and gme[-1][2] == "target-pilot-stance"
+                and math.dist((float(hme[-1][0]), float(hme[-1][1])), (float(gme[-1][0]), float(gme[-1][1]))) < 40.0,
+                f"host {hme[-1:]}, guest {gme[-1:]}, guest continue {gj}")
+        hv = grab(host, r"\] remote 1 flags #x([0-9a-fA-F]+) anim \S+ veh (-?\d+) puppet \S+ drawn (\S+)")
+        c.check(scenario, "the host sees the guest drive its Rhino (vehicle 17)",
+                bool(hv) and int(hv[-1][0], 16) & 1 and hv[-1][1] == "17" and hv[-1][2] == "#t", f"{hv[-1:]}")
+        c.check(scenario, "no game stops (the user's crash there was the shadow renderer's overflow skip, Shadow2.cpp)",
+                not any("Assertion failed" in l for l in host + client), "")
+
     elif scenario == "mounts-coop":
         FL = r"\] fluts idle (\d+) hidden (\d+) seconds-near (\d+) riding (\S+) placed (\d+) hides (\d+) shows (\d+)"
         hf = [(int(i), int(h), int(sn), r, int(pl), int(hd), int(sh)) for i, h, sn, r, pl, hd, sh in grab(host, FL)]
@@ -984,6 +1020,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and cm[1][0] == "0", f"host {[s for s, _, _ in hm]}, guest {[s for s, _, _ in cm]}")
         c.check(scenario, "every spot is on the ground (the host stands there)",
                 len(me) == 4 and all(st == "target-stance" for _, st in me), f"{me}")
+        km = grab(host, r"\] kleiver model (\S+) borrow (\S+) lkleever (\S+) at (\S+) from the spot drawn (\S+)")
+        c.check(scenario, "Kleiver's model stands at his spot, drawn (his level lkleever borrowed into waswide)",
+                len(km) >= 4 and all(m[0] == "#t" and m[2] == "active" and float(m[3]) < 0.5 and m[4] == "#t" for m in km[-4:]),
+                f"{km}")
         labels = grab(host + client, r"\] merchant label \"?(.+?)\"? language (\d+)")
         c.check(scenario, "his name drawn over the spot reads \"Marchand\" in French (language 1), in yellow (font-color yellow)",
                 bool(labels) and all(t == "Marchand" for t, lang in labels if lang == "1") and any(lang == "1" for _, lang in labels), f"{sorted(set(labels))}")

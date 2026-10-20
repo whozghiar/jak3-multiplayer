@@ -1,0 +1,28 @@
+# Buttons under the START menu, host side (Jak, gun out): pressed right as START opens it, then X
+# to choose entries and triangle to come back, as a player does: no jump, no shot, no punch.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 gun 29
+50 log-input
+51 press start 100
+51.1 press square 100
+51.25 press r1 300
+51.6 log-input
+51.65 log-me
+53 press down 100
+53.5 press x 100
+53.7 log-me
+54 log-input
+55 press triangle 100
+55.3 log-me
+56 press x 100
+56.2 log-me
+57 log-input
+57.5 press start 100
+57.6 press x 100
+57.8 log-me
+59 log-input
+70 log

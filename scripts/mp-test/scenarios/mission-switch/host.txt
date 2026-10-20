@@ -1,0 +1,27 @@
+# The host changes mission in game, host side: co-op at the palace ruins' patrol (act 3); once the
+# guest is in, the host chooses the ruins' attack, which starts Jak in the Rhino ("rubblea-rhino"):
+# where each player stands, in what, and whether a game stops.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission palace-ruins-patrol
+63 press x 100
+70 wait-player 1
+74 log-me
+75 log-join
+78 host-play-mission palace-ruins-attack
+100 log-me
+100.5 log-join
+101 screenshot after-switch
+110 log-me
+110.5 log
+111 screenshot later
+125 log-me
+126 log
