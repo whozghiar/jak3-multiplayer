@@ -1749,6 +1749,10 @@
   (progress-mp-respawn-in #x1599)
   (progress-mp-merchant #x159a)
   (progress-mp-race-finish-wait #x159b)
+  (progress-mp-act #x159c)
+  (progress-mp-act-1 #x159d)
+  (progress-mp-act-2 #x159e)
+  (progress-mp-act-3 #x159f)
   )
 ;; ---text-id
 

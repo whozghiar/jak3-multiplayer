@@ -1,0 +1,36 @@
+# The host chooses a mission in game, host side: co-op at the arena's jump training (act 1); once the
+# guest is in, START > Options > Multiplayer > Choose a mission: act 2, its second mission. The
+# host's game starts there and the guest loads it again. Kleiver trades in free roam only: no spot
+# in co-op.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission arena-training-1
+63 press x 100
+70 wait-player 1
+72 log-acts
+73 log-econ
+75 open-menu multiplayer
+78 press up 100
+80.5 screenshot ingame-page
+82 press x 100
+82.2 wait-menu mp-mission-ingame
+82 press x 100
+82.5 press right 100
+83 press x 100
+84 press down 100
+84.5 press x 100
+85 press right 100
+86 screenshot mission-page
+87 press x 100
+115 log-join
+116 log-me
+125 log-join
+126 log

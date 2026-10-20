@@ -1,0 +1,25 @@
+# The host chooses a mission in game, guest side: joins the host's co-op game (the jump training);
+# when the host starts another mission from its START menu, the guest loads the host's world again
+# and comes next to the host. No Kleiver in co-op.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+66 log-econ
+70 log-join
+118 log-join
+125 log-join
+126 screenshot gathered
+130 log

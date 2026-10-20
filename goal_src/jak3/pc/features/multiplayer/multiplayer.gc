@@ -99,6 +99,8 @@
                   ;; player does too; guest to the host: asks for it ("Restart for everyone")
   (mission-start 25) ;; co-op: the sender's mission started, its task node iarg 0 ("Missions
                      ;; started together")
+  (world-reset 27)   ;; host to everyone: its world was started again (a mission chosen in game):
+                     ;; each guest loads it again
   (race-progress 26) ;; the sender's race: its task node iarg 0, its result iarg 1 (0 racing, 1
                      ;; finished ahead of every racer, 2 behind one), its progress fvec x; from the
                      ;; host, its racers' progress too (iarg 2 of them, floats in text) ("Races")
@@ -2199,9 +2201,18 @@
   (none)
   )
 
+(defun mp-joining? ()
+  "Guest not yet next to the host in the host's world (joining, or loading it again after the host
+   chose a mission in game: mp-apply-world-reset)."
+  (and (= *mp-mode* (mp-mode client)) (< (-> *mp-join* stage) 4))
+  )
+
 (defun mp-apply-progress ((ev mp-event))
-  "Close the task nodes another player has closed, as if done here (rewards included)."
-  (when (logtest? *mp-world* (mp-world-flag progress))
+  "Close the task nodes another player has closed, as if done here (rewards included). A guest
+   about to load the host's world skips them: that world holds them."
+  (when (and (logtest? *mp-world* (mp-world-flag progress))
+             (not (and (= *mp-mode* (mp-mode client)) (< (-> *mp-join* stage) 2)))
+             )
     (let ((nodes (-> *game-info* sub-task-list))
           (first (-> ev iarg 0))
           (count 0)
@@ -2473,6 +2484,49 @@
   (and info (-> info play-continue) (lookup-text! *common-text* (-> info text-name) #t))
   )
 
+(define *mp-mission-act* 1) ;; the act whose missions the mission pages list (1 to 3)
+
+(defun mp-mission-act ((info game-task-info))
+  "A mission's act (1 to 3), by its play node's flags; 0 when it has none."
+  (let ((flags (-> *game-info* sub-task-list (-> info play-node) flags)))
+    (cond
+      ((logtest? flags (game-task-node-flag act1)) 1)
+      ((logtest? flags (game-task-node-flag act2)) 2)
+      ((logtest? flags (game-task-node-flag act3)) 3)
+      (else 0)
+      )
+    )
+  )
+
+(defun mp-act-mission-count ((act int))
+  "Missions of act `act` the mission pages offer."
+  (let ((n 0))
+    (dotimes (i (-> *game-info* play-list length))
+      (let ((info (-> *game-info* play-list i)))
+        (if (and (mp-mission-ok? info) (= (mp-mission-act info) act))
+            (+! n 1)
+            )
+        )
+      )
+    n
+    )
+  )
+
+(defun mp-act-mission-task ((act int) (n int))
+  "The game-task (play-list index) of the n-th mission of act `act` offered, -1 when there is none."
+  (dotimes (i (-> *game-info* play-list length))
+    (let ((info (-> *game-info* play-list i)))
+      (when (and (mp-mission-ok? info) (= (mp-mission-act info) act))
+        (if (zero? n)
+            (return i)
+            )
+        (+! n -1)
+        )
+      )
+    )
+  -1
+  )
+
 (defun mp-mission-count ()
   "Missions the lobby offers."
   (let ((n 0))
@@ -2518,6 +2572,37 @@
         -1.0
         )
     )
+  )
+
+(define-extern mp-start-game (function symbol))
+(define-extern mp-coop? (function symbol))
+
+(defun mp-host-play-mission ((task int))
+  "Host in game, co-op (START > Options > Multiplayer > Choose a mission): every player to the start
+   of mission `task`, as the lobby starts one: the host's game starts there (mp-start-game), and each
+   guest loads the host's world again (world-reset), then comes next to the host."
+  (when (and (= *mp-mode* (mp-mode host)) (mp-coop?) (>= task 0) (< task (-> *game-info* play-list length)))
+    (set! (-> *mp-session* coop-start) 2)
+    (set! (-> *mp-session* coop-mission) task)
+    (format 0 "[multiplayer] the host starts mission ~D for every player~%" task)
+    ;; told first: the story steps the new game closes reach the guests after it (they skip them)
+    (mp-send-event (mp-event-kind world-reset) -1 0 0.0)
+    (mp-start-game)
+    )
+  (none)
+  )
+
+(defun mp-apply-world-reset ((ev mp-event))
+  "The host's world started again (a mission it chose in game): a guest loads it again, as when it
+   joined (mp-update-join-request), then comes next to the host."
+  (when (and (= *mp-mode* (mp-mode client)) (zero? (-> ev from)))
+    (format 0 "[multiplayer] the host starts a mission: we load its world again~%")
+    (mp-show-message "The host starts a mission")
+    (set! (-> *mp-join* stage) 0)
+    ;; our last story step is from the old world: no mission of the new one is ours to announce
+    (set! (-> *mp-session* step-at) 0)
+    )
+  (none)
   )
 
 (defun mp-start-game ()
@@ -3217,6 +3302,9 @@
          )
         (((mp-event-kind race-progress))
          (mp-apply-race-progress ev)
+         )
+        (((mp-event-kind world-reset))
+         (mp-apply-world-reset ev)
          )
         )
       )
@@ -3990,6 +4078,7 @@
    that this mission starts here when our own play started it (above)."
   (when (and (mp-coop?)
              (not *mp-progress-replaying*)
+             (not (mp-joining?))
              (nonzero? (-> *mp-session* step-at))
              (< (- (mp-now) (-> *mp-session* step-at)) (seconds 30))
              )
@@ -4003,12 +4092,13 @@
 
 (defun mp-apply-mission-start ((ev mp-event))
   "Another player's mission started by its play: we go next to that player, unless we stand within
-   40 m (the mission may already run here too: the shared progress opened its node)."
+   40 m (the mission may already run here too: the shared progress opened its node). A guest still
+   joining the host's world goes next to the host anyway."
   (let ((nodes (-> *game-info* sub-task-list))
         (n (-> ev iarg 0))
         (st (mp-remote-state (-> ev from)))
         )
-    (when (and (mp-coop?) *target* st (> n 0) (< n (-> nodes length)))
+    (when (and (mp-coop?) *target* st (> n 0) (< n (-> nodes length)) (not (mp-joining?)))
       (let ((node (-> nodes n)))
         (cond
           ;; both started it by their own play (a shared cutscene closes the step on each machine):

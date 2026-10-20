@@ -397,5 +397,9 @@
   "1598": "Spectating: ~S",
   "1599": "Back in ~D",
   "159a": "Merchant",
-  "159b": "Waiting for the other players to finish"
+  "159b": "Waiting for the other players to finish",
+  "159c": "Act",
+  "159d": "Act 1",
+  "159e": "Act 2",
+  "159f": "Act 3"
 }

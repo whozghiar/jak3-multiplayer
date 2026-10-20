@@ -417,14 +417,38 @@
 ;; ------------------------------------------------------------------------------------------------
 
 ;; The page's options: all of them at the title screen and in the lobby (address, the host's
-;; administration), only the first five in game (status, name, character, color, appearance).
+;; administration); in game the first five (status, name, character, color, appearance) and, for
+;; the host in co-op, Choose a mission (by act, started for every player).
 (define *mp-menu-all* (-> (the-as menu-generic-scrolling-page (-> *mp-menu-options* options 0)) menu-options))
+
+;; Host in co-op: choose a mission, started for every player (an act, then a mission). Shown to the
+;; host in co-op only (set-menu-options below).
+(define *mp-menu-mission-button*
+  (new 'static 'menu-generic-button-option
+    :name (text-id progress-mp-coop-mission)
+    :on-confirm (lambda ((the-progress progress))
+                  (push-state the-progress)
+                  (set-next-state the-progress 'mp-mission-ingame 0)
+                  (none)
+                  )
+    )
+  )
 
 (define *mp-menu-ingame*
   (let ((opts (new 'global 'boxed-array menu-option 5)))
     (dotimes (i 5)
       (set! (-> opts i) (-> *mp-menu-all* i))
       )
+    opts
+    )
+  )
+
+(define *mp-menu-ingame-host*
+  (let ((opts (new 'global 'boxed-array menu-option 6)))
+    (dotimes (i 5)
+      (set! (-> opts i) (-> *mp-menu-all* i))
+      )
+    (set! (-> opts 5) *mp-menu-mission-button*)
     opts
     )
   )
@@ -1812,16 +1836,60 @@
   0
   )
 
+(defun mp-act-mission-row ((act int) (task int))
+  "Place of mission `task` in the list of act `act`, 0 when it is not there."
+  (dotimes (i (mp-act-mission-count act))
+    (if (= (mp-act-mission-task act i) task)
+        (return i)
+        )
+    )
+  0
+  )
+
+;; The story's missions by act: the act first (X), then a mission of that act. The lobby's page (the
+;; co-op start) and the host's page in game (START > Options > Multiplayer) have the same two
+;; carousels (a static page holds its options inline).
+(defmacro mp-act-carousel ()
+  "The act carousel of the mission pages (*mp-mission-act*)."
+  `(new 'static 'menu-generic-carousel-option
+     :name (text-id progress-mp-act)
+     :items (new 'static 'boxed-array :type text-id (text-id progress-mp-act-1) (text-id progress-mp-act-2) (text-id progress-mp-act-3))
+     :get-item-index-fn (lambda () (max 0 (min 2 (+ *mp-mission-act* -1))))
+     :on-confirm (lambda ((index int) (the-progress progress))
+                   (set! *mp-mission-act* (+ index 1))
+                   (none)
+                   )
+     )
+  )
+
 (define *mp-mission-options*
   (progress-new-generic-scrolling-page (text-id progress-mp-mission)
+    (mp-act-carousel)
     (new 'static 'menu-generic-carousel-option
       :name (text-id progress-mp-mission)
-      :get-max-size-fn (lambda () (mp-mission-count))
-      :get-item-label-fn (lambda ((index int)) (mp-mission-name (mp-mission-task index)))
-      :get-item-index-fn (lambda () (mp-mission-row (-> *mp-session* coop-mission)))
+      :get-max-size-fn (lambda () (mp-act-mission-count *mp-mission-act*))
+      :get-item-label-fn (lambda ((index int)) (mp-mission-name (mp-act-mission-task *mp-mission-act* index)))
+      :get-item-index-fn (lambda () (mp-act-mission-row *mp-mission-act* (-> *mp-session* coop-mission)))
       :on-confirm (lambda ((index int) (the-progress progress))
-                    (set! (-> *mp-session* coop-mission) (mp-mission-task index))
+                    (set! (-> *mp-session* coop-mission) (mp-act-mission-task *mp-mission-act* index))
                     (mp-choose-coop-start 2 the-progress)
+                    (none)
+                    )
+      )
+    )
+  )
+
+;; In game, the host's page: X on a mission starts it for every player (mp-host-play-mission).
+(define *mp-mission-ingame-options*
+  (progress-new-generic-scrolling-page (text-id progress-mp-coop-mission)
+    (mp-act-carousel)
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-mp-mission)
+      :get-max-size-fn (lambda () (mp-act-mission-count *mp-mission-act*))
+      :get-item-label-fn (lambda ((index int)) (mp-mission-name (mp-act-mission-task *mp-mission-act* index)))
+      :get-item-index-fn (lambda () (mp-act-mission-row *mp-mission-act* (-> *mp-session* coop-mission)))
+      :on-confirm (lambda ((index int) (the-progress progress))
+                    (mp-host-play-mission (mp-act-mission-task *mp-mission-act* index))
                     (none)
                     )
       )
@@ -1992,7 +2060,11 @@
      ;; mode, a server or the server's administration are chosen from the title screen and lobby
      (let ((page (the-as menu-generic-scrolling-page (-> *mp-menu-options* options 0))))
        (set! (-> page menu-options)
-             (if (= (level-status? *level* 'title #f) 'active) *mp-menu-all* *mp-menu-ingame*)
+             (cond
+               ((= (level-status? *level* 'title #f) 'active) *mp-menu-all*)
+               ((and (= *mp-mode* (mp-mode host)) (mp-coop?)) *mp-menu-ingame-host*)
+               (else *mp-menu-ingame*)
+               )
              )
        ;; a choice past the shorter list starts over (this runs again while the page shows: the
        ;; choice itself is kept)
@@ -2019,6 +2091,13 @@
      (set! (-> *progress-pc-generic-store* current-menu-hover-index) (+ 1 (-> *mp-session* coop-start)))
      (set! (-> *progress-pc-generic-store* current-menu-scroll-index) 0.0)
      (set! (-> this current-options) *mp-coop-options*)
+     0
+     )
+    (('mp-mission-ingame)
+     (set! (-> (the-as menu-generic-scrolling-page (-> *mp-mission-ingame-options* options 0)) selected-option-index) -1)
+     (set! (-> *progress-pc-generic-store* current-menu-hover-index) 0)
+     (set! (-> *progress-pc-generic-store* current-menu-scroll-index) 0.0)
+     (set! (-> this current-options) *mp-mission-ingame-options*)
      0
      )
     (('mp-mission)

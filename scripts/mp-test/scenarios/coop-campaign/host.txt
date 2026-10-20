@@ -1,5 +1,5 @@
 # Co-op campaign, host side (plays Jak): Host Game opens the lobby; square opens the mode list, co-op
-# is chosen, then "Choose a mission" and the first of the list (the arena's jump training). A third player is refused (co-op: two
+# is chosen, then "Choose a mission" and the first of act 1 (the arena's jump training). A third player is refused (co-op: two
 # players). X starts the mission once the guest (Daxter) is ready: every story step before it done.
 # With Daxter played by the guest, the host's Jak has no Daxter on his shoulder. An auto-save goes into
 # the multiplayer campaign (not a card slot). Back at the title screen, Host Game offers to continue
@@ -28,7 +28,8 @@
 37.5 press down 100
 38 press x 100
 39 wait-menu mp-mission
-39.5 press x 100
+39.3 press down 100
+39.7 press x 100
 40.2 log-lobby
 40.5 screenshot mission-page
 41 press x 100
@@ -58,7 +59,6 @@
 181 wait-menu mp-coop-start
 181.5 log-lobby
 182 screenshot coop-page-campaign
-182.5 press up 100
 183 press x 100
 184 wait-menu mp-lobby-host
 185 log-lobby

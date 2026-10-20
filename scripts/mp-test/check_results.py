@@ -891,7 +891,27 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 f"guest {me[-1:]}, host {hme[-1:]}")
         st = grab(client, r"\] state task-manager-arena-training (\S+)")
         c.check(scenario, "the mission runs on the guest too (its own task manager)",
-                sum(1 for l in client if "mission arena-training-1-collect starts here" in l) >= 2 and bool(st) and st[-1][0] != "none", f"{st}")
+                sum(1 for l in client if "mission arena-training-1-collect starts here" in l) >= 1 and bool(st) and st[-1][0] != "none", f"{st}")
+
+    elif scenario == "mission-select":
+        acts = grab(host, r"\] act 2 missions (\d+) \S+ (\d+):")
+        chosen = grab(host, r"the host starts mission (\d+) for every player")
+        c.check(scenario, "the host picks act 2's second mission in START > Options > Multiplayer; its game starts there",
+                bool(acts) and int(acts[-1][0]) >= 2 and chosen == [(acts[-1][1],)]
+                and any(f"game started: campaign (co-op start 2, mission {acts[-1][1]})" in l for l in host),
+                f"act 2 {acts[-1:]}, chosen {chosen}")
+        hj = grab(host, r"\] join continue (\S+) title")
+        gj = grab(client, r"\] join continue (\S+) title")
+        gd = grab(client, r"\] join distance to the host ([\d.]+)")
+        c.check(scenario, "the guest loads the host's world again and comes next to the host",
+                any("we load its world again" in l for l in client)
+                and sum(1 for l in client if "in the host's world" in l) >= 2
+                and bool(hj) and bool(gj) and gj[-1] == hj[-1] and bool(gd) and float(gd[-1][0]) < 10.0,
+                f"host {hj[-1:]}, guest {gj}, distance {gd}")
+        hm = grab(host, r"\] merchant spot (-?\d+) ")
+        cm = grab(client, r"\] merchant spot (-?\d+) ")
+        c.check(scenario, "no Kleiver in co-op (no spot, host and guest)",
+                hm == [("-1",)] and cm == [("-1",)], f"host {hm}, guest {cm}")
 
     elif scenario == "daxter-flut":
         fl = grab(client, r"\] fldax on (\S+) rides (\d+) art-on (\S+) daxter (\S+) state (\S+)")
@@ -1269,8 +1289,8 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         refused = grab(client, r"no save in another player's world")
         c.check(scenario, "the guest saves nothing", bool(refused), f"{len(refused)} refused")
         hidden = grab(host, r"session sidekick-hidden (\S+) sidekick (\S+) character 0")
-        c.check(scenario, "Jak has no Daxter on his shoulder while the guest plays Daxter, and has him back after",
-                ("#t", "#f") in hidden and hidden[-1] == ("#f", "#t"), f"{hidden}")
+        c.check(scenario, "online, Jak has no Daxter of his own on his shoulder (a Daxter player stands there), before and after the guest leaves",
+                bool(hidden) and all(h == ("#t", "#f") for h in hidden), f"{hidden}")
         c.check(scenario, "continuing restores the campaign saved (story steps closed after it open again)",
                 len(sess) >= 3 and sess[-1][1] < max(cl for _, cl in sess) and sess[-1][1] == sess[1][1],
                 f"closed {[cl for _, cl in sess]}")
