@@ -887,11 +887,32 @@
 ;; Local player -> network
 ;; ------------------------------------------------------------------------------------------------
 
+;; Our Daxter player on a lizard ("Daxter on a lizard", below).
+(deftype mp-fldax-state (structure)
+  ((on?    symbol)     ;; our Daxter player got on a lizard and rides it as Daxter
+   (since  time-frame) ;; real-clock time he got on
+   (art    art-group)  ;; Daxter's art group with Jak's lizard clips replaced, #f until needed
+   (backup art-group)  ;; the player's art group under it
+   (rides  int32)      ;; lizards got on (test log)
+   )
+  )
+
+(define *mp-fldax* (new 'global 'mp-fldax-state))
+(set! (-> *mp-fldax* on?) #f)
+(set! (-> *mp-fldax* art) #f)
+(set! (-> *mp-fldax* backup) #f)
+
+(defun mp-fldax? ((tgt target))
+  "#t while `tgt`, our player, rides a lizard as Daxter."
+  (and (-> *mp-fldax* on?) (= tgt *target*) (focus-test? tgt flut))
+  )
+
 (defun mp-playing-daxter? ((tgt target))
-  "#t while the player is drawn as Daxter: his playable mode (indax), or driving as Daxter (pilot
-   as-daxter?, which swaps the target's art for Daxter's the same way)."
+  "#t while the player is drawn as Daxter: his playable mode (indax), driving as Daxter (pilot
+   as-daxter?, which swaps the target's art for Daxter's the same way), or on a lizard as Daxter."
   (or (focus-test? tgt indax)
       (and (focus-test? tgt pilot) (nonzero? (-> tgt pilot)) (-> tgt pilot as-daxter?))
+      (mp-fldax? tgt)
       )
   )
 
@@ -1301,6 +1322,7 @@
   (and *target*
        (or (focus-test? *target* indax)
            (and (focus-test? *target* flut) (nonzero? (-> *target* flut)) (-> *target* flut as-daxter?))
+           (mp-fldax? *target*)
            )
        )
   )
@@ -3143,9 +3165,161 @@
   (none)
   )
 
+;; ------------------------------------------------------------------------------------------------
+;; Daxter on a lizard
+;;
+;; The stock rides Daxter on a lizard only in the desert chase ('wild mode, the lizard running on
+;; its own: target-fldax-enter, engine/target/flut/target-flut.gc). A Daxter player gets on any
+;; lizard and rides it as Jak does: his mode ignores the lizard's 'change-mode 'flut
+;; (target-indax-handler), so his stance and walk take it here and go to the stock ride, the lizard
+;; answering as it does for Jak. Once on, the player's art group is a copy of Daxter's whose slots
+;; of Jak's lizard clips (jakb-flut-*) hold his (daxter-fldax-*), the sidekick following the
+;; player's bones, as target-fldax-enter does. Off the lizard, his art back, then his mode
+;; (mp-update-character). His clips and the lizard's under him (flut-saddle-fldax-*) are in
+;; jak-fldax+0-ag, which only the desert chase loaded (DESLIZ): WWD and VOCA, the levels with
+;; lizards to ride, load it too (its lizard clips link to the lizard of the same level).
+;; ------------------------------------------------------------------------------------------------
+
+;; Pairs: Jak's lizard clip (its index in jakb-ag), then Daxter's played in its place (daxter-ag),
+;; engine/data/art-elts.gc.
+(define *mp-fldax-map*
+  (new 'static 'array int16 54
+    406 391 ;; idle: fldax-idle
+    407 395 ;; walk: fldax-walk
+    408 395 ;; jog
+    409 384 ;; run: fldax-wild-run
+    410 388 ;; jump: fldax-jump-forward
+    411 389 ;; jump-loop: fldax-jump-forward-loop
+    412 396 ;; jump-land: fldax-run-squash
+    413 388 ;; jump-forward
+    414 389 ;; jump-forward-loop
+    415 396 ;; jump-forward-land
+    416 388 ;; double-jump
+    417 384 ;; running-attack: fldax-wild-run
+    418 391 ;; running-attack-end
+    419 388 ;; air-attack
+    420 389 ;; air-attack-loop
+    421 396 ;; air-attack-land
+    422 390 ;; get-on: fldax-get-on
+    423 392 ;; get-off: fldax-get-off
+    424 385 ;; hit-back: fldax-smack-surface
+    425 386 ;; hit-back-end: fldax-smack-surface-end
+    426 385 ;; smack-surface
+    427 386 ;; smack-surface-end
+    428 387 ;; deatha: fldax-deatha
+    429 396 ;; run-squash
+    430 391 ;; kanga-catch
+    431 387 ;; deathb
+    432 387 ;; death-drown
+    )
+  )
+
+(defconstant MP_FLDAX_CLIPS 27)
+
+(defun mp-fldax-art ()
+  "Daxter's art group with Jak's lizard clips replaced by his (*mp-fldax-map*), copied once from
+   the sidekick's; #f without a sidekick or his lizard clips."
+  (let ((fl *mp-fldax*))
+    (when (not (-> fl art))
+      (let* ((sk (if *target* (the-as process-drawable (ppointer->process (-> *target* sidekick)))))
+             (dax (if (and sk (nonzero? (-> sk draw))) (-> sk draw art-group)))
+             )
+        (when (and dax (< 432 (-> dax length)) (-> dax data 391) (= (-> dax data 391 type) art-joint-anim))
+          ;; a basic starts 4 bytes before its address (its type): the copy takes it along
+          (let* ((size (+ 36 (* 4 (-> dax length))))
+                 (mem (malloc 'global size))
+                 )
+            (mem-copy! mem (&+ (the-as pointer dax) -4) size)
+            (let ((ag (the-as art-group (&+ mem 4))))
+              (dotimes (i MP_FLDAX_CLIPS)
+                (set! (-> ag data (-> *mp-fldax-map* (* 2 i))) (-> dax data (-> *mp-fldax-map* (+ (* 2 i) 1))))
+                )
+              (set! (-> fl art) ag)
+              )
+            )
+          )
+        )
+      )
+    (-> fl art)
+    )
+  )
+
+(defbehavior mp-indax-handler target ((arg0 process) (arg1 int) (arg2 symbol) (arg3 event-message-block))
+  "Events of his stance and walk: the stock (target-indax-handler), except online a lizard offered
+   ('change-mode 'flut, its idle state, flut.gc): he gets on it as Jak does, drawn as Daxter."
+  (cond
+    ((and (= arg2 'change-mode)
+          (= (-> arg3 param 0) 'flut)
+          (mp-online?)
+          (= self *target*)
+          (not (focus-test? self dead hit grabbed))
+          (mp-fldax-art)
+          )
+     (set! (-> *mp-fldax* on?) #t)
+     (set! (-> *mp-fldax* since) (mp-now))
+     (+! (-> *mp-fldax* rides) 1)
+     (format 0 "[multiplayer] Daxter gets on a lizard~%")
+     (go target-flut-start
+         (process->handle (the-as process (-> arg3 param 1)))
+         (the-as symbol (if (>= arg1 3)
+                            (-> arg3 param 2)
+                            'normal
+                            )
+                 )
+         (if (>= arg1 4)
+             (the-as int (-> arg3 param 3))
+             -1
+             )
+         )
+     )
+    (else
+      (target-indax-handler arg0 arg1 arg2 arg3)
+      )
+    )
+  )
+
+;; MOD multiplayer -- engine/target/indax/target-indax.gc: a state keeps the handler it was defined
+;; with, so his stance and walk get this one.
+(set! (-> target-indax-stance event) (the-as (function process int symbol event-message-block object) mp-indax-handler))
+(set! (-> target-indax-walk event) (the-as (function process int symbol event-message-block object) mp-indax-handler))
+
+(defun mp-fldax-update ()
+  "Every frame from the manager, before the player's mode: on the lizard as Daxter, his art on the
+   player (the stock ride starts the frame after he got on); off it, the player's art back."
+  (let ((fl *mp-fldax*)
+        (tgt *target*)
+        )
+    (when (and tgt (-> fl on?))
+      (cond
+        ((focus-test? tgt flut)
+         (when (!= (-> tgt draw art-group) (-> fl art))
+           (set! (-> fl backup) (-> tgt draw art-group))
+           (set! (-> tgt draw art-group) (-> fl art))
+           (logior! (-> tgt draw status) (draw-control-status no-draw-bounds2))
+           (send-event (ppointer->process (-> tgt sidekick)) 'matrix 'indax)
+           )
+         )
+        ((= (-> tgt draw art-group) (-> fl art))
+         (set! (-> tgt draw art-group) (-> fl backup))
+         (logclear! (-> tgt draw status) (draw-control-status no-draw-bounds2))
+         (send-event (ppointer->process (-> tgt sidekick)) 'matrix #f)
+         (set! (-> fl on?) #f)
+         (format 0 "[multiplayer] Daxter off the lizard~%")
+         )
+        ((> (- (mp-now) (-> fl since)) (seconds 1))
+         ;; the ride did not start
+         (set! (-> fl on?) #f)
+         )
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-update-character mp-manager ()
   "Play as the chosen character: Daxter is the stock playable-Daxter mode (indax), entered and
    left from the idle stance only, and never while riding or driving."
+  (mp-fldax-update)
   (let ((daxter? (= (-> *mp-config* character) 1))
         (state (mp-target-state-name))
         )
@@ -3156,7 +3330,7 @@
             (< (-> self steal-want) 0)
             (zero? (-> self take-id))
             (not (handle->process (-> self board-veh)))
-            (= state 'target-stance)
+            (or (= state 'target-stance) (= state 'target-gun-stance)) ;; Jak's gun out: his mode puts it away
             (not (focus-test? *target* indax pilot dead grabbed))
             )
        (send-event *target* 'change-mode 'indax #f 'stance)

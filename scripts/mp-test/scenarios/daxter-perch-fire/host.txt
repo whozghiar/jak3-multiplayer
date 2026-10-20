@@ -1,0 +1,16 @@
+# Daxter fires from Jak's shoulder, host side (co-op, Jak): crouches next to the guest, who climbs
+# on its shoulder and fires the blaster; the host sees the shots.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+49 merchant-spot 0
+62 press l1 4000
+68.5 log
+69 screenshot perch-before-host
+71.3 log
+71.5 screenshot perch-fire-host
+80 log

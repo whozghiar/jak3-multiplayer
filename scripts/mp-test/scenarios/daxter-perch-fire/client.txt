@@ -1,0 +1,25 @@
+# Daxter fires from Jak's shoulder, guest side (Daxter): climbs on the crouching host (triangle),
+# takes every weapon and fires the blaster (R1) from there, then jumps off (X).
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+45 join 127.0.0.1:7777
+45.1 wait-joined
+55 cheat weapons
+60 goto-player 0 1 0
+66 press triangle 100
+68 log-coop
+69 daxter-mod 26
+70 press r1 1500
+70.2 log-me
+70.5 log-me
+70.8 log-me
+71.1 log-me
+71.3 screenshot perch-fire
+71.4 log-coop
+71.45 log
+72 log-daxter-gun
+73 press x 100
+75 log-coop
+76 log

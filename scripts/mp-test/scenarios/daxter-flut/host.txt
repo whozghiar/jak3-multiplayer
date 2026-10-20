@@ -1,0 +1,18 @@
+# Daxter on a lizard, host side (co-op, Jak): rides a lizard and gets off, leaving it waiting; sees
+# the guest's Daxter ride it (its lizard drawn under him) and fire from it.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+49 merchant-spot 0
+50 ride-flut
+53 end-flut
+58 goto-player 1 0 8
+60 log-copies 1
+58.5 look-player 1
+61 screenshot daxter-flut
+63.2 screenshot daxter-fire
+78 log

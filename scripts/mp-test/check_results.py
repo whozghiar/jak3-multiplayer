@@ -754,6 +754,28 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hm) and bool(gm) and hm[-1][3] == gm[-1][3] == "target-pilot-stance" and apart > 3.0,
                 f"host {hm[-1:]}, guest {gm[-1:]}, {apart:.1f} m apart")
 
+    elif scenario == "daxter-flut":
+        fl = grab(client, r"\] fldax on (\S+) rides (\d+) art-on (\S+) daxter (\S+) state (\S+)")
+        me = grab(client, r"\] me \S+ \S+ (\S+) speed \S+ state (\S+)")
+        gun = grab(client, r"\] daxter-gun out (\S+) mod (\d+) shots (\d+)")
+        c.check(scenario, "Daxter gets on the lizard the host left (triangle), drawn as Daxter on it",
+                any("flut at" in l for l in client) and len(fl) > 1 and fl[1] == ("#t", "1", "#t", "#t", "target-flut-stance"), f"{fl[:2]}")
+        c.check(scenario, "he fires from it, jumps and rides it forward",
+                bool(gun) and gun[0][0] == "#t" and int(gun[0][2]) >= 1 and any(s == "target-flut-jump" for *_, s in fl)
+                and len(me) >= 2 and abs(float(me[1][0]) - float(me[0][0])) > 5.0, f"gun {gun}, z {[z for z, _ in me]}")
+        c.check(scenario, "off the lizard he is Daxter again, his art back",
+                bool(fl) and fl[-1] == ("#f", "1", "#f", "#t", "target-indax-stance"), f"{fl[-1:]}")
+        copies = grab(host, r"\] copy 1 skel-flut id \d+ owner-hides (\S+) drawn (\S+)")
+        c.check(scenario, "the host draws the guest's lizard under him", bool(copies) and copies[0] == ("#f", "#t"), f"{copies}")
+
+    elif scenario == "daxter-perch-fire":
+        co = grab(client, r"\] coop #t authority \S+ character \S+ perch (-?\d+) perched \S+ state (\S+)")
+        gun = grab(client, r"\] daxter-gun out (\S+) mod (\d+) shots (\d+)")
+        c.check(scenario, "Daxter on the host's shoulder fires the blaster from there",
+                bool(co) and co[0] == ("0", "target-indax-grab") and bool(gun) and gun[0][0] == "#t" and int(gun[0][2]) >= 1,
+                f"{co[:1]}, gun {gun}")
+        c.check(scenario, "X puts him down, in his mode", bool(co) and co[-1] == ("-1", "target-indax-stance"), f"{co[-1:]}")
+
     elif scenario == "coop-protect":
         hits = counter(host, r"pvp hits taken (\d+) reacted (\d+) last pushed " + NUM)
         c.check(scenario, "co-op: the guest's punch does not hurt the host",

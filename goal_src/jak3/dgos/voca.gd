@@ -3,6 +3,7 @@
   "flut.o"
   "target-flut.o"
   "jak-flut+0-ag.go"
+  "jak-fldax+0-ag.go" ;; MOD multiplayer -- Daxter riding a lizard (daxter-fldax-*, flut-saddle-fldax-*), as in DESLIZ
   "target-tube.o"
   "jak-tube+0-ag.go"
   "target-ladder.o"

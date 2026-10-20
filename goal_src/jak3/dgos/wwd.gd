@@ -6,6 +6,7 @@
   "flut.o"
   "target-flut.o"
   "jak-flut+0-ag.go"
+  "jak-fldax+0-ag.go" ;; MOD multiplayer -- Daxter riding a lizard (daxter-fldax-*, flut-saddle-fldax-*), as in DESLIZ
   "nav-graph-h.o"
   "cty-borrow-manager-h.o"
   "cty-faction-h.o"

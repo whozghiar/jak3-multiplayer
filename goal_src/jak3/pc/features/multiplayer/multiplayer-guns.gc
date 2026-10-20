@@ -116,10 +116,11 @@
   )
 
 (defun mp-daxter-gun-allowed? ((tgt target))
-  "#t while Daxter, on his feet in his mode, may fire: he has the gun, the game allows it here."
+  "#t while Daxter may fire: on his feet in his mode, on a Jak's shoulder or riding along (his grab
+   state), on a lizard; he has the gun, the game allows it here."
   (let ((state (mp-target-state-name)))
-    (and (focus-test? tgt indax)
-         (not (focus-test? tgt dead grabbed hit teleporting pilot))
+    (and (or (focus-test? tgt indax) (mp-fldax? tgt))
+         (not (focus-test? tgt dead hit teleporting pilot))
          (logtest? (game-feature gun) (-> tgt game features))
          (-> *setting-control* user-current gun)
          (not (paused?))
@@ -129,6 +130,16 @@
              (= state 'target-indax-double-jump)
              (= state 'target-indax-falling)
              (= state 'target-indax-hit-ground)
+             (and (= state 'target-indax-grab) (or (>= *mp-perch-slot* 0) (>= *mp-ride-slot* 0)))
+             (and (mp-fldax? tgt)
+                  (or (= state 'target-flut-stance)
+                      (= state 'target-flut-walk)
+                      (= state 'target-flut-jump)
+                      (= state 'target-flut-double-jump)
+                      (= state 'target-flut-falling)
+                      (= state 'target-flut-hit-ground)
+                      )
+                  )
              )
          )
     )
@@ -751,10 +762,10 @@
   )
 
 (defun mp-daxter-guns ()
-  "Run Daxter's guns for the local player, as that player (the fire functions are its behaviors);
-   keep the weapons given."
+  "Run Daxter's guns for the local player (in his mode or on a lizard), as that player (the fire
+   functions are its behaviors); keep the weapons given."
   (mp-keep-all-weapons)
-  (when (and *target* (focus-test? *target* indax))
+  (when (and *target* (or (focus-test? *target* indax) (mp-fldax? *target*)))
     (with-pp
       (let ((saved pp))
         (set! pp *target*)
@@ -763,7 +774,7 @@
         )
       )
     )
-  (when (and (-> *mp-daxter-gun* out?) (not (and *target* (focus-test? *target* indax))))
+  (when (and (-> *mp-daxter-gun* out?) (not (and *target* (or (focus-test? *target* indax) (mp-fldax? *target*)))))
     (set! (-> *mp-daxter-gun* out?) #f)
     (set! (-> *mp-daxter-gun* top-index) -1)
     )
