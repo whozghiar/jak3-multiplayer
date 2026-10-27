@@ -1362,7 +1362,12 @@ s); the host gets the 3 orbs once the guest's result is in, the guest none. `cha
 host fails and quits, the guest reaches it and gets the 3 orbs. `challenge-board`: the jet-board
 challenge (city-jetboard-bbush); the guest, Daxter, joins it as Jak and stands still (its judge is
 touched); the judges score 500000 trick points (host) and 300000 (guest), both gold cups: the host
-gets its 18 orbs, the guest's are lost, and the guest is Daxter again.
+gets its 18 orbs, the guest's are lost, and the guest is Daxter again. `challenge-ring` (Spargus's
+rings, `wascity-bbush-ring-3`) and `challenge-eggs` (the desert's egg hunt,
+`desert-bbush-egg-spider-1`, its prerequisite closed with `close-node`): each player ends it on its
+own, the faster gets the manager's 10 (or 18) orbs. A challenge's introduction is open only outside
+an exclusive story mission (`game-task-node-info-method-12`): the bush offers nothing during one,
+and an invitation finds it "not open here".
 
 ### 4.30 Events while paused
 
@@ -1524,6 +1529,7 @@ A script line is `<seconds> <command>`:
 | `tints-off`, `log-tints` | Copies keep the default tint, as before 4.28; the tint of our vehicles and citizens (by pid) and of the copies here (by their owner's pid). |
 | `challenge-start <task>`, `goto-challenge-orb`, `send-complete <type>`, `log-challenge`, `wait-challenge <phase>` | What talking to that task's burning bush does (its introduction closed, no skull gems); our player onto the orb our challenge's manager left; tell the first process of that type its objective is reached; our challenge (phase, players, results, winners, reward held and given, our orbs); wait until our challenge reaches a phase (1 invited, 3 playing, 4 our result in, 5 decided). |
 | `trick-points <n>` | Our player's trick points, what the jet-board's judge scores. |
+| `close-node <name>` | That task node closed, as the story closes it (a challenge's prerequisite). |
 | `unlock-board`, `log-bodax` | The jet-board and its zap unlocked; our player on the jet-board as Daxter: state, on, camera, the board's scale and whether it is drawn, the sidekick drawn, his board clips loaded (56 of 67). |
 | `log-mem` | The process heap (free, used), the global heap's free room, the processes alive, our copies, the NPCs forced to compute every bone, the art groups loaded for others. |
 | `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
@@ -1757,6 +1763,7 @@ passed, no crash.
 | `places`, `places-before` | Places at the same coordinates | The host at Haven's stadium gate, the guest in the volcano 23.6 m away: not drawn, not on the minimap, no copy on either side, the guest keeps its own NPCs; before (`places-off`), each drew the other and the guest showed the host's NPCs; 4 checks each. |
 | `tints`, `tints-before` | Tints of the copies | Haven's port: the copies of the host's tinted vehicles wear their tint on the guest within 1/100; before (`tints-off`), the default paint; 3 checks each. |
 | `challenge-board` | Co-op: the jet-board challenge | The guest (Daxter) joins the host's jet-board challenge as Jak; the judges score 500000 and 300000 trick points (`trick-points`): the higher wins the 18 orbs of its gold cup; the guest is Daxter again; 6 checks. |
+| `challenge-ring`, `challenge-eggs` | Co-op: rings and an egg hunt | Spargus's rings and the desert's egg hunt: invited, joined, each ended on its own (7.3 s and 8.5 to 9 s), the faster gets the manager's orbs (10, 18); 5 checks each. |
 | `challenge`, `challenge-one` | Co-op: burning bush challenges | The host starts the city's get-to challenge 26, the guest is invited, accepts, comes to its start and plays it; both reach the orb, the faster (the host) gets the 3 orbs once both results are in; or the host fails and quits, the guest gets them; 6 checks each. |
 | `daxter-board` | Daxter on the jet-board | The guest (Daxter) takes the board out with R2: board states, the board at 60 % and drawn, X's jump, R2 puts it away (Daxter on foot); the host draws his board; 6 checks. |
 | `soak` | Memory over a long session | 5 minutes in Haven's port, the host away and back twice: the heaps and the processes come back to the same levels; 4 checks. |

@@ -1,0 +1,29 @@
+# A ring challenge in co-op (a time, the manager's reward), host side: at Spargus's bush
+# (wascityb-bbush-wasb-5) starts wascity-bbush-ring-3; the guest joins. The host reaches the end
+# about 7 s after its start, the guest about 9 s after its own: the host gets the 10 orbs.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission sewer-met-hum
+63 press x 100
+70 wait-player 1
+72 continue wascityb-bbush-wasb-5
+90 log-me
+91 challenge-start wascity-bbush-ring-3
+91.5 wait-challenge 3
+92 log-challenge
+92.5 screenshot started
+98.5 send-complete task-manager-desert-bbush-ring-3
+99 log-challenge
+100 wait-challenge 5
+101 log-challenge
+101.5 screenshot decided
+106 log-challenge
+107 log

@@ -1,0 +1,34 @@
+# An egg hunt in co-op, guest side: its prerequisite (the second artifact race) done, invited, joins at the desert's bush, plays it and ends it
+# about 9 s after its start, slower than the host: no reward.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+70 close-node desert-artifact-race-2-resolution
+80 log-challenge
+82 wait-challenge 1
+83 log-challenge
+85 press up 100
+86 wait-challenge 3
+87 log-challenge
+87.5 log-me
+87.8 screenshot started-guest
+95 send-complete task-manager-bbush-egg-spider
+99 log-challenge
+100 wait-challenge 5
+101 log-challenge
+101.5 screenshot decided
+106 log-challenge
+107 log

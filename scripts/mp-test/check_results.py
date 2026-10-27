@@ -886,6 +886,27 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario in ("challenge-ring", "challenge-eggs"):
+        task = "wascity-bbush-ring-3" if scenario == "challenge-ring" else "desert-bbush-egg-spider-1"
+        orbs = 10.0 if scenario == "challenge-ring" else 18.0
+        CH = r"\] challenge phase (\d+) node (\d+) starter (\d+) players #x(\w+) results #x(\w+) reached #x(\w+) winners #x(\w+) pending ([\d.]+) given ([\d.]+) skill ([\d.]+)"
+        hc, gc = [f for f in grab(host, CH) if f[0] == "5"], [f for f in grab(client, CH) if f[0] == "5"]
+        hr = grab(host, r"our challenge result: (\w+) score ([-\d.]+)")
+        gr = grab(client, r"our challenge result: (\w+) score ([-\d.]+)")
+        c.check(scenario, f"{task}: the guest invited, joins it at its start and plays it",
+                any(f"player 0 invites us to the challenge {task}-resolution" in l for l in client)
+                and any(f"the challenge {task}-resolution starts here: we take part" in l for l in client), "")
+        c.check(scenario, "both reach the end, each on its own, the host faster",
+                bool(hr) and bool(gr) and hr[0][0] == "reached" and gr[0][0] == "reached" and float(hr[0][1]) > float(gr[0][1]),
+                f"host {hr}, guest {gr}")
+        c.check(scenario, "both decide the same: the host wins",
+                bool(hc) and bool(gc) and hc[-1][6] == "1" and gc[-1][6] == "1", f"host {hc[-1:]}, guest {gc[-1:]}")
+        c.check(scenario, f"the manager's reward ({orbs:.0f} orbs) is the host's; the guest's, held, is lost",
+                bool(hc) and bool(gc) and float(hc[-1][8]) == orbs and float(gc[-1][8]) == 0.0
+                and any(f"reward ({orbs:.1f}) waits for every result" in l for l in client), f"host {hc[-1][8:10] if hc else None}, guest {gc[-1][8:10] if gc else None}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "daxter-board":
         BS = r"\] bodax state (\S+) on (\S+) art \S+ board (\S+) scale ([\d.]+) drawn (\S+)"
         bs = grab(client, BS)

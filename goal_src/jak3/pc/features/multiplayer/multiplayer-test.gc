@@ -3476,6 +3476,17 @@
                  (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
                  )
          )
+        ((string= cmd "close-node")
+         ;; close-node <name>: that task node closed, as the story closes it (a challenge's
+         ;; prerequisite done)
+         (mp-test-word)
+         (dotimes (i (-> *game-info* sub-task-list length))
+           (when (and (nonzero? i) (string= (-> *game-info* sub-task-list i name) (-> *mp-test* word)))
+             (task-node-close! (the-as game-task-node i) 'event)
+             (format 0 "[mp-test] close-node ~S: closed ~A~%" (-> *mp-test* word) (task-node-closed? (the-as game-task-node i)))
+             )
+           )
+         )
         ((string= cmd "challenge-start")
          ;; challenge-start <task>: what talking to its burning bush does, the skull gems aside: its
          ;; introduction node closed by our play (the task's play-list entry names it)
