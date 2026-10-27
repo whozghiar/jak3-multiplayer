@@ -45,7 +45,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   - `BYE` (sent three times, nothing answers it): the host stopped (with its reason) or a client
     left; the other side drops the connection at once instead of waiting for the timeout.
 
-  Message types: `HELLO` (protocol version, now 9, and the player's secret id, 4.20), `WELCOME` (slot), `REJECT` (reason, then
+  Message types: `HELLO` (protocol version, now 10, and the player's secret id, 4.20), `WELCOME` (slot), `REJECT` (reason, then
   close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
   offset][bytes]`, 15000 bytes a message, relayed by the host: the host's world for a guest that
   joins, 1.7), `PING`, `PONG`. A client sees "Connection refused" when the host's machine answers
@@ -56,7 +56,8 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   paused game resumes, and a driver's seats 2 and 3 in `seat-offset`) every frame (60 Hz): a
   driver's puppet blended between states 33 ms apart drifted on its vehicle, which moves every
   frame.
-- **Objects:** `mp-actor-state` batches (80 bytes each, at most 64 per batch) at 15 Hz from every
+- **Objects:** `mp-actor-state` batches (96 bytes each, at most 64 per batch; the tint since protocol
+  10, 4.28) at 15 Hz from every
   player: `[u8 source][u32 source time][u16 count][states]`; the states of what a player owns
   (props, the vehicle driven and its wheels, its shots) go again every frame between batches.
   Ids carry the owner's slot in the top byte and the owner's process pid below. The source time
@@ -123,7 +124,7 @@ near it, and a guest far from every authority for itself and the guests near it 
 | Time of day | the host | followed by the guests |
 | World objects that carry or block the player (lifts, platforms, doors) | every machine, for its own player (a lift must answer the player standing on it) | kept alike (1.6): cycles follow the host's clocks, doors open for any player in front of them, an elevator trip started on one machine runs on all |
 | Physics objects of the level (floating platforms, objects on physics) | the region's authority, with the weight of every player on them | each machine's own object of that entity, moved every frame where the authority has it, still carrying its player (1.6) |
-| Levels | every machine, around its own player | players in one place load the same levels; another place's levels are never loaded here, the art of its objects within 400 m is (1.6) |
+| Levels | every machine, around its own player | players in one place load the same levels; another place's levels are never loaded here, the art of its objects within 400 m is (1.6); a player in a place at the same coordinates (the volcano under Haven's ruins) is not seen at all (4.27) |
 | Elevators | the machine whose player started the trip | the same elevator, placed where it is every frame, its scripts set aside unless the local player rides it (1.6) |
 | The game itself (progress, equipment, place, entity states) | the host | a guest that joins loads the host's game as a save, without its memory card, and saves nothing while there (1.7) |
 | Cutscenes | where they start | the same cutscene, for the players of that region (1.6) |
@@ -1264,6 +1265,99 @@ and `mission-fail-retry` (a failure offering retry or quit, `spawn-fail-or-retry
 both machines, votes that differ deciding nothing, then retry (and quit) decided on both; each
 machine gave its decision within 0.2 s of the other (host time), both players at the same spot.
 
+### 4.27 Places at the same coordinates
+
+Jak 3 puts several places at the coordinates of Haven's centre, reached through a loading
+transition. Their entities (`decompiler_out/jak3/entities/<level>-actors.json`) show it: the volcano
+(`volcanoa`, about -250..129 m by -321..255 m), the mine, the halfpipe and Haven's ruins
+(`rubble*`) share the ground plan; the war factory and the precursor ship stand 200 to 570 m above
+it, overlapping each other; the catacombs (`comb*`) and their rail (`rail*`) run below it; the
+nest lies under Haven's industrial quarter. Haven, the wasteland and Spargus never overlap one
+another. Before, a guest in the volcano 23.6 m from the host in Haven drew the host's model in the
+volcano, put its own NPCs to sleep and showed the host's Haven NPCs instead (`places-before`).
+
+multiplayer.gc "Places at the same coordinates": each player's place comes from the level it
+stands in (`mp-level-space`, by the level name in its state: 1 volcano, 2 mine, 3 war factory, 4
+precursor ship, 5 catacombs and rail, 6 halfpipe, 7 nest, 0 the rest). A player in another place:
+
+- is not drawn, hit nor marked on the minimap here; its effects and sounds are not played
+  (`mp-puppet-update`, the `effect`, `projectile` and `weapon` events);
+- sends no copy we keep (`mp-replica-wanted?`), and a copy whose owner goes there is removed;
+- counts as very far (`mp-slot-distance`) for the NPC authority (`mp-provider-of`,
+  `mp-update-authority`, `mp-near-a-player?`, `mp-remote-distance`) and the co-op checks (the
+  regroup after a failure, a mission's gathering, rides, the race's gift vehicle, the respawn next
+  to a teammate): a mission started there brings the other player through its continue point.
+
+Checked by `places`: the host at Haven's stadium gate, the guest in the volcano 23.6 m away; on
+both machines the other player is not drawn, not on the minimap, none of its copies kept, and the
+guest keeps simulating its own NPCs (`log-place`).
+
+### 4.28 Tints of the copies
+
+A traffic vehicle of Haven draws its paint from its type's color options (`draw color-mult`,
+`vehicle-util.gc`); a citizen gets a random shade of 0.9 to 1 (`citizen-norm.gc`,
+`citizen-chick.gc`, `citizen-fat.gc`), a guard one too (`guard.gc`); a civilian flashes a color
+when hit (`civilian.gc`) and a wasteland vehicle glows taking a turbo (`color-emissive`,
+`wvehicle.gc`). The others drew every copy in the default paint. An object's state carries both
+colors (`color-mult`, `color-emissive`: one byte per channel, 128 = 1.0, `mp-pack-color`), applied
+to its copy every frame (`mp-unpack-color`); 0 means none sent (world objects, shots). The body
+variants (`seg-mask`) were already sent.
+
+Checked by `tints`: in Haven's port, every copy on the guest of a tinted vehicle of the host wears
+its tint within 1/100 (a car painted 0.6 1.2 1.2 drawn 0.601 1.203 1.203); `tints-before` (test
+switch `tints-off`) shows them in the default paint.
+
+### 4.29 Co-op: burning bush challenges
+
+A burning bush (`levels/desert/des-burning-bush.gc`) offers a side challenge: a place to reach in
+time (with a precursor orb there), rings, a chase, a jet-board or vehicle score, a time trial...
+Talking to it closes the challenge's introduction node, which opens its resolution node, whose
+task manager runs the challenge and gives its reward: precursor orbs (`give 'skill`, with the
+manager's handle or the handle of the orb it left). Both nodes carry the `bbush` flag. In co-op
+(multiplayer.gc "Co-op: burning bush challenges"):
+
+- **Each player's own.** The challenges' nodes are not shared (1.5) and their failures are not
+  voted (4.26: `personal?`): a player who fails one chooses alone, the others play on.
+- **The invitation.** When our play starts a challenge (`task-manager-init-by-other`, its node
+  closed by us within 30 s), the others are invited (`challenge` event) for 30 s, when its
+  introduction is open in their game: "Host started a challenge: D-pad up to join (28)". D-pad up
+  is taken from the pad before the game reads it (`mp-challenge-input`: no gun change).
+- **Joining.** Who accepts goes to the challenge's start (its retry continue, the one the game
+  restarts it from), then closes its introduction there, as talking to the bush does: the same
+  challenge runs in its game, from where the other player stands.
+- **Results.** Each plays on its own. When its task manager ends (complete or resolution: reached;
+  fail, or gone: not reached), its result goes to the others: reached or not, and a score, higher
+  is better: the jet-board's (`task-manager-bbush-board`) or a vehicle challenge's
+  (`task-manager-vehicle-bbush`), read at their offsets from the decompiler's types (those types
+  live in level code), else minus the seconds it took.
+- **The reward.** `give` holds a reward from our challenge's manager or a child of it until every
+  player taking part has its result (or left), and the invitations closed. Then every machine
+  decides the same: the best score among the players who reached the objective wins (each
+  winner of a tie); the winner gets its reward ("Host wins the challenge"), the others none. The
+  reward is given with our player's handle: the stock's per-level count reads the parent of the
+  handle's process, and the manager may be gone by then.
+
+Checked by `challenge`: the host starts the city's get-to challenge 26 at Haven's ruins bush, the
+guest accepts and stands 7 m from it; both reach the orb (the host in 6.05 s, the guest in 8.81
+s); the host gets the 3 orbs once the guest's result is in, the guest none. `challenge-one`: the
+host fails and quits, the guest reaches it and gets the 3 orbs.
+
+### 4.30 Events while paused
+
+The network events wait in the runtime until GOAL takes them, once per unpaused frame
+(`mp-manager-handle-events`): a player in the START menu or on a failure screen takes none.
+Past 256 waiting, the newest were dropped: a story step, a vote or a challenge result could be
+lost behind the effects the other players set off. Now the oldest event that only draws something
+(an effect, an NPC's projectile, a weapon's visual) gives way first; the others are kept, up to
+4096 (`Session::push_event`; unit test `EventsKeptWhileNotTaken`: 700 effects and a story step
+reach a player who takes none; the story step and 255 effects are left).
+
+Memory over a long session (`soak`, `log-mem`): both players in Haven's port, the host going away
+and back twice (the guest's role changing each time), 15 samples over 5 minutes: the process heap
+and the processes return to the same levels in the same place (host 742-747 KB in the port, 481 KB
+away), the global heap lost 4.5 KB on the host (its first level change, then 224 bytes per new
+skeleton name kept for the far art: bounded by the game's skeletons).
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1376,6 +1470,10 @@ A script line is `<seconds> <command>`:
 | `log-seat` | Our model in a vehicle, in the vehicle's axes (x left, y up, z forward) from the seat point: as a passenger the model in the seat (its root, bone 3, its bones' extent, its clip), driving the model drawn (Daxter's in his mode) from the player's position. |
 | `log-joints`, `log-anim <daxter\|jak> <index>` | Daxter's joints (index, name, parent); the entry at that index of Daxter's or Jak's art group (a clip is loaded when it prints an `art-joint-anim`). |
 | `log-name` | The player name kept and the on-screen keyboard's text. |
+| `places-off`, `log-place` | Every level in one place, as before 4.27; our level, place and role, and each other player's level, place, whether its puppet is drawn and on our minimap, its distance and its copies. |
+| `tints-off`, `log-tints` | Copies keep the default tint, as before 4.28; the tint of our vehicles and citizens (by pid) and of the copies here (by their owner's pid). |
+| `challenge-start <task>`, `goto-challenge-orb`, `send-complete <type>`, `log-challenge`, `wait-challenge <phase>` | What talking to that task's burning bush does (its introduction closed, no skull gems); our player onto the orb our challenge's manager left; tell the first process of that type its objective is reached; our challenge (phase, players, results, winners, reward held and given, our orbs); wait until our challenge reaches a phase (1 invited, 3 playing, 4 our result in, 5 decided). |
+| `log-mem` | The process heap (free, used), the global heap's free room, the processes alive, our copies, the NPCs forced to compute every bone, the art groups loaded for others. |
 | `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
 | `goto-merchant [m]`, `walk-to-merchant <frames>` | Stand at Kleiver's spot, or m meters from it facing it; walk toward it (the stick follows the camera). `log-econ` prints his model (alive, level, drawn), whether he is solid, his idle clip, how much he faces us and how far we stand. |
 | `host-play-mission <name>`, `log-input` | The host's Choose a mission in game on that play-list name (`mp-host-play-mission`); what our buttons did: state, gun mod, ammo of each color, Daxter's shots, the START menu open. |
@@ -1604,6 +1702,10 @@ passed, no crash.
 | `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
 | `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
+| `places`, `places-before` | Places at the same coordinates | The host at Haven's stadium gate, the guest in the volcano 23.6 m away: not drawn, not on the minimap, no copy on either side, the guest keeps its own NPCs; before (`places-off`), each drew the other and the guest showed the host's NPCs; 4 checks each. |
+| `tints`, `tints-before` | Tints of the copies | Haven's port: the copies of the host's tinted vehicles wear their tint on the guest within 1/100; before (`tints-off`), the default paint; 3 checks each. |
+| `challenge`, `challenge-one` | Co-op: burning bush challenges | The host starts the city's get-to challenge 26, the guest is invited, accepts, comes to its start and plays it; both reach the orb, the faster (the host) gets the 3 orbs once both results are in; or the host fails and quits, the guest gets them; 6 checks each. |
+| `soak` | Memory over a long session | 5 minutes in Haven's port, the host away and back twice: the heaps and the processes come back to the same levels; 4 checks. |
 | `mission-fail`, `mission-fail-retry` | A mission failed, for every player | The jump training's failure (no choice) or a retry-or-quit one: shown on host and guest; it does not reset by itself; votes that differ decide nothing; both retry (or go on), then a second failure both quit (or go on): decided on both machines within 0.2 s (host time), both at the same spot; 8 checks each. |
 | `menu-buttons` | Buttons under the START menu | The menu opened with START, R1, square, L1, the D-pad, X (choosing entries) and triangle pressed, X again right after it closes: no shot, no gun change, no jump or attack, host (Jak, gun out) and guest (Daxter); X made both jump before the history fix (reproduced); 6 checks. |
 | `daxter-moves` | Daxter's D-pad and L1 + triangle | The D-pad takes his gun out, the mod chosen in his hand, no shot; next to the standing host's Jak the prompt asks L1 + triangle, triangle alone does nothing, L1 + triangle climbs on its shoulder (the host sees it), X puts him down; 6 checks (screenshots). |
@@ -1672,6 +1774,15 @@ Over the Internet, the host forwards UDP port 7777 (or the port chosen) and gues
 public IP.
 
 ## 6. Known limits
+
+- The places at the same coordinates (4.27) come from a table of level names made from the
+  entities' positions; a level not in it counts as Haven or the wasteland.
+- A challenge's invitation lasts 30 s, and its result waits for it: a player who plays alone in
+  co-op gets the reward up to 30 s after the start. A player sitting on its failure screen (the
+  game frozen until it chooses) takes the others' results once it leaves it.
+- A challenge's score is read at fixed offsets in two level types (4.29); a challenge of another
+  kind is ranked by its time.
+- Past 256 events waiting in a paused game, the oldest effects are not replayed (4.30).
 
 - A failure keeps the game's choices: a story mission's offers only to go on (the game puts the
   players back at the mission's start), a minigame's retry or quit. A failure's `execute` script
@@ -1770,6 +1881,14 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-27:** memory, events and sync. Players in places at the same coordinates (the
+  volcano, the mine, the war factory and the precursor ship, the catacombs and their rail, the
+  halfpipe, the nest, all over Haven's centre) never see each other and count as far apart (4.27).
+  Copies wear their original's tint, a vehicle's paint or a citizen's shade (protocol 10, 4.28).
+  Co-op burning bush challenges: the others are invited, each plays on its own, the best of those
+  who reached the objective gets the reward (4.29). A paused player keeps the events that matter
+  (4.30); a 5 minute session measured stable. Scenarios `places`, `places-before`, `tints`,
+  `tints-before`, `challenge`, `challenge-one`, `soak`.
 - **2026-10-21:** after the user's play test: a mission's failure shows for every player at once,
   waits for every player's choice (retry or quit, or go on), and puts every player back together
   (4.26). Scenarios `mission-fail`, `mission-fail-retry`; commands `send-fail`,
