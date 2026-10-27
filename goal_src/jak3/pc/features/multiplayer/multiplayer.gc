@@ -574,13 +574,17 @@
 ;; Places at the same coordinates
 ;; -------------------------------------------------------------------------------------------------
 ;;
-;; Jak 3 puts several places at the coordinates of Haven's centre, reached through a loading
-;; transition (their entities, decompiler_out/jak3/entities/: the volcano, the mine, the war factory
-;; and the precursor ship above it, the catacombs and their rail below it, the halfpipe, the nest).
-;; A player in one of them stands, in numbers, inside Haven's ruins: its model, its props, its NPCs
-;; and its effects would be drawn there, and the NPC authority would take it for a neighbour. Each
-;; player's place comes from the level it stands in (its state's `level`); players in different
-;; places do not see each other and count as far apart.
+;; Jak 3 puts several places at the coordinates of Haven, reached through a loading transition
+;; (their entities, decompiler_out/jak3/entities/, and the levels each continue point loads,
+;; engine/level/level-info.gc: never loaded together, in the same volume): the volcano, the mine,
+;; the war factory and the precursor ship, the catacombs and their rail, the halfpipe, the nest;
+;; and, within Haven, the ruins (reached through the stadium, over the farms) and the Metal Head
+;; city with its tower (reached from the port, over the farms too). A player in one of them stands,
+;; in numbers, inside another: its model, its props, its NPCs and its effects would be drawn there,
+;; and the NPC authority would take it for a neighbour. Each player's place comes from the level it
+;; stands in (its state's `level`); players in different places count as far apart, and are not
+;; seen, unless the other player's level is loaded here (its ground is drawn: the two sides of a
+;; gate).
 
 (defun mp-charp-prefix? ((s (pointer uint8)) (prefix string))
   "#t when the C string `s` starts with `prefix`."
@@ -597,7 +601,8 @@
 (defun mp-level-space ((name (pointer uint8)))
   "The place of the level called `name` (a C string): 0 for Haven, the wasteland and every level
    that never overlaps another place; 1 the volcano, 2 the mine, 3 the war factory, 4 the precursor
-   ship, 5 the catacombs and their rail, 6 the halfpipe, 7 the nest."
+   ship, 5 the catacombs and their rail, 6 the halfpipe, 7 the nest, 8 Haven's ruins (with the
+   stadium's far side and the ruins' missions), 9 the Metal Head city and its tower."
   (cond
     (*mp-test-places-off* 0)
     ((mp-charp-prefix? name "volcano") 1)
@@ -607,6 +612,15 @@
     ((or (mp-charp-prefix? name "comb") (mp-charp-prefix? name "rail")) 5)
     ((mp-charp-prefix? name "halfpipe") 6)
     ((or (mp-charp-prefix? name "nst") (mp-charp-prefix? name "lnst")) 7)
+    ((or (mp-charp-prefix? name "rubble")
+         (mp-charp-prefix? name "rublcst")
+         (mp-charp-prefix? name "stadiumb")
+         (mp-charp-prefix? name "lpattack")
+         (mp-charp-prefix? name "lppatrol")
+         )
+     8
+     )
+    ((or (mp-charp-prefix? name "mhcity") (mp-charp-prefix? name "mhctycst") (mp-charp-prefix? name "tower") (mp-charp-prefix? name "ltow")) 9)
     (else 0)
     )
   )
@@ -636,11 +650,22 @@
   (mp-same-space? slot *mp-local-slot*)
   )
 
+(defun mp-slot-visible? ((slot int))
+  "#t when player `slot` may be drawn here: in our place, or standing in a level loaded here (its
+   ground is drawn: across a gate between two places). The NPC authority keeps to the places
+   alone (mp-same-space?), so that every machine decides alike."
+  (or (mp-slot-here? slot)
+      (let ((st (mp-remote-state slot)))
+        (and st (mp-level-active? (-> st level)))
+        )
+      )
+  )
+
 (defun mp-slot-distance ((slot int))
-  "How far player `slot` stands from our player; very far when it is in another place, unknown or
-   when we have no player."
+  "How far player `slot` stands from our player; very far when it is not seen here (another place),
+   unknown or when we have no player."
   (let ((st (mp-remote-state slot)))
-    (if (and st *target* (mp-slot-here? slot))
+    (if (and st *target* (mp-slot-visible? slot))
         (vector-vector-distance (-> *target* control trans) (-> st trans))
         (meters 1000000)
         )
@@ -1668,7 +1693,7 @@
         ;; not drawn, hit nor marked on the minimap here ("Places at the same coordinates")
         (when (not (-> self local?))
           (cond
-            ((not (mp-slot-here? (-> self slot)))
+            ((not (mp-slot-visible? (-> self slot)))
              (set! shown? #f)
              (when (-> self minimap)
                (kill-callback (-> *minimap* engine) (-> self minimap))
@@ -2084,7 +2109,7 @@
   :post (behavior ()
     (mp-puppet-update)
     ;; its effects and sounds, unless it stands in another place at our coordinates
-    (if (and (not (-> self local?)) (mp-slot-here? (-> self slot)))
+    (if (and (not (-> self local?)) (mp-slot-visible? (-> self slot)))
         (mp-play-emitters self (mp-puppet-pose-id (-> self slot)) (-> self fx-group) (-> self fx-tracker))
         )
     (mp-puppet-outline)
@@ -3763,17 +3788,17 @@
          )
         ;; what a player in another place at our coordinates sets off is not seen here
         (((mp-event-kind effect))
-         (if (mp-slot-here? (-> ev from))
+         (if (mp-slot-visible? (-> ev from))
              (mp-replay-effect ev)
              )
          )
         (((mp-event-kind projectile))
-         (if (mp-slot-here? (-> ev from))
+         (if (mp-slot-visible? (-> ev from))
              (mp-replay-projectile ev)
              )
          )
         (((mp-event-kind weapon))
-         (if (mp-slot-here? (-> ev from))
+         (if (mp-slot-visible? (-> ev from))
              (mp-replay-weapon ev)
              )
          )

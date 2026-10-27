@@ -8,6 +8,9 @@
 38 host 0.0.0.0:7777
 44.9 wait-player 1
 70 continue ctygenb-stadium
+99 log-places ctyfarma ctyport ctygenb stadium stadiuma stadiumb rubblea rubbleb lpattack
+99.2 log-places mhcitya mhcityb towera ltowcity volcanoa minea factoryb precura
+99.4 log-places comba raila halfpipe nsta sewa foresta wascitya desert
 100 log-place
 101 screenshot host-haven
 112 log-place

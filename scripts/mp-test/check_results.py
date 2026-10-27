@@ -1006,6 +1006,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(ho) and ho[-1][0] == "ctygenb" and bool(go) and go[-1][0].startswith("volcano")
                 and bool(hp) and float(hp[-1][6]) < 40, f"host {ho[-1:]}, guest {go[-1:]}, distance {hp[-1][6] if hp else None}")
         if scenario == "places":
+            want = {"ctyfarma": 0, "ctyport": 0, "ctygenb": 0, "stadium": 0, "stadiuma": 0, "stadiumb": 8, "rubblea": 8,
+                    "rubbleb": 8, "lpattack": 8, "mhcitya": 9, "mhcityb": 9, "towera": 9, "ltowcity": 9, "volcanoa": 1,
+                    "minea": 2, "factoryb": 3, "precura": 4, "comba": 5, "raila": 5, "halfpipe": 6, "nsta": 7, "sewa": 0,
+                    "foresta": 0, "wascitya": 0, "desert": 0}
+            got = {m[0]: int(m[1]) for m in grab(host, r"\] level-place (\S+) (\d+)")}
+            c.check(scenario, "the places table: Haven and the wasteland 0, the volcano 1 ... the nest 7, Haven's ruins 8, the Metal Head city 9",
+                    got == want, f"{got}")
             c.check(scenario, "each machine knows the other player is in another place: not drawn, not on the minimap, none of its copies",
                     bool(hp) and bool(gp) and all(f[3] == "#f" and f[4] == "#f" and f[5] == "#f" and f[7] == "0" for f in hp[-2:] + gp[-2:]),
                     f"host {hp[-1:]}, guest {gp[-1:]}")

@@ -3567,6 +3567,12 @@
          (set! *mp-test-tints* 0)
          (iterate-process-tree *active-pool* (the-as (function object object) mp-test-log-tint) *null-kernel-context*)
          )
+        ((string= cmd "log-places")
+         ;; log-places <level>...: the place of each level named (mp-level-space)
+         (while (mp-test-word)
+           (format 0 "[mp-test] level-place ~S ~D~%" (-> *mp-test* word) (mp-level-space (-> *mp-test* word data)))
+           )
+         )
         ((string= cmd "places-off")
          ;; places-off: every level counts as one place, as before "Places at the same coordinates"
          (set! *mp-test-places-off* #t)

@@ -2068,7 +2068,7 @@
   "#f for an NPC of another authority standing nearer to us than to that player: our own world
    covers that place, so its copy would be a double; for a copy of a vehicle we just took; and for
    what a player in another place at our coordinates sends (\"Places at the same coordinates\")."
-  (and (not (mp-stolen-copy? (-> st id) (-> st flags))) (mp-slot-here? (the-as int (shr (-> st id) 24))) (or (not *mp-authority*)
+  (and (not (mp-stolen-copy? (-> st id) (-> st flags))) (mp-slot-visible? (the-as int (shr (-> st id) 24))) (or (not *mp-authority*)
       (logtest? (-> st flags) (mp-actor-flag owned))
       (let ((me (mp-player-pos *mp-local-slot*))
             (owner (mp-player-pos (the-as int (shr (-> st id) 24))))
@@ -2157,7 +2157,7 @@
               ;; a vehicle we took: gone with no lingering, ours stands there; a copy whose owner went
               ;; to another place at our coordinates too
               ((or (mp-stolen-copy? (-> ws replica-id i) (-> proc net flags))
-                   (not (mp-slot-here? (the-as int (shr (-> ws replica-id i) 24))))
+                   (not (mp-slot-visible? (the-as int (shr (-> ws replica-id i) 24))))
                    )
                (mp-replica-remove i)
                )
