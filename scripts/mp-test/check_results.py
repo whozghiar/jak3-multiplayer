@@ -988,6 +988,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the guest draws copies of the host's traffic, some of them tinted on the host (a vehicle's paint, a citizen's shade)",
                 len(both) >= 5 and len(tinted) >= 1, f"{len(own)} own, {len(cp)} copies, {len(both)} matched by pid, {len(tinted)} tinted")
         if scenario == "tints":
+            dist = {int(m[0]): float(m[1]) for m in grab(host, r"\] tint own (\d+) barge \S+ \S+ \S+ distance ([\d.]+)")}
+            near = [p for p, d in dist.items() if d < 340]
+            c.check(scenario, "every barge of the host within 340 m (vehicles are sent to 350 m) has its copy on the guest",
+                    bool(near) and all(p in cp for p in near), f"{len(near)} near, copied {len([p for p in near if p in cp])}")
             c.check(scenario, "every tinted original is drawn with its tint on the guest (within 1/100)",
                     bool(tinted) and len(same) == len(tinted), f"{[(p, own[p], cp[p]) for p in tinted[:4]]}")
         else:
@@ -1002,9 +1006,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         PP = r"\] place player (\d+) level (\S+) space (\d+) here (\S+) drawn (\S+) minimap (\S+) distance ([-\d.]+) copies (\d+)"
         ho, go = grab(host, PO), grab(client, PO)
         hp, gp = grab(host, PP), grab(client, PP)
-        c.check(scenario, "the host stands in Haven (ctygenb), the guest in the volcano, under 40 m apart",
+        c.check(scenario, "the host stands in Haven (ctygenb), the guest in the volcano, under 60 m apart (the NPC authority's reach)",
                 bool(ho) and ho[-1][0] == "ctygenb" and bool(go) and go[-1][0].startswith("volcano")
-                and bool(hp) and float(hp[-1][6]) < 40, f"host {ho[-1:]}, guest {go[-1:]}, distance {hp[-1][6] if hp else None}")
+                and bool(hp) and float(hp[-1][6]) < 60, f"host {ho[-1:]}, guest {go[-1:]}, distance {hp[-1][6] if hp else None}")
         if scenario == "places":
             want = {"ctyfarma": 0, "ctyport": 0, "ctygenb": 0, "stadium": 0, "stadiuma": 0, "stadiumb": 8, "rubblea": 8,
                     "rubbleb": 8, "lpattack": 8, "mhcitya": 9, "mhcityb": 9, "towera": 9, "ltowcity": 9, "volcanoa": 1,

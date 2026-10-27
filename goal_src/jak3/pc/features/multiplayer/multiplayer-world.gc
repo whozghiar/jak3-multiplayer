@@ -728,9 +728,13 @@
   (none)
   )
 
+(defconstant MP_SEND_RANGE (meters 100))         ;; characters sent this close to a player we serve
+(defconstant MP_SEND_RANGE_VEHICLE (meters 350)) ;; vehicles and boats: seen from farther (the port's barges, to 340 m)
+
 (defun mp-collect-actor ((proc process-drawable))
   "iterate-process-tree callback (authority): add `proc` when it is an NPC within 100 m of a player
-   whose NPCs we simulate."
+   whose NPCs we simulate, 350 m for a vehicle (a player who is not an authority keeps its own
+   asleep: a barge 150 m out on the port's water was on the host's screen only)."
   (when (type? proc process-drawable)
     (let ((kind (mp-actor-kind proc)))
       ;; physics objects of the level (not vehicles): their place only, as far as they can be seen
@@ -744,7 +748,11 @@
           )
       (when (and (> kind 0)
                  (not (mp-driven-vehicle? proc))
-                 (< (mp-served-distance (-> proc root trans)) (meters 100))
+                 (< (mp-served-distance (-> proc root trans)) (if (= kind 1)
+                                                                  MP_SEND_RANGE
+                                                                  MP_SEND_RANGE_VEHICLE
+                                                                  )
+                    )
                  )
         (if (mp-add-actor proc (if (= kind 1)
                                    (mp-actor-flag)
