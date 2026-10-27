@@ -3485,6 +3485,13 @@
              )
            )
          )
+        ((string= cmd "trick-points")
+         ;; trick-points <n>: our player's trick points (what the jet-board's judge scores)
+         (when *target*
+           (set! (-> *target* fact trick-point) (the float (mp-test-int)))
+           (format 0 "[mp-test] trick-points ~,,0f~%" (-> *target* fact trick-point))
+           )
+         )
         ((string= cmd "goto-challenge-orb")
          ;; goto-challenge-orb: our player onto what our challenge's task manager left to reach (the
          ;; precursor orb of a get-to challenge), as reaching it
@@ -3530,6 +3537,12 @@
            (format 0 "winners #x~X pending ~,,1f given ~,,1f skill ~,,1f invites ~D decisions ~D~%"
                    (-> ch winners) (-> ch pending) (-> ch given) (-> *game-info* skill) (-> ch invites) (-> ch decisions)
                    )
+           (let ((judge (process-by-name "judge" *active-pool*)))
+             (format 0 "[mp-test] challenge manager ~A live ~,,2f judge ~A character ~D indax ~A~%" (-> ch last-state) (-> ch live-score)
+                     (if (and judge (-> judge next-state)) (-> judge next-state name) 'none)
+                     (-> *mp-config* character) (and *target* (focus-test? *target* indax))
+                     )
+             )
            )
          )
         ((string= cmd "log-mem")

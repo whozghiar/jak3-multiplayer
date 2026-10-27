@@ -886,6 +886,29 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario == "challenge-board":
+        CH = r"\] challenge phase (\d+) node (\d+) starter (\d+) players #x(\w+) results #x(\w+) reached #x(\w+) winners #x(\w+) pending ([\d.]+) given ([\d.]+) skill ([\d.]+)"
+        MG = r"\] challenge manager \S+ live \S+ judge (\S+) character (\d+) indax (\S+)"
+        hc, gc = [f for f in grab(host, CH) if f[0] == "5"], [f for f in grab(client, CH) if f[0] == "5"]
+        gm = grab(client, MG)
+        c.check(scenario, "the guest, Daxter in the duo, joins the host's jet-board challenge and plays it as Jak (its judge scores it)",
+                any("player 0 invites us to the challenge city-jetboard-bbush-resolution" in l for l in client)
+                and any(f[0] == "idle" and f[1] == "0" and f[2] == "#f" for f in gm), f"{gm[:4]}")
+        rs = grab(host, r"our challenge result: (\w+) score ([\d.]+)") + grab(client, r"our challenge result: (\w+) score ([\d.]+)")
+        c.check(scenario, "each machine's judge scores its own player: 500000 (host), 300000 (guest), each reaching a cup (its reward held)",
+                any("our challenge result: reached score 500000.00" in l for l in host)
+                and any("our challenge result: reached score 300000.00" in l for l in client)
+                and any("reward (18.0) waits for every result" in l for l in host), f"{rs}")
+        c.check(scenario, "both decide the same: the higher score (the host) wins",
+                bool(hc) and bool(gc) and hc[-1][0] == "5" and gc[-1][0] == "5" and hc[-1][6] == "1" and gc[-1][6] == "1",
+                f"host {hc[-1:]}, guest {gc[-1:]}")
+        c.check(scenario, "the reward (18 orbs for the gold cup) is the host's; the guest's, held, is lost",
+                float(hc[-1][8]) == 18.0 and float(hc[-1][9]) == 18.0 and float(gc[-1][8]) == 0.0 and float(gc[-1][9]) == 0.0
+                and any("reward (18.0) waits for every result" in l for l in client), f"host {hc[-1][8:10]}, guest {gc[-1][8:10]}")
+        c.check(scenario, "the guest is Daxter again once the challenge is over", bool(gm) and gm[-1][1] == "1", f"{gm[-1:]}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "soak":
         MEM = r"\] mem heap-free (\d+) heap-used (\d+) global-free (\d+) procs (\d+) replicas (\d+) forced (\d+) art (\d+)"
         for side, lines in (("host", host), ("guest", client)):

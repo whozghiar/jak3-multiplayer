@@ -1,0 +1,36 @@
+# The jet-board challenge in co-op, guest side: plays Daxter (the co-op duo), joins the host's
+# challenge and plays it as Jak (Daxter has no board), standing still (its judge, spawned next to
+# Daxter, is touched once it is Jak), scores 300000 trick points (the host 500000): the host wins, the guest's
+# reward is lost; Daxter again after it.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+80 log-challenge
+82 wait-challenge 1
+83 log-challenge
+85 press up 100
+86 wait-challenge 3
+87 log-challenge
+87.5 log-me
+92 log-challenge
+95 trick-points 300000
+96 log-challenge
+97 wait-challenge 5
+98 log-challenge
+98.5 screenshot decided
+103 log-challenge
+109 log-challenge
+110 log

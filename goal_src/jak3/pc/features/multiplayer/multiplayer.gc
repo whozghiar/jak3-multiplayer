@@ -4852,6 +4852,9 @@
    (score      float MP_MAX_PLAYERS) ;; per slot, higher is better
    (pending    float)       ;; our reward, held until decided
    (accept?    symbol)      ;; D-pad up pressed on the invitation (mp-challenge-input)
+   (was-daxter? symbol)     ;; we play Daxter: the challenge is played as Jak, Daxter again after it
+   (last-state symbol)      ;; our manager's state when last seen, and its score then (live)
+   (live-score float)
    (invites    int32)       ;; test log: invitations received, decisions, reward given
    (decisions  int32)
    (given      float)
@@ -4860,13 +4863,19 @@
 
 (define *mp-challenge* (new 'global 'mp-challenge-state))
 (set! (-> *mp-challenge* accept?) #f)
+(set! (-> *mp-challenge* was-daxter?) #f)
 (define *mp-challenge-name* (new 'global 'string 16 (the-as string #f)))
 ;; a line of ours: a button icon (<PAD_DPAD_UP>) expands to about 110 characters
 (define *mp-challenge-line* (new 'global 'string 256 (the-as string #f)))
 
 (defun mp-challenge-reset ()
-  "No challenge any more (our reward, if held, is lost: decided or abandoned)."
+  "No challenge any more (our reward, if held, is lost: decided or abandoned); a Daxter player
+   who played it as Jak is Daxter again."
   (let ((c *mp-challenge*))
+    (when (-> c was-daxter?)
+      (set! (-> c was-daxter?) #f)
+      (set! (-> *mp-config* character) 1)
+      )
     (set! (-> c phase) 0)
     (set! (-> c node) 0)
     (set! (-> c players) 0)
@@ -4875,6 +4884,8 @@
     (set! (-> c winners) 0)
     (set! (-> c pending) 0.0)
     (set! (-> c accept?) #f)
+    (set! (-> c last-state) #f)
+    (set! (-> c live-score) 0.0)
     (set! (-> c manager) (the-as handle #f))
     )
   (none)
@@ -4895,6 +4906,41 @@
   (none)
   )
 
+(defun mp-challenge-as-jak ()
+  "Our challenge starts: a Daxter player plays it as Jak (the challenges are made for Jak: the
+   jet-board's needs his board), not saved; mp-challenge-reset gives Daxter back."
+  (when (= (-> *mp-config* character) 1)
+    (set! (-> *mp-challenge* was-daxter?) #t)
+    (set! (-> *mp-config* character) 0)
+    (mp-show-message "Challenge: you play it as Jak")
+    )
+  (none)
+  )
+
+(defun mp-challenge-touch-judge ((mgr task-manager))
+  "The jet-board's judge (engine/common-obs/voicebox.gc) starts when the player touches it; it is
+   spawned where the player stands when the challenge starts. A Daxter player then plays Daxter:
+   no touch, and once Jak inside its sphere still none. Once we play Jak, the waiting judge is
+   touched by our player, as the stock collision does."
+  (let ((child (-> mgr child)))
+    (while child
+      (let ((p (the-as process (ppointer->process child))))
+        (when (and (type? p judge) (-> p next-state) (= (-> p next-state name) 'wait))
+          (format 0 "[multiplayer] the challenge's judge waits: our player (Jak now) touches it~%")
+          (let ((msg (new 'stack-no-clear 'event-message-block)))
+            (set! (-> msg from) (process->ppointer *target*))
+            (set! (-> msg num-params) 0)
+            (set! (-> msg message) 'touch)
+            (send-event-function p msg)
+            )
+          )
+        (set! child (-> p brother))
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-challenge-on-manager task-manager ((node game-task-node-info))
   "Our task manager of a burning bush challenge starts (co-op, task-manager-init-by-other): we
    accepted another player's invitation (it is ours to play now), or our play started it at the
@@ -4908,6 +4954,7 @@
        (set! (-> c since) (mp-now))
        (set! (-> c manager) (process->handle self))
        (set! (-> c play-from) (-> *display* game-clock frame-counter))
+       (mp-challenge-as-jak)
        (format 0 "[multiplayer] the challenge ~S starts here: we take part~%" (-> node name))
        )
       ((and (zero? (-> c phase))
@@ -4926,6 +4973,7 @@
        (set! (-> c players) (ash 1 *mp-local-slot*))
        (set! (-> c manager) (process->handle self))
        (set! (-> c play-from) (-> *display* game-clock frame-counter))
+       (mp-challenge-as-jak)
        (format 0 "[multiplayer] our challenge ~S starts: the others are invited~%" (-> node name))
        (mp-send-challenge 0 n (-> c intro) 0.0)
        )
@@ -5188,34 +5236,46 @@
          )
        )
       ((= (-> c phase) 3)
+       ;; its state and score followed every frame: a manager may end and go between two looks
        (let* ((mgr (the-as task-manager (handle->process (-> c manager))))
               (state (if (and mgr (-> mgr next-state))
                          (-> mgr next-state name)
                          )
                      )
-              (end (cond
-                     ((not mgr) 'gone)
-                     ((or (= state 'complete) (= state 'resolution)) 'reached)
-                     ((= state 'fail) 'missed)
-                     )
-                   )
               )
-         (when end
-           (let ((score (if mgr
-                            (mp-challenge-score mgr)
-                            0.0
-                            )
-                        )
-                 )
+         (when mgr
+           (set! (-> c live-score) (mp-challenge-score mgr))
+           (if (and (-> c was-daxter?) *target* (not (focus-test? *target* indax grabbed)))
+               (mp-challenge-touch-judge mgr)
+               )
+           (when (!= state (-> c last-state))
+             (format 0 "[multiplayer] our challenge's manager: ~A, score ~,,2f~%" state (-> c live-score))
+             (set! (-> c last-state) state)
+             )
+           )
+         (let ((end (cond
+                      ((or (= state 'complete) (= state 'resolution)) 'reached)
+                      ((= state 'fail) 'missed)
+                      ;; gone unseen: reached when it gave its reward or was last seen past it
+                      ((not mgr)
+                       (if (or (< 0.0 (-> c pending)) (= (-> c last-state) 'complete) (= (-> c last-state) 'resolution))
+                           'reached
+                           'missed
+                           )
+                       )
+                      )
+                    )
+               )
+           (when end
              (set! (-> c phase) 4)
              (set! (-> c since) (mp-now))
              (logior! (-> c results) (ash 1 me))
              (if (= end 'reached)
                  (logior! (-> c reached) (ash 1 me))
                  )
-             (set! (-> c score me) score)
-             (mp-send-challenge 2 (-> c node) (if (= end 'reached) 1 0) score)
-             (format 0 "[multiplayer] our challenge result: ~A score ~,,2f~%" end score)
+             (set! (-> c score me) (-> c live-score))
+             (mp-send-challenge 2 (-> c node) (if (= end 'reached) 1 0) (-> c live-score))
+             (format 0 "[multiplayer] our challenge result: ~A score ~,,2f, manager ~A~%" end (-> c live-score) (if mgr 'alive 'gone))
              )
            )
          )

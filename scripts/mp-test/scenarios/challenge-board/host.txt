@@ -1,0 +1,32 @@
+# The jet-board challenge in co-op (a score), host side: at the industrial quarter's bush
+# (ctyinda-bbush-5) starts city-jetboard-bbush; the guest joins. The judge scores 90 s of tricks:
+# the host's trick points 500000, the guest's 300000; each machine's manager gives its own reward
+# for the cup reached, held until both scores are in: the host's is kept, the guest's lost.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission sewer-kg-met
+63 press x 100
+70 wait-player 1
+72 continue ctyinda-bbush-5
+90 log-me
+91 challenge-start city-jetboard-bbush
+91.5 wait-challenge 3
+92 log-challenge
+100 trick-points 500000
+101 log-challenge
+101.5 screenshot judging
+102 wait-challenge 4
+103 log-challenge
+104 wait-challenge 5
+105 log-challenge
+105.5 screenshot decided
+109 log-challenge
+110 log
