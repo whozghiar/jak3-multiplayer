@@ -19,4 +19,6 @@
 84 log-copies 1
 90 look-player 1
 90.6 screenshot remote-daxter-again
+93 log-copies 1
+95 log-copies 1
 96 log

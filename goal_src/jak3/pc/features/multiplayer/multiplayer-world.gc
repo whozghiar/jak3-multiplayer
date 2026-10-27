@@ -874,7 +874,8 @@
           )
         )
       )
-    (when (nonzero? (-> *target* board))
+    ;; our Daxter player's board only while he rides it (never on his back)
+    (when (and (nonzero? (-> *target* board)) (not (mp-daxter-board-away? *target*)))
       (let ((board (ppointer->process (-> *target* board board))))
         (if board
             (mp-add-prop (the-as process-drawable board))

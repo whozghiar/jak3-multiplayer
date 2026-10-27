@@ -920,6 +920,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "R2 puts the board away: Daxter on foot again (his mode)",
                 any("Daxter puts the jet-board away" in l for l in client) and bool(bs) and bs[-1][0].startswith("target-indax"),
                 f"{bs[-1:]}")
+        away = next((i for i, l in enumerate(client) if "Daxter puts the jet-board away" in l), None)
+        after = [f for f in grab(client[away:], BS)] if away is not None else []
+        c.check(scenario, "board away: never drawn on his side (on his back or anywhere)",
+                bool(after) and all(f[4] == "#f" for f in after), f"{after}")
+        last = max((i for i, l in enumerate(host) if "run log-copies 1" in l), default=None)
+        c.check(scenario, "board away: the other player gets no copy of it",
+                last is not None and not any("copy 1 skel-board" in l for l in host[last:]), "")
         c.check(scenario, "the other player draws his board (and his model on it)",
                 any(re.search(r"\] copy 1 skel-board id \d+ owner-hides #f drawn #t", l) for l in host), "")
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]

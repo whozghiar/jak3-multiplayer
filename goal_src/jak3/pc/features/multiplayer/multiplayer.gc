@@ -4141,9 +4141,16 @@
   (none)
   )
 
+(defun mp-daxter-board-away? ((tgt target))
+  "#t while `tgt`, our player, plays Daxter online and does not ride the board: no board shows, on
+   his back or anywhere (Jak carries it folded on his back: board-close, its idle state)."
+  (and (= tgt *target*) (mp-online?) (= (-> *mp-config* character) 1) (not (mp-bodax? tgt)))
+  )
+
 (defbehavior mp-board-post board ()
-  "The board's post in use (board-post): under Daxter riding it as Daxter, at his size and drawn
-   (board-post hides it with the player's model, hidden then: Daxter is the sidekick)."
+  "The board's post (board-post), in use and at rest: under Daxter riding it as Daxter, at his size
+   and drawn (board-post hides it with the player's model, hidden then: Daxter is the sidekick);
+   our Daxter player's board otherwise never drawn."
   (let ((tgt (the-as target (ppointer->process (-> self parent)))))
     (cond
       ((and tgt (mp-bodax? tgt))
@@ -4154,6 +4161,9 @@
        )
       (else
         (board-post)
+        (if (and tgt (mp-daxter-board-away? tgt))
+            (logior! (-> self draw status) (draw-control-status no-draw))
+            )
         )
       )
     )
@@ -4162,6 +4172,7 @@
 
 ;; MOD multiplayer -- engine/target/board/board-util.gc: a state keeps the post it was defined with.
 (set! (-> (method-of-type board use) post) mp-board-post)
+(set! (-> (method-of-type board idle) post) mp-board-post)
 
 ;; ------------------------------------------------------------------------------------------------
 ;; A lizard for every player (co-op)

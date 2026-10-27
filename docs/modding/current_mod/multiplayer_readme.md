@@ -1403,15 +1403,17 @@ Daxter's mode ignored R2. multiplayer.gc "Daxter on the jet-board":
   at rest, stretched in the air (the rendering the user chose over his standing clips or Jak's
   poses copied joint by joint).
 - **The board** (`board-util.gc`) hid with the player's model (`board-post`): its `use` state's
-  post (`mp-board-post`) draws it under Daxter, at 60 % of its size (`board-scale`).
+  post (`mp-board-post`) draws it under Daxter, at 60 % of its size (`board-scale`). Jak carries it
+  folded on his back (its `idle` state, same post): a Daxter player's board is never drawn while he
+  does not ride it, and it is not sent to the others then (`mp-daxter-board-away?`).
 - **His camera.** Leaving his mode removed his closer camera (`target-indax-init`'s string length,
   height and head offset): it is set again while he rides.
 - **The others** draw Daxter's model: for the player, the sidekick's bones are sent (`mp-send-poses`),
   with the player's effects and sounds (the board's); the board is one of his props.
 
 Checked by `daxter-board`: in the industrial quarter, the guest (Daxter) takes the board out with R2,
-rides it at 60 % (stance, X's jump, riding), puts it away with R2 and is Daxter on foot again; the
-host draws his board.
+rides it at 60 % (stance, X's jump, riding), puts it away with R2 and is Daxter on foot again,
+his board drawn nowhere and not sent; the host draws his board while he rides.
 
 ## 5. Testing in game
 
