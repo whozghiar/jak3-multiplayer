@@ -2809,6 +2809,13 @@
          (set! (-> *mp-test-wait* kind) 'resume)
          (pc-mp-test-pause #t)
          )
+        ((string= cmd "wait-challenge")
+         ;; wait-challenge <phase>: the script waits until our challenge reaches that phase (1
+         ;; invited, 3 playing, 4 our result in, 5 decided)
+         (set! (-> *mp-test-wait* slot) (mp-test-int))
+         (set! (-> *mp-test-wait* kind) 'challenge)
+         (pc-mp-test-pause #t)
+         )
         ((string= cmd "wait-player")
          ;; the script waits until player <slot> is in game for 2 s
          (set! (-> *mp-test-wait* slot) (mp-test-int))
@@ -3457,6 +3464,67 @@
                  (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
                  )
          )
+        ((string= cmd "challenge-start")
+         ;; challenge-start <task>: what talking to its burning bush does, the skull gems aside: its
+         ;; introduction node closed by our play (the task's play-list entry names it)
+         (mp-test-word)
+         (dotimes (i (-> *game-info* play-list length))
+           (when (string= (-> *game-info* play-list i name) (-> *mp-test* word))
+             (format 0 "[mp-test] challenge-start ~S: introduction ~S open ~A~%" (-> *mp-test* word)
+                     (-> *game-info* sub-task-list (-> *game-info* play-list i pre-play-node) name)
+                     (task-node-open? (-> *game-info* play-list i pre-play-node))
+                     )
+             (task-node-close! (-> *game-info* play-list i pre-play-node) 'event)
+             )
+           )
+         )
+        ((string= cmd "goto-challenge-orb")
+         ;; goto-challenge-orb: our player onto what our challenge's task manager left to reach (the
+         ;; precursor orb of a get-to challenge), as reaching it
+         (let* ((mgr (handle->process (-> *mp-challenge* manager)))
+                (child (if mgr (-> mgr child)))
+                (orb (the-as process-drawable #f))
+                )
+           (while child
+             (let ((p (ppointer->process child)))
+               (if (and (not orb) (type? p process-drawable) (nonzero? (-> (the-as process-drawable p) root)))
+                   (set! orb (the-as process-drawable p))
+                   )
+               (set! child (-> p brother))
+               )
+             )
+           (cond
+             ((and orb *target*)
+              (format 0 "[mp-test] goto-challenge-orb ~A at ~m ~m ~m~%" (-> orb type symbol) (-> orb root trans x) (-> orb root trans y) (-> orb root trans z))
+              (move-to-point! (-> *target* control) (-> orb root trans))
+              )
+             (else
+               (format 0 "[mp-test] goto-challenge-orb: none~%")
+               )
+             )
+           )
+         )
+        ((string= cmd "send-complete")
+         ;; send-complete <process type>: the first process of that type (a task manager) is told
+         ;; its objective is reached ('complete), as its own code does
+         (mp-test-word)
+         (set! *mp-test-type-name* (string->symbol (-> *mp-test* word)))
+         (let ((proc (search-process-tree *active-pool* (lambda ((p process)) (= (-> p type symbol) *mp-test-type-name*)))))
+           (format 0 "[mp-test] send-complete ~A: ~A~%" *mp-test-type-name* (if proc (send-event proc 'complete) 'none))
+           )
+         )
+        ((string= cmd "log-challenge")
+         ;; log-challenge: our challenge's phase, players, results, winners, held and given reward,
+         ;; our precursor orbs
+         (let ((ch *mp-challenge*))
+           (format 0 "[mp-test] challenge phase ~D node ~D starter ~D players #x~X results #x~X reached #x~X "
+                   (-> ch phase) (-> ch node) (-> ch starter) (-> ch players) (-> ch results) (-> ch reached)
+                   )
+           (format 0 "winners #x~X pending ~,,1f given ~,,1f skill ~,,1f invites ~D decisions ~D~%"
+                   (-> ch winners) (-> ch pending) (-> ch given) (-> *game-info* skill) (-> ch invites) (-> ch decisions)
+                   )
+           )
+         )
         ((string= cmd "tints-off")
          ;; tints-off: copies keep their default tint, as before their owner's was sent
          (set! *mp-test-tints-off* #t)
@@ -3554,6 +3622,9 @@
     (case (-> w kind)
       (('joined)
        (= (-> *mp-join* stage) 4)
+       )
+      (('challenge)
+       (>= (-> *mp-challenge* phase) (-> w slot))
        )
       (('countdown)
        (> (mp-lobby-countdown-ms) 0)

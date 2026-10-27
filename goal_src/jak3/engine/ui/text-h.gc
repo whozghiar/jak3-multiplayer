@@ -1757,6 +1757,11 @@
   (progress-mp-fail-votes #x15a1)
   (progress-mp-fail-wait #x15a2)
   (progress-mp-fail-quit #x15a3)
+  (progress-mp-challenge-invite #x15a4)
+  (progress-mp-challenge-wait #x15a5)
+  (progress-mp-challenge-won #x15a6)
+  (progress-mp-challenge-tie #x15a7)
+  (progress-mp-challenge-none #x15a8)
   )
 ;; ---text-id
 

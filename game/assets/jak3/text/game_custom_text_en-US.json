@@ -405,5 +405,10 @@
   "15a0": "Press <PAD_L1> + <PAD_TRIANGLE> to jump on Jak's shoulder",
   "15a1": "<PAD_X> Retry: ~D/~D",
   "15a2": "<PAD_X> Waiting for the other players (~D/~D)",
-  "15a3": "<PAD_TRIANGLE> Quit: ~D/~D"
+  "15a3": "<PAD_TRIANGLE> Quit: ~D/~D",
+  "15a4": "~S started a challenge: <PAD_DPAD_UP> to join (~D)",
+  "15a5": "Challenge over: waiting for the other players (~D/~D)",
+  "15a6": "~S wins the challenge",
+  "15a7": "A tie: each winner gets the reward",
+  "15a8": "Nobody completed the challenge"
 }

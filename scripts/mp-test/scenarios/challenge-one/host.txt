@@ -1,0 +1,33 @@
+# Burning bush challenge in co-op, host side: starts the city get-to challenge 26; the guest joins.
+# The host fails (its failure stays its own: not shown on the guest, no vote) and quits it with
+# triangle (the failure screen waits for a choice, the world frozen); the guest reaches the
+# objective: the guest wins and gets the reward, the host none.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission sewer-met-hum
+63 press x 100
+70 wait-player 1
+72 continue ctygenb-bbush-1
+88 log-me
+89 log-challenge
+90 challenge-start city-bbush-get-to-26
+90.5 wait-challenge 3
+91 log-challenge
+91.5 screenshot started
+96 send-fail task-manager-ctywide-bbush-get-to
+97 log-challenge
+97.5 log-fail
+99 press triangle 100
+100 wait-challenge 5
+99 log-challenge
+99.5 screenshot decided
+103 log-challenge
+104 log

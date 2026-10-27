@@ -109,6 +109,9 @@
   (fail-show 29)     ;; ... the retry continue (text): show that failure here too
   (world-reset 27)   ;; host to everyone: its world was started again (a mission chosen in game):
                      ;; each guest loads it again
+  (challenge 30)     ;; co-op, a burning bush challenge: iarg 0 = 0 the sender started it (iarg 1 its
+                     ;; resolution node, iarg 2 its introduction node: an invitation), 1 the sender
+                     ;; takes part, 2 the sender's result (iarg 2: 1 reached, 0 not; fvec x its score)
   (race-progress 26) ;; the sender's race: its task node iarg 0, its result iarg 1 (0 racing, 1
                      ;; finished ahead of every racer, 2 behind one), its progress fvec x; from the
                      ;; host, its racers' progress too (iarg 2 of them, floats in text) ("Races")
@@ -541,6 +544,16 @@
   (if (and (>= slot 0) (< slot MP_MAX_PLAYERS) (-> *mp-players* valid slot))
       (-> *mp-players* state slot)
       (the-as mp-player-state #f)
+      )
+  )
+
+(define-extern mp-coop? (function symbol)) ;; defined below
+
+(defun mp-bbush-node? ((node game-task-node-info))
+  "#t for a task node of a burning bush challenge (its introduction or its resolution)."
+  (if (and node (logtest? (-> node flags) (game-task-node-flag bbush)))
+      #t
+      #f
       )
   )
 
@@ -1127,10 +1140,12 @@
    (received    int32)
    (decisions   int32)
    (last        int32)      ;; the last decision applied (1 retry, 2 quit)
+   (personal?   symbol)     ;; the failure shown is a burning bush challenge's: ours alone, not voted
    )
   )
 
 (define *mp-fail* (new 'global 'mp-fail-state))
+(set! (-> *mp-fail* personal?) #f)
 (set! (-> *mp-fail* decided?) #f)
 (set! (-> *mp-fail* replaying?) #f)
 (set! (-> *mp-fail* regroup?) #f)
@@ -1143,6 +1158,7 @@
    failure only: mission-fail or mission-fail-or-retry (a retry from the menu is not voted)."
   (let ((r (the-as resetter (get-resetter *resetter-control*))))
     (if (and r
+             (not (-> *mp-fail* personal?))
              (-> r next-state)
              (= (-> r next-state name) 'idle)
              (-> r grabbed-player?)
@@ -2349,7 +2365,13 @@
   (if (not *mp-progress-replaying*)
       (set! (-> *mp-session* step-at) (mp-now))
       )
-  (when (and (mp-online?) (logtest? *mp-world* (mp-world-flag progress)) (not *mp-progress-replaying*))
+  (when (and (mp-online?)
+             (logtest? *mp-world* (mp-world-flag progress))
+             (not *mp-progress-replaying*)
+             ;; in co-op each player plays its own burning bush challenges ("Co-op: burning bush
+             ;; challenges"): the others are invited instead
+             (not (and (mp-coop?) (mp-bbush-node? node)))
+             )
     (let ((index (get-idx-in-task-list node)))
       (if (> index 0)
           (mp-send-progress -1 index index)
@@ -2382,6 +2404,7 @@
                      (< n (-> nodes length))
                      (logtest? (-> ev text (/ i 8)) (ash 1 (logand i 7)))
                      (not (logtest? (-> nodes n flags) (game-task-node-flag closed)))
+                     (not (and (mp-coop?) (mp-bbush-node? (-> nodes n))))
                      )
             (open! (-> nodes n) 'event)
             (+! count 1)
@@ -2887,8 +2910,11 @@
 (defmethod spawn-resetter! ((this resetter-control) (arg0 resetter-params) (arg1 game-task-node-info))
   "Stock; a failure shown starts a new vote, and in co-op our own failure is sent to every player
    (not a retry from the menu, not one another player sent). In co-op a failure does not reset on
-   its own after a delay (auto-reset): every player's X goes on, together."
+   its own after a delay (auto-reset): every player's X goes on, together. A burning bush
+   challenge's failure stays ours (\"Co-op: burning bush challenges\"): no vote, nothing sent."
+  (set! (-> *mp-fail* personal?) (mp-bbush-node? arg1))
   (when (and (mp-coop?)
+             (not (-> *mp-fail* personal?))
              (= (-> arg0 message) (resetter-message mission-fail))
              (logtest? (-> arg0 flags) (resetter-flag auto-reset))
              )
@@ -2909,7 +2935,7 @@
       (set! (-> *mp-fail* decided?) #f)
       (set! (-> *mp-fail* since) (mp-now))
       (+! (-> *mp-fail* shown) 1)
-      (if (and (mp-coop?) (not (-> *mp-fail* replaying?)))
+      (if (and (mp-coop?) (not (-> *mp-fail* replaying?)) (not (-> *mp-fail* personal?)))
           (mp-send-fail arg0)
           )
       )
@@ -3268,6 +3294,7 @@
 (define-extern mp-replay-effect (function mp-event none))
 (define-extern mp-apply-elevator (function mp-event none))
 (define-extern mp-apply-scene (function mp-event none :behavior mp-manager))
+(define-extern mp-apply-challenge (function mp-event none))
 (define-extern mp-apply-art-level (function mp-event none))
 (define-extern mp-apply-skel-def (function mp-event none))
 (define-extern mp-test-own-flush (function none)) ;; multiplayer-test.gc
@@ -3783,6 +3810,9 @@
          )
         (((mp-event-kind restart))
          (mp-apply-restart ev)
+         )
+        (((mp-event-kind challenge))
+         (mp-apply-challenge ev)
          )
         (((mp-event-kind mission-start))
          (mp-apply-mission-start ev)
@@ -4786,6 +4816,506 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
+;; Co-op: burning bush challenges, side by side
+;;
+;; A burning bush (levels/desert/des-burning-bush.gc) offers a side challenge: talking to it closes
+;; the challenge's introduction node, which opens its resolution node, whose task manager runs the
+;; challenge (a place to reach in time, rings, a chase, a jet-board or vehicle score...) and gives
+;; its reward (precursor orbs: 'skill, with the manager's handle). Both nodes carry the bbush flag.
+;; In co-op each player plays its own challenges: their nodes are not shared (1.5), their failures
+;; not voted (4.26). When our play starts one, every other player is invited for 30 s (D-pad up):
+;; who accepts goes to the challenge's start (its retry continue) and starts the same challenge
+;; there. Each plays it on its own; its result (reached or not, its score: the jet-board's or a
+;; vehicle challenge's, else minus the seconds it took) goes to the others. The reward waits until
+;; every player taking part has its result (or left): only the best of those who reached the
+;; objective gets its own reward (each winner of a tie).
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_CHALLENGE_INVITE_TIME (seconds 30))  ;; invitations open after the start
+(defconstant MP_CHALLENGE_JOIN_TIME (seconds 40))    ;; to reach the start and start it, once accepted
+(defconstant MP_CHALLENGE_RESULT_TIME (seconds 600)) ;; a player still playing this long after our result has none
+(defconstant MP_CHALLENGE_SHOW_TIME (seconds 8))     ;; the winner shown
+
+(deftype mp-challenge-state (structure)
+  ((phase      int32)       ;; 0 none, 1 invited, 2 accepted (to its start), 3 playing, 4 our result in, 5 decided
+   (node       int32)       ;; the challenge's resolution node (sub-task-list index)
+   (intro      int32)       ;; its introduction node
+   (starter    int32)       ;; slot of the player who started it
+   (since      time-frame)  ;; when the phase began (real clock)
+   (started    time-frame)  ;; when the challenge started (real clock): invitations close 30 s later
+   (manager    handle)      ;; our task manager of the challenge
+   (play-from  time-frame)  ;; when it started here (game clock), for its time
+   (players    int32)       ;; one bit per slot taking part
+   (results    int32)       ;; one bit per slot whose result is in
+   (reached    int32)       ;; one bit per slot that reached the objective
+   (winners    int32)       ;; one bit per best player, once decided
+   (score      float MP_MAX_PLAYERS) ;; per slot, higher is better
+   (pending    float)       ;; our reward, held until decided
+   (accept?    symbol)      ;; D-pad up pressed on the invitation (mp-challenge-input)
+   (invites    int32)       ;; test log: invitations received, decisions, reward given
+   (decisions  int32)
+   (given      float)
+   )
+  )
+
+(define *mp-challenge* (new 'global 'mp-challenge-state))
+(set! (-> *mp-challenge* accept?) #f)
+(define *mp-challenge-name* (new 'global 'string 16 (the-as string #f)))
+;; a line of ours: a button icon (<PAD_DPAD_UP>) expands to about 110 characters
+(define *mp-challenge-line* (new 'global 'string 256 (the-as string #f)))
+
+(defun mp-challenge-reset ()
+  "No challenge any more (our reward, if held, is lost: decided or abandoned)."
+  (let ((c *mp-challenge*))
+    (set! (-> c phase) 0)
+    (set! (-> c node) 0)
+    (set! (-> c players) 0)
+    (set! (-> c results) 0)
+    (set! (-> c reached) 0)
+    (set! (-> c winners) 0)
+    (set! (-> c pending) 0.0)
+    (set! (-> c accept?) #f)
+    (set! (-> c manager) (the-as handle #f))
+    )
+  (none)
+  )
+
+(defun mp-send-challenge ((msg int) (node int) (arg int) (score float))
+  "Tell every other player about our challenge (resolution node `node`): `msg` 0 we started it (arg
+   its introduction node), 1 we take part, 2 our result (arg 1 reached, 0 not; `score`)."
+  (let ((ev (new 'stack 'mp-event)))
+    (set! (-> ev kind) (mp-event-kind challenge))
+    (set! (-> ev to) -1)
+    (set! (-> ev iarg 0) msg)
+    (set! (-> ev iarg 1) node)
+    (set! (-> ev iarg 2) arg)
+    (set! (-> ev fvec x) score)
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defbehavior mp-challenge-on-manager task-manager ((node game-task-node-info))
+  "Our task manager of a burning bush challenge starts (co-op, task-manager-init-by-other): we
+   accepted another player's invitation (it is ours to play now), or our play started it at the
+   bush (the others are invited). A retry, or a manager a level loading started, says nothing."
+  (let ((c *mp-challenge*)
+        (n (get-idx-in-task-list node))
+        )
+    (cond
+      ((and (= (-> c phase) 2) (= (-> c node) n))
+       (set! (-> c phase) 3)
+       (set! (-> c since) (mp-now))
+       (set! (-> c manager) (process->handle self))
+       (set! (-> c play-from) (-> *display* game-clock frame-counter))
+       (format 0 "[multiplayer] the challenge ~S starts here: we take part~%" (-> node name))
+       )
+      ((and (zero? (-> c phase))
+            (not *mp-progress-replaying*)
+            (not (mp-joining?))
+            (nonzero? (-> *mp-session* step-at))
+            (< (- (mp-now) (-> *mp-session* step-at)) (seconds 30))
+            )
+       (mp-challenge-reset)
+       (set! (-> c phase) 3)
+       (set! (-> c node) n)
+       (set! (-> c intro) (the-as int (-> node parent-node 0)))
+       (set! (-> c starter) *mp-local-slot*)
+       (set! (-> c started) (mp-now))
+       (set! (-> c since) (mp-now))
+       (set! (-> c players) (ash 1 *mp-local-slot*))
+       (set! (-> c manager) (process->handle self))
+       (set! (-> c play-from) (-> *display* game-clock frame-counter))
+       (format 0 "[multiplayer] our challenge ~S starts: the others are invited~%" (-> node name))
+       (mp-send-challenge 0 n (-> c intro) 0.0)
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-challenge ((ev mp-event))
+  "Another player's challenge: an invitation (offered when its introduction is open here and we
+   play no challenge), a player taking part, a result."
+  (let ((c *mp-challenge*)
+        (from (-> ev from))
+        (n (-> ev iarg 1))
+        (nodes (-> *game-info* sub-task-list))
+        )
+    (when (and (mp-coop?) (> n 0) (< n (-> nodes length)) (>= from 0) (< from MP_MAX_PLAYERS))
+      (case (-> ev iarg 0)
+        ((0)
+         (let ((intro (-> ev iarg 2)))
+           (cond
+             ((nonzero? (-> c phase))
+              (format 0 "[multiplayer] player ~D invites us to the challenge ~S: we play one already~%" from (-> nodes n name))
+              )
+             ((or (mp-joining?)
+                  (not *target*)
+                  (<= intro 0)
+                  (>= intro (-> nodes length))
+                  (not (task-node-open? (the-as game-task-node intro)))
+                  )
+              (format 0 "[multiplayer] player ~D invites us to the challenge ~S: not open here~%" from (-> nodes n name))
+              )
+             (else
+               (mp-challenge-reset)
+               (set! (-> c phase) 1)
+               (set! (-> c node) n)
+               (set! (-> c intro) intro)
+               (set! (-> c starter) from)
+               (set! (-> c started) (mp-now))
+               (set! (-> c since) (mp-now))
+               (set! (-> c players) (ash 1 from))
+               (+! (-> c invites) 1)
+               (format 0 "[multiplayer] player ~D invites us to the challenge ~S~%" from (-> nodes n name))
+               )
+             )
+           )
+         )
+        ((1)
+         (when (and (= n (-> c node)) (> (-> c phase) 0))
+           (logior! (-> c players) (ash 1 from))
+           (format 0 "[multiplayer] player ~D takes part in the challenge~%" from)
+           )
+         )
+        ((2)
+         (when (and (= n (-> c node)) (> (-> c phase) 0))
+           (logior! (-> c players) (ash 1 from))
+           (logior! (-> c results) (ash 1 from))
+           (if (nonzero? (-> ev iarg 2))
+               (logior! (-> c reached) (ash 1 from))
+               )
+           (set! (-> c score from) (-> ev fvec x))
+           (format 0 "[multiplayer] player ~D's challenge result: reached ~D score ~,,2f~%" from (-> ev iarg 2) (-> ev fvec x))
+           )
+         )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-challenge-input ()
+  "Run first every frame (mp-input-update): D-pad up accepts an invitation, and the gun it would
+   pick stays as it is (the button hidden from what runs next, high-fps history included)."
+  (when (and (= (-> *mp-challenge* phase) 1) (not *progress-process*) (cpad-pressed? 0 up))
+    (set! (-> *mp-challenge* accept?) #t)
+    (let ((pad (-> *cpad-list* cpads 0))
+          (history (-> *cpad-history-list* cpads 0))
+          )
+      (logclear! (-> pad button0-rel 0) (pad-buttons up))
+      (logclear! (-> pad button0-abs 0) (pad-buttons up))
+      (dotimes (i 15)
+        (logclear! (-> history button0-rel i) (pad-buttons up))
+        (logclear! (-> history button0-abs i) (pad-buttons up))
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-challenge-score ((mgr task-manager))
+  "Our result's score, higher is better: the jet-board's score (task-manager-bbush-board) or a
+   vehicle challenge's (task-manager-vehicle-bbush), else minus the seconds it took. Those types
+   live in level code, linked after this file: their score field is read at its offset
+   (decompiler/config/jak3/all-types.gc: 240 and 304; node-info, the first task-manager field, 128)."
+  (cond
+    ((mp-inherits? (-> mgr type) 'task-manager-bbush-board)
+     (-> (the-as (pointer float) (&+ (the-as pointer (&-> mgr node-info)) (- 240 128))) 0)
+     )
+    ((mp-inherits? (-> mgr type) 'task-manager-vehicle-bbush)
+     (-> (the-as (pointer float) (&+ (the-as pointer (&-> mgr node-info)) (- 304 128))) 0)
+     )
+    (else
+      (- (* 0.0033333334 (the float (- (-> *display* game-clock frame-counter) (-> *mp-challenge* play-from)))))
+      )
+    )
+  )
+
+(defun mp-challenge-waiting ()
+  "Players taking part, still connected, whose result is not in."
+  (let ((c *mp-challenge*)
+        (count 0)
+        )
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (and (logtest? (-> c players) (ash 1 i))
+               (not (logtest? (-> c results) (ash 1 i)))
+               (or (= i *mp-local-slot*) (mp-remote-state i))
+               )
+          (+! count 1)
+          )
+      )
+    count
+    )
+  )
+
+(defun mp-challenge-count ((bits int))
+  "How many slots `bits` holds."
+  (let ((count 0))
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (logtest? bits (ash 1 i))
+          (+! count 1)
+          )
+      )
+    count
+    )
+  )
+
+(defun mp-challenge-decide ()
+  "Every result in: the winners are the best score among the players who reached the objective."
+  (let ((c *mp-challenge*)
+        (best -1000000000.0)
+        (winners 0)
+        )
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (logtest? (-> c reached) (ash 1 i))
+          (set! best (fmax best (-> c score i)))
+          )
+      )
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (and (logtest? (-> c reached) (ash 1 i)) (>= (-> c score i) (+ best -0.001)))
+          (set! winners (logior winners (ash 1 i)))
+          )
+      )
+    (set! (-> c winners) winners)
+    (set! (-> c phase) 5)
+    (set! (-> c since) (mp-now))
+    (+! (-> c decisions) 1)
+    (if (not (logtest? winners (ash 1 *mp-local-slot*)))
+        (set! (-> c pending) 0.0)
+        )
+    (format 0 "[multiplayer] the challenge is decided: players #x~X winners #x~X best ~,,2f~%" (-> c players) winners best)
+    )
+  (none)
+  )
+
+(defun mp-challenge-take ((amount float) (from handle))
+  "A reward of `amount` given by `from` (game-info give): #t when our challenge keeps it: held until
+   every result is in, or lost to a better player. Its reward comes from its task manager, or from
+   a child of it: the precursor orb a get-to challenge leaves at its end (birth-pickup-at-point)."
+  (let* ((c *mp-challenge*)
+         (proc (handle->process from))
+         (ours? (and proc
+                     (or (= from (-> c manager))
+                         (and (-> proc parent) (= (ppointer->process (-> proc parent)) (handle->process (-> c manager))))
+                         )
+                     )
+                )
+         )
+    (when (and (mp-coop?) (>= (-> c phase) 3) ours?)
+      (cond
+        ((< (-> c phase) 5)
+         (+! (-> c pending) amount)
+         (format 0 "[multiplayer] the challenge's reward (~,,1f) waits for every result~%" amount)
+         #t
+         )
+        ((logtest? (-> c winners) (ash 1 *mp-local-slot*))
+         #f
+         )
+        (else
+          (format 0 "[multiplayer] the challenge's reward goes to the best: not us~%")
+          #t
+          )
+        )
+      )
+    )
+  )
+
+(defbehavior mp-update-challenge mp-manager ()
+  "Every frame: an invitation accepted or run out; at the challenge's start, the challenge starts;
+   our result when our manager ends (reached: complete or resolution; not: fail, or gone); decided
+   once every result is in and the invitations closed; our reward if we won, the winner shown."
+  (let ((c *mp-challenge*)
+        (nodes (-> *game-info* sub-task-list))
+        (me *mp-local-slot*)
+        )
+    (cond
+      ((zero? (-> c phase))
+       )
+      ((not (mp-coop?))
+       (mp-challenge-reset)
+       )
+      ((= (-> c phase) 1)
+       (cond
+         ((-> c accept?)
+          (set! (-> c accept?) #f)
+          (set! (-> c phase) 2)
+          (set! (-> c since) (mp-now))
+          (logior! (-> c players) (ash 1 me))
+          (mp-send-challenge 1 (-> c node) 0 0.0)
+          (let* ((node (-> nodes (-> c node)))
+                 (name (if (and (-> node reset) (-> node reset restart-info))
+                           (-> node reset restart-info retry continue)
+                           (the-as string #f)
+                           )
+                       )
+                 (cp (if name
+                         (get-continue-by-name *game-info* name)
+                         )
+                     )
+                 )
+            (format 0 "[multiplayer] we take part in the challenge ~S: to its start ~A~%" (-> node name) name)
+            (if (and cp *target*)
+                (send-event *target* 'continue cp)
+                (set! *mp-request-teleport* (-> c starter))
+                )
+            )
+          )
+         ((>= (- (mp-now) (-> c started)) MP_CHALLENGE_INVITE_TIME)
+          (format 0 "[multiplayer] the challenge's invitation ran out~%")
+          (mp-challenge-reset)
+          )
+         )
+       )
+      ((= (-> c phase) 2)
+       (cond
+         ((>= (- (mp-now) (-> c since)) MP_CHALLENGE_JOIN_TIME)
+          (format 0 "[multiplayer] the challenge could not start here~%")
+          (mp-send-challenge 2 (-> c node) 0 0.0)
+          (mp-challenge-reset)
+          )
+         ;; at its start, the continue over: it starts as at the bush
+         ((and *target*
+               (>= (- (mp-now) (-> c since)) (seconds 1.5))
+               (not (focus-test? *target* teleporting grabbed dead))
+               (!= (mp-target-state-name) 'target-continue)
+               (not (task-node-closed? (the-as game-task-node (-> c intro))))
+               )
+          (format 0 "[multiplayer] at the challenge's start: it starts here~%")
+          (task-node-close! (the-as game-task-node (-> c intro)) 'event)
+          )
+         )
+       )
+      ((= (-> c phase) 3)
+       (let* ((mgr (the-as task-manager (handle->process (-> c manager))))
+              (state (if (and mgr (-> mgr next-state))
+                         (-> mgr next-state name)
+                         )
+                     )
+              (end (cond
+                     ((not mgr) 'gone)
+                     ((or (= state 'complete) (= state 'resolution)) 'reached)
+                     ((= state 'fail) 'missed)
+                     )
+                   )
+              )
+         (when end
+           (let ((score (if mgr
+                            (mp-challenge-score mgr)
+                            0.0
+                            )
+                        )
+                 )
+             (set! (-> c phase) 4)
+             (set! (-> c since) (mp-now))
+             (logior! (-> c results) (ash 1 me))
+             (if (= end 'reached)
+                 (logior! (-> c reached) (ash 1 me))
+                 )
+             (set! (-> c score me) score)
+             (mp-send-challenge 2 (-> c node) (if (= end 'reached) 1 0) score)
+             (format 0 "[multiplayer] our challenge result: ~A score ~,,2f~%" end score)
+             )
+           )
+         )
+       )
+      ((= (-> c phase) 4)
+       (when (and (>= (- (mp-now) (-> c started)) MP_CHALLENGE_INVITE_TIME)
+                  (or (zero? (mp-challenge-waiting)) (>= (- (mp-now) (-> c since)) MP_CHALLENGE_RESULT_TIME))
+                  )
+         (mp-challenge-decide)
+         )
+       )
+      ((= (-> c phase) 5)
+       (when (and (< 0.0 (-> c pending)) *target* (logtest? (-> c winners) (ash 1 me)))
+         (format 0 "[multiplayer] we won the challenge: its reward (~,,1f) is ours~%" (-> c pending))
+         (+! (-> c given) (-> c pending))
+         (let ((amount (-> c pending)))
+           (set! (-> c pending) 0.0)
+           ;; a live process for the stock's per-level count (it reads the handle's parent)
+           (give *game-info* 'skill amount (process->handle *target*))
+           )
+         )
+       (if (>= (- (mp-now) (-> c since)) MP_CHALLENGE_SHOW_TIME)
+           (mp-challenge-reset)
+           )
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-draw-challenge-line ((text string))
+  "One line of the challenge's, centered above the prompts."
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 280 0.0 (font-color default) (font-flags shadow kerning middle large))))
+    (set-width! ctx 512)
+    (set-height! ctx 40)
+    (set! (-> ctx scale) 0.5)
+    (print-game-text text ctx #f 44 (bucket-id hud-draw-hud-alpha))
+    )
+  (none)
+  )
+
+(defun mp-draw-challenge ()
+  "The invitation (who started it, D-pad up, seconds left), the wait for the others' results, then
+   the winner."
+  (let ((c *mp-challenge*))
+    (case (-> c phase)
+      ((1)
+       (let ((st (mp-remote-state (-> c starter))))
+         (when (and st (not *progress-process*))
+           (string<-charp *mp-challenge-name* (-> st name))
+           (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-challenge-invite) #f)
+                   *mp-challenge-name*
+                   (max 0 (/ (- MP_CHALLENGE_INVITE_TIME (- (mp-now) (-> c started))) (seconds 1)))
+                   )
+           (mp-draw-challenge-line *mp-challenge-line*)
+           )
+         )
+       )
+      ((4)
+       (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-challenge-wait) #f)
+               (mp-challenge-count (-> c results))
+               (mp-challenge-count (-> c players))
+               )
+       (mp-draw-challenge-line *mp-challenge-line*)
+       )
+      ((5)
+       (let ((count (mp-challenge-count (-> c winners))))
+         (cond
+           ((zero? count)
+            (mp-draw-challenge-line (lookup-text! *common-text* (text-id progress-mp-challenge-none) #f))
+            )
+           ((< 1 count)
+            (mp-draw-challenge-line (lookup-text! *common-text* (text-id progress-mp-challenge-tie) #f))
+            )
+           (else
+             (dotimes (i MP_MAX_PLAYERS)
+               (when (logtest? (-> c winners) (ash 1 i))
+                 (if (= i *mp-local-slot*)
+                     (copy-string<-string *mp-challenge-name* *mp-name*)
+                     (let ((st (mp-remote-state i)))
+                       (if st
+                           (string<-charp *mp-challenge-name* (-> st name))
+                           (clear *mp-challenge-name*)
+                           )
+                       )
+                     )
+                 )
+               )
+             (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-challenge-won) #f) *mp-challenge-name*)
+             (mp-draw-challenge-line *mp-challenge-line*)
+             )
+           )
+         )
+       )
+      )
+    )
+  (none)
+  )
+
+;; ------------------------------------------------------------------------------------------------
 ;; Missions started together
 ;;
 ;; A mission runs while its task manager lives: its node's on-open script spawns it when the node
@@ -4810,8 +5340,13 @@
 
 (defbehavior task-manager-init-by-other task-manager ((arg0 game-task-node-info) (arg1 symbol))
   "Stock (it does not return: it goes to the manager's wait state); in co-op the others are told
-   that this mission starts here when our own play started it (above)."
+   that this mission starts here when our own play started it (above); a burning bush challenge
+   invites them instead (mp-challenge-on-manager)."
+  (if (and (mp-coop?) (mp-bbush-node? arg0))
+      (mp-challenge-on-manager arg0)
+      )
   (when (and (mp-coop?)
+             (not (mp-bbush-node? arg0))
              (not *mp-progress-replaying*)
              (not (mp-joining?))
              (nonzero? (-> *mp-session* step-at))
@@ -6340,6 +6875,7 @@
    (mp-skip-input)."
   (mp-skip-input)
   (mp-fail-input)
+  (mp-challenge-input)
   (if *progress-process*
       (set! (-> *mp-pause* menu-at) (mp-now))
       )
@@ -7227,7 +7763,11 @@
 
 (defmethod give ((this game-info) (arg0 symbol) (arg1 float) (arg2 handle))
   "Stock; online, a precursor orb taken by our player is claimed for our account (the host checks
-   its entity: \"Economy\")."
+   its entity: \"Economy\"). A co-op burning bush challenge's reward waits for every player's
+   result and goes to the best (mp-challenge-take)."
+  (if (and (= arg0 'skill) (< 0.0 arg1) (mp-challenge-take arg1 arg2))
+      (return (-> this skill))
+      )
   (let ((ret (*mp-stock-give* this arg0 arg1 arg2)))
     (when (and (= arg0 'skill) (< 0.0 arg1) (mp-online?))
       (let* ((proc (handle->process arg2))
@@ -7616,6 +8156,8 @@
      (mp-update-fluts)
      (mp-update-fail)
      (mp-draw-fail-votes)
+     (mp-update-challenge)
+     (mp-draw-challenge)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)

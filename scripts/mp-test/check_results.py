@@ -886,6 +886,50 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario in ("challenge", "challenge-one"):
+        CH = r"\] challenge phase (\d+) node (\d+) starter (\d+) players #x(\w+) results #x(\w+) reached #x(\w+) winners #x(\w+) pending ([\d.]+) given ([\d.]+) skill ([\d.]+)"
+        ME = r"\] me ([-\d.]+) ([-\d.]+) ([-\d.]+) "
+        RES = r"our challenge result: (\w+) score ([-\d.]+)"
+        hc, gc = grab(host, CH), grab(client, CH)
+        hr, gr = grab(host, RES), grab(client, RES)
+        one = scenario == "challenge-one"
+        c.check(scenario, "the host starts the challenge at the bush; the guest is invited (D-pad up offered)",
+                any("our challenge city-bbush-get-to-26-resolution starts: the others are invited" in l for l in host)
+                and any("player 0 invites us to the challenge city-bbush-get-to-26-resolution" in l for l in client)
+                and any(f[0] == "1" for f in gc), f"guest phases {[f[0] for f in gc]}")
+        hm, gm = grab(host, ME), grab(client, ME)
+        d = None
+        if hm and gm:
+            d = sum((float(a) - float(b)) ** 2 for a, b in zip(hm[-1], gm[-1])) ** 0.5
+        c.check(scenario, "the guest accepts, goes to the challenge's start (its retry continue) and starts it there, next to the host",
+                any('to its start "ctygenb-bbush-1"' in l for l in client)
+                and any("the challenge city-bbush-get-to-26-resolution starts here: we take part" in l for l in client)
+                and any("player 1 takes part in the challenge" in l for l in host) and d is not None and d < 15,
+                f"distance to the host {d}")
+        if one:
+            c.check(scenario, "the host fails, the guest reaches the objective; the host's failure stays its own (not sent, the guest's challenge goes on)",
+                    bool(hr) and hr[0][0] == "missed" and bool(gr) and gr[0][0] == "reached"
+                    and not any("our mission failed: every player sees it" in l for l in host)
+                    and not any(re.search(r"fail resetter #t", l) for l in client), f"host {hr}, guest {gr}")
+            want_winner = "2"
+        else:
+            c.check(scenario, "both reach the objective, each on its own; the host faster (its score, minus its time, higher)",
+                    bool(hr) and bool(gr) and hr[0][0] == "reached" and gr[0][0] == "reached" and float(hr[0][1]) > float(gr[0][1]),
+                    f"host {hr}, guest {gr}")
+            want_winner = "1"
+        c.check(scenario, "both machines decide the same: every result in, the best of those who reached it wins",
+                bool(hc) and bool(gc) and hc[-1][0] == "5" and gc[-1][0] == "5" and hc[-1][6] == want_winner and gc[-1][6] == want_winner
+                and hc[-1][4] == "3" and gc[-1][4] == "3", f"host {hc[-1:]}, guest {gc[-1:]}")
+        win, lose = (client, host) if one else (host, client)
+        wc, lc = (gc, hc) if one else (hc, gc)
+        c.check(scenario, "the reward waits for every result: the winner gets it (3 orbs), the other none",
+                any("waits for every result" in l for l in win) and any("its reward (3.0) is ours" in l for l in win)
+                and float(wc[-1][8]) == 3.0 and float(wc[-1][9]) == 3.0
+                and float(lc[-1][8]) == 0.0 and float(lc[-1][9]) == 0.0 and float(lc[-1][7]) == 0.0,
+                f"winner given/skill {wc[-1][8:10] if wc else None}, other given/skill {lc[-1][8:10] if lc else None}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario in ("tints", "tints-before"):
         # every tint each original showed in the host's logs and each copy in the guest's: the two
         # machines log seconds apart, and the traffic sends a vehicle out again with a new paint

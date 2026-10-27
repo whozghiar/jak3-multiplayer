@@ -405,5 +405,10 @@
   "15a0": "Appuyez sur <PAD_L1> + <PAD_TRIANGLE> pour sauter sur l'épaule de Jak",
   "15a1": "<PAD_X> Recommencer : ~D/~D",
   "15a2": "<PAD_X> En attente des autres joueurs (~D/~D)",
-  "15a3": "<PAD_TRIANGLE> Abandonner : ~D/~D"
+  "15a3": "<PAD_TRIANGLE> Abandonner : ~D/~D",
+  "15a4": "~S lance un défi : <PAD_DPAD_UP> pour le rejoindre (~D)",
+  "15a5": "Défi terminé : en attente des autres joueurs (~D/~D)",
+  "15a6": "~S remporte le défi",
+  "15a7": "Égalité : chaque gagnant reçoit la récompense",
+  "15a8": "Personne n'a réussi le défi"
 }

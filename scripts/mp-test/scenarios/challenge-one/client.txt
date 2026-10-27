@@ -1,0 +1,34 @@
+# Burning bush challenge in co-op, guest side: joins the host's challenge and reaches it while the
+# host failed: the reward is the guest's.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+80 log-challenge
+82 wait-challenge 1
+83 log-challenge
+83.5 screenshot invited
+85 press up 100
+86 wait-challenge 3
+87 log-challenge
+87.5 log-me
+95 goto-challenge-orb
+96 log-challenge
+96.5 log-fail
+97 wait-challenge 5
+98 log-challenge
+98.5 screenshot decided
+102 log-challenge
+104 log
