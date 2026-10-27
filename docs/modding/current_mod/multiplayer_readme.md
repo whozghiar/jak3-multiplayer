@@ -214,7 +214,9 @@ touching every part of a vehicle for several frames counts once, as stock code c
 - **Authority.** The host always simulates its NPCs. A guest shows the NPCs of a lower-slot
   authority within 60 m and simulates its own once farther than 90 m from all of them, after 2 s
   in the new situation (`mp-update-authority`); its state carries the `authority` flag. An
-  authority sends the NPCs within 100 m of the players it serves (itself, and the players who are
+  authority sends the characters within 100 m and the vehicles within 350 m
+  (`MP_SEND_RANGE_VEHICLE`: of the barges the host saw on the port's water, the guest had one at
+  100 m) of the players it serves (itself, and the players who are
   not authorities and whose nearest authority it is), and drops the copies of another authority's
   NPCs standing nearer to itself than to that player.
 - **Nothing vanishes under a player's eyes.** The game removes what its player does not see:
@@ -1311,7 +1313,8 @@ colors (`color-mult`, `color-emissive`: one byte per channel, 128 = 1.0, `mp-pac
 to its copy every frame (`mp-unpack-color`); 0 means none sent (world objects, shots). The body
 variants (`seg-mask`) were already sent.
 
-Checked by `tints`: in Haven's port, every copy on the guest of a tinted vehicle of the host wears
+Checked by `tints`: in Haven's port, the guest has a copy of each of the host's barges within 340 m
+(17; one before vehicles were sent to 350 m), and every copy of a tinted vehicle of the host wears
 its tint within 1/100 (a car painted 0.6 1.2 1.2 drawn 0.601 1.203 1.203); `tints-before` (test
 switch `tints-off`) shows them in the default paint.
 
@@ -1904,7 +1907,8 @@ public IP.
 
 ## 7. Change log
 
-- **2026-10-27:** memory, events and sync. Players in places at the same coordinates (the
+- **2026-10-27:** memory, events and sync. Vehicles are sent to 350 m (the port's barges on every
+  screen). Players in places at the same coordinates (the
   volcano, the mine, the war factory and the precursor ship, the catacombs and their rail, the
   halfpipe, the nest, all over Haven's centre) never see each other and count as far apart (4.27).
   Copies wear their original's tint, a vehicle's paint or a citizen's shade (protocol 10, 4.28).
