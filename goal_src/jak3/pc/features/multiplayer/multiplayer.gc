@@ -95,7 +95,8 @@
                   ;; bits), text = the arc's points (33)
   (skin 20)       ;; the sender's outfit (Appearance page): its tints of groups 0-7 in text (uint32
                   ;; each), 8-11 in iarg 0-3, 12 in pad
-  (econ-pick 21)  ;; to the host: the sender took the precursor orb of entity iarg 0 ("Economy")
+  (econ-pick 21)  ;; to the host: the sender took the precursor orb of entity iarg 0, or won the
+                  ;; challenge of node iarg 1 (when nonzero), fvec x its orbs ("Economy")
   (econ 22)       ;; host to a player: its orbs, trophies, items owned (iarg 0-2), and the result
                   ;; of its purchase (iarg 3: 0 none, 1 bought, 2 refused)
   (econ-buy 23)   ;; to the host: the sender buys shop item iarg 0
@@ -109,7 +110,9 @@
   (fail-show 29)     ;; ... the retry continue (text): show that failure here too
   (world-reset 27)   ;; host to everyone: its world was started again (a mission chosen in game):
                      ;; each guest loads it again
-  (challenge 30)     ;; co-op, a burning bush challenge: iarg 0 = 0 the sender started it (iarg 1 its
+  (role 31)          ;; co-op: the sender now plays character iarg 0 (0 Jak, 1 Daxter): the other
+                     ;; player takes the other one ("Co-op: Jak and Daxter, roles swapped in game")
+  (challenge 30)     ;; a burning bush challenge: iarg 0 = 0 the sender started it (iarg 1 its
                      ;; resolution node, iarg 2 its introduction node: an invitation), 1 the sender
                      ;; takes part, 2 the sender's result (iarg 2: 1 reached, 0 not; fvec x its score)
   (race-progress 26) ;; the sender's race: its task node iarg 0, its result iarg 1 (0 racing, 1
@@ -462,6 +465,40 @@
   (set! (-> *mp-minimap-nodes* node i color) (-> *mp-colors* i))
   )
 
+;; And one marker class per color: copies of the stock racer (class 29, flag racer): the marker our
+;; player has on the minimap (texture map-target-marker, a cone turned as the player faces:
+;; draw-racer-2, minimap.gc), in the player's color at twice the dot's intensity (128 is the
+;; texture's own color; our marker is drawn at 255), drawn into the map's texture within 50 texels
+;; of us. There the dot, drawn over it, is hidden (*mp-minimap-no-dot*, mp-puppet-update);
+;; farther, the dot shows on the minimap's edge. On the big map the cone's class is drawn as the
+;; dot (its bigmap flag, icon and scale): every player shows there.
+(define *mp-minimap-cones* (new 'global 'mp-minimap-nodes))
+
+;; the dot's class while the cone shows: drawn at no size, not on the big map
+(define *mp-minimap-no-dot* (new 'global 'minimap-class-node))
+(mem-copy! (the-as pointer *mp-minimap-no-dot*) (the-as pointer (-> *minimap-class-list* 117)) (size-of minimap-class-node))
+(set! (-> *mp-minimap-no-dot* scale) 0.0)
+(set! (-> *mp-minimap-no-dot* flags) (minimap-flag clamp))
+
+(defconstant MP_CONE_TEXELS 45.0) ;; within this, the cone shows (draw-racer-2 draws within 50 texels)
+
+(dotimes (i 10)
+  (mem-copy! (the-as pointer (-> *mp-minimap-cones* node i)) (the-as pointer (-> *minimap-class-list* 29)) (size-of minimap-class-node))
+  (set! (-> *mp-minimap-cones* node i flags) (minimap-flag racer bigmap))
+  (set! (-> *mp-minimap-cones* node i icon-xy x) (-> *minimap-class-list* 117 icon-xy x))
+  (set! (-> *mp-minimap-cones* node i icon-xy y) (-> *minimap-class-list* 117 icon-xy y))
+  (set! (-> *mp-minimap-cones* node i scale) (-> *minimap-class-list* 117 scale))
+  (let ((col (-> *mp-colors* i)))
+    (set! (-> *mp-minimap-cones* node i color)
+          (copy-and-set-field
+            (copy-and-set-field (copy-and-set-field col r (min 255 (* 2 (-> col r)))) g (min 255 (* 2 (-> col g))))
+            b
+            (min 255 (* 2 (-> col b)))
+            )
+          )
+    )
+  )
+
 ;; Teleport destinations of the Mods menu: label, then continue point (engine/level/level-info.gc).
 (define *mp-zones*
   (new 'static 'boxed-array :type string
@@ -548,6 +585,10 @@
   )
 
 (define-extern mp-coop? (function symbol)) ;; defined below
+(define-extern mp-apply-role (function mp-event none))                        ;; "Co-op mode"
+(define-extern mp-econ-challenge-start (function int none))                   ;; "Economy"
+(define-extern mp-econ-challenge-result (function int int int float none))
+(define-extern mp-econ-challenge-claim (function int int float none))
 
 (defun mp-bbush-node? ((node game-task-node-info))
   "#t for a task node of a burning bush challenge (its introduction or its resolution)."
@@ -1445,7 +1486,8 @@
    (outfit     int32)          ;; Jak's outfit (mp-character-skel)
    (local?     symbol)         ;; #t: shows the local player sitting as a passenger
    (skel-group skeleton-group) ;; model in use, to notice an outfit change
-   (minimap    connection-minimap)
+   (minimap    connection-minimap) ;; its dot (*mp-minimap-nodes*)
+   (cone       connection-minimap) ;; its marker, turned as it faces (*mp-minimap-cones*)
    (ghost      handle)         ;; manipy drawing the driven vehicle
    (ghost-type int32)
    (ghost-skel skeleton-group)
@@ -1691,6 +1733,30 @@
   (none)
   )
 
+(defbehavior mp-puppet-icons-on mp-puppet ()
+  "The player's minimap icons, when missing: its dot and its marker (the cone)."
+  (if (not (-> self minimap))
+      (set! (-> self minimap) (add-icon! *minimap* self (the-as uint 124) (the-as int #f) (the-as vector #t) 0))
+      )
+  (if (not (-> self cone))
+      (set! (-> self cone) (add-icon! *minimap* self (the-as uint 29) (the-as int #f) (the-as vector #t) 0))
+      )
+  (none)
+  )
+
+(defbehavior mp-puppet-icons-off mp-puppet ()
+  "The player's minimap icons removed."
+  (when (-> self minimap)
+    (kill-callback (-> *minimap* engine) (-> self minimap))
+    (set! (-> self minimap) #f)
+    )
+  (when (-> self cone)
+    (kill-callback (-> *minimap* engine) (-> self cone))
+    (set! (-> self cone) #f)
+    )
+  (none)
+  )
+
 (defbehavior mp-puppet-update mp-puppet ()
   "Copy the player's state onto the puppet: place, visibility, tint, animation, vehicle."
   (let ((st (if (-> self local?)
@@ -1716,14 +1782,11 @@
           (cond
             ((not (mp-slot-visible? (-> self slot)))
              (set! shown? #f)
-             (when (-> self minimap)
-               (kill-callback (-> *minimap* engine) (-> self minimap))
-               (set! (-> self minimap) #f)
-               )
+             (mp-puppet-icons-off)
              )
-            ((not (-> self minimap))
-             (set! (-> self minimap) (add-icon! *minimap* self (the-as uint 124) (the-as int #f) (the-as vector #t) 0))
-             )
+            (else
+              (mp-puppet-icons-on)
+              )
             )
           )
         ;; a passenger sits in its driver's seat as this machine sees that vehicle: its own reported
@@ -1782,9 +1845,22 @@
         (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
             (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
             )
-        ;; the color is a marker, not a tint: only the minimap dot takes it
+        ;; the color is a marker, not a tint: only the minimap dot and cone take it; the dot hides
+        ;; where the cone shows, within MP_CONE_TEXELS of the minimap's center
         (if (-> self minimap)
-            (set! (-> self minimap class) (-> *mp-minimap-nodes* node (mp-color-index (-> st color))))
+            (set! (-> self minimap class)
+                  (if (and *target*
+                           (< (vector-vector-xz-distance (-> self root trans) (-> *target* control trans))
+                              (* MP_CONE_TEXELS (-> *minimap* meters-per-texel) (-> *minimap* icon-inv-scale))
+                              )
+                           )
+                      *mp-minimap-no-dot*
+                      (-> *mp-minimap-nodes* node (mp-color-index (-> st color)))
+                      )
+                  )
+            )
+        (if (-> self cone)
+            (set! (-> self cone class) (-> *mp-minimap-cones* node (mp-color-index (-> st color))))
             )
         ;; the animation the player plays, by index; one that is not loaded here falls back to
         ;; the idle stance (resident). Indices: engine/data/art-elts.gc. This only drives the
@@ -2117,10 +2193,7 @@
     (if (and (not (-> self local?)) (= (-> *pc-merc-outlines* dc (-> self slot)) (-> self draw)))
         (set! (-> *pc-merc-outlines* dc (-> self slot)) (the-as draw-control #f))
         )
-    (when (-> self minimap)
-      (kill-callback (-> *minimap* engine) (-> self minimap))
-      (set! (-> self minimap) #f)
-      )
+    (mp-puppet-icons-off)
     )
   :code (behavior ()
     (loop
@@ -2147,6 +2220,7 @@
   (set! (-> self ghost) (the-as handle #f))
   (set! (-> self ghost-type) -1)
   (set! (-> self minimap) #f)
+  (set! (-> self cone) #f)
   ;; one sphere, listed with the player: enemies may pick it as their focus
   (let ((cshape (new 'process 'collide-shape-moving self (collide-list-enum hit-by-others))))
     (set! (-> cshape dynam) (copy *standard-dynamics* 'process))
@@ -2219,7 +2293,7 @@
   (set! (-> self focus-status) (focus-status disable))
   (set! (-> self hurtbox) (the-as handle #f))
   (when (not local?)
-    (set! (-> self minimap) (add-icon! *minimap* self (the-as uint 124) (the-as int #f) (the-as vector #t) 0))
+    (mp-puppet-icons-on)
     (let ((hurtbox (process-spawn mp-hurtbox :name "mp-hurtbox" :to self)))
       (if hurtbox
           (set! (-> self hurtbox) (ppointer->handle hurtbox))
@@ -2414,9 +2488,9 @@
   (when (and (mp-online?)
              (logtest? *mp-world* (mp-world-flag progress))
              (not *mp-progress-replaying*)
-             ;; in co-op each player plays its own burning bush challenges ("Co-op: burning bush
-             ;; challenges"): the others are invited instead
-             (not (and (mp-coop?) (mp-bbush-node? node)))
+             ;; each player plays its own burning bush challenges ("Burning bush challenges"): the
+             ;; others are invited instead
+             (not (mp-bbush-node? node))
              )
     (let ((index (get-idx-in-task-list node)))
       (if (> index 0)
@@ -3842,9 +3916,12 @@
          (mp-apply-skin ev)
          )
         (((mp-event-kind econ-pick))
-         (if (= *mp-mode* (mp-mode host))
-             (mp-econ-claim-orb (-> ev from) (the-as uint (-> ev iarg 0)))
-             )
+         (when (= *mp-mode* (mp-mode host))
+           (if (nonzero? (-> ev iarg 1))
+               (mp-econ-challenge-claim (-> ev from) (-> ev iarg 1) (-> ev fvec x))
+               (mp-econ-claim-orb (-> ev from) (the-as uint (-> ev iarg 0)))
+               )
+           )
          )
         (((mp-event-kind econ))
          (mp-econ-apply ev)
@@ -3859,6 +3936,9 @@
          )
         (((mp-event-kind challenge))
          (mp-apply-challenge ev)
+         )
+        (((mp-event-kind role))
+         (mp-apply-role ev)
          )
         (((mp-event-kind mission-start))
          (mp-apply-mission-start ev)
@@ -5185,7 +5265,7 @@
   )
 
 ;; ------------------------------------------------------------------------------------------------
-;; Co-op: burning bush challenges, side by side
+;; Burning bush challenges, side by side (co-op and free roam)
 ;;
 ;; A burning bush (levels/desert/des-burning-bush.gc) offers a side challenge: talking to it closes
 ;; the challenge's introduction node, which opens its resolution node, whose task manager runs the
@@ -5197,7 +5277,8 @@
 ;; there. Each plays it on its own; its result (reached or not, its score: the jet-board's or a
 ;; vehicle challenge's, else minus the seconds it took) goes to the others. The reward waits until
 ;; every player taking part has its result (or left): only the best of those who reached the
-;; objective gets its own reward (each winner of a tie).
+;; objective gets its own reward (each winner of a tie). Its orbs go to the winner's account too:
+;; the host credits them once it saw that player's result as the best ("Economy").
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_CHALLENGE_INVITE_TIME (seconds 30))  ;; invitations open after the start
@@ -5345,6 +5426,7 @@
        (mp-challenge-as-jak)
        (format 0 "[multiplayer] our challenge ~S starts: the others are invited~%" (-> node name))
        (mp-send-challenge 0 n (-> c intro) 0.0)
+       (mp-econ-challenge-start n)
        )
       )
     )
@@ -5359,7 +5441,16 @@
         (n (-> ev iarg 1))
         (nodes (-> *game-info* sub-task-list))
         )
-    (when (and (mp-coop?) (> n 0) (< n (-> nodes length)) (>= from 0) (< from MP_MAX_PLAYERS))
+    (when (and (mp-online?) (> n 0) (< n (-> nodes length)) (>= from 0) (< from MP_MAX_PLAYERS))
+      ;; the host keeps every result, playing or not, for the winner's orbs ("Economy")
+      (case (-> ev iarg 0)
+        ((0)
+         (mp-econ-challenge-start n)
+         )
+        ((2)
+         (mp-econ-challenge-result from n (-> ev iarg 2) (-> ev fvec x))
+         )
+        )
       (case (-> ev iarg 0)
         ((0)
          (let ((intro (-> ev iarg 2)))
@@ -5520,7 +5611,7 @@
                      )
                 )
          )
-    (when (and (mp-coop?) (>= (-> c phase) 3) ours?)
+    (when (and (mp-online?) (>= (-> c phase) 3) ours?)
       (cond
         ((< (-> c phase) 5)
          (+! (-> c pending) amount)
@@ -5550,7 +5641,7 @@
     (cond
       ((zero? (-> c phase))
        )
-      ((not (mp-coop?))
+      ((not (mp-online?))
        (mp-challenge-reset)
        )
       ((= (-> c phase) 1)
@@ -5644,6 +5735,7 @@
                  )
              (set! (-> c score me) (-> c live-score))
              (mp-send-challenge 2 (-> c node) (if (= end 'reached) 1 0) (-> c live-score))
+             (mp-econ-challenge-result me (-> c node) (if (= end 'reached) 1 0) (-> c live-score))
              (format 0 "[multiplayer] our challenge result: ~A score ~,,2f, manager ~A~%" end (-> c live-score) (if mgr 'alive 'gone))
              )
            )
@@ -5664,6 +5756,8 @@
            (set! (-> c pending) 0.0)
            ;; a live process for the stock's per-level count (it reads the handle's parent)
            (give *game-info* 'skill amount (process->handle *target*))
+           ;; and to our account, which the host checks
+           (mp-econ-challenge-claim *mp-local-slot* (-> c node) amount)
            )
          )
        (if (>= (- (mp-now) (-> c since)) MP_CHALLENGE_SHOW_TIME)
@@ -5769,9 +5863,9 @@
 
 (defbehavior task-manager-init-by-other task-manager ((arg0 game-task-node-info) (arg1 symbol))
   "Stock (it does not return: it goes to the manager's wait state); in co-op the others are told
-   that this mission starts here when our own play started it (above); a burning bush challenge
-   invites them instead (mp-challenge-on-manager)."
-  (if (and (mp-coop?) (mp-bbush-node? arg0))
+   that this mission starts here when our own play started it (above); online, a burning bush
+   challenge invites them instead (mp-challenge-on-manager)."
+  (if (and (mp-online?) (mp-bbush-node? arg0))
       (mp-challenge-on-manager arg0)
       )
   (when (and (mp-coop?)
@@ -5888,9 +5982,45 @@
   (none)
   )
 
+(define *mp-roles-swapped* 0) ;; times the duo's roles were swapped in game (test log)
+
+(defun mp-choose-character ((index int))
+  "Our character chosen (Options > Multiplayer > Character, a test): kept and saved. In a co-op game
+   the duo stays a Jak and a Daxter: the other player takes the other one (role event, mp-apply-role).
+   Our mode follows once we stand (mp-update-character); off Jak's shoulder first (mp-update-perch)."
+  (when (!= index (-> *mp-config* character))
+    (set! (-> *mp-config* character) index)
+    (mp-config-save!)
+    (when (and (mp-coop?) (mp-in-game?))
+      (+! *mp-roles-swapped* 1)
+      (mp-send-event (mp-event-kind role) -1 index 0.0)
+      (format 0 "[multiplayer] co-op: we play ~A now, the other player takes the other character~%" (if (= index 1) 'daxter 'jak))
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-role ((ev mp-event))
+  "Co-op: another player now plays character iarg 0 (mp-choose-character): we take the other one."
+  (when (and (mp-coop?) (= (-> *mp-config* character) (-> ev iarg 0)))
+    (set! (-> *mp-config* character) (if (= (-> ev iarg 0) 1) 0 1))
+    (mp-config-save!)
+    (+! *mp-roles-swapped* 1)
+    (format 0 "[multiplayer] co-op: player ~D plays ~A now: we play ~A~%" (-> ev from) (if (= (-> ev iarg 0) 1) 'daxter 'jak)
+            (if (= (-> *mp-config* character) 1) 'daxter 'jak)
+            )
+    (mp-show-message (if (= (-> *mp-config* character) 1)
+                         "Co-op: roles swapped, you play Daxter"
+                         "Co-op: roles swapped, you play Jak"
+                         )
+                     )
+    )
+  (none)
+  )
+
 (defbehavior mp-update-coop-roles mp-manager ()
   "Co-op, once per session: a guest playing the same character as the host is offered the other one
-   (the duo); it can change it back (Options > Multiplayer)."
+   (the duo). In game a choice swaps the roles (mp-choose-character)."
   (cond
     ((not (mp-coop?))
      (set! *mp-coop-offered?* #f)
@@ -5941,6 +6071,8 @@
               (logtest? (-> st flags) (mp-flag dead hidden))
               (cpad-pressed? 0 x)
               (!= (mp-target-state-name) 'target-indax-grab)
+              ;; the roles swapped: we play Jak now
+              (!= (-> *mp-config* character) 1)
               )
           (mp-stop-perch)
           )
@@ -8094,6 +8226,139 @@
   (none)
   )
 
+;; A challenge's reward (precursor orbs given by its task manager, "Burning bush challenges") has no
+;; entity to check: the winner claims it (econ-pick with iarg 1 = the challenge's node, fvec x the
+;; orbs). Every result goes to every player, so the host keeps them by challenge (a start empties
+;; its entry) and credits a claim once: its player reached the objective with the best score.
+(defconstant MP_ECON_CHALLENGES 4) ;; challenges whose results the host keeps
+
+(deftype mp-econ-challenge (structure)
+  ((node     int32)      ;; its resolution node, 0 free
+   (at       time-frame) ;; last change (real clock): the oldest entry is reused
+   (reached  int32)      ;; one bit per slot that reached the objective
+   (credited int32)      ;; one bit per slot credited
+   (score    float MP_MAX_PLAYERS)
+   )
+  )
+
+(deftype mp-econ-challenges (structure)
+  ((entry mp-econ-challenge MP_ECON_CHALLENGES :inline)
+   )
+  )
+
+(define *mp-econ-challenges* (new 'global 'mp-econ-challenges))
+
+(defun mp-econ-challenge-entry ((node int))
+  "Host: the entry of challenge `node`: the one kept, else the oldest, emptied for it."
+  (let ((all *mp-econ-challenges*)
+        (oldest 0)
+        )
+    (dotimes (i MP_ECON_CHALLENGES)
+      (if (= (-> all entry i node) node)
+          (return (-> all entry i))
+          )
+      (if (< (-> all entry i at) (-> all entry oldest at))
+          (set! oldest i)
+          )
+      )
+    (let ((e (-> all entry oldest)))
+      (set! (-> e node) node)
+      (set! (-> e at) (mp-now))
+      (set! (-> e reached) 0)
+      (set! (-> e credited) 0)
+      e
+      )
+    )
+  )
+
+(defun mp-econ-challenge-start ((node int))
+  "Host: challenge `node` starts (again): its results so far are gone."
+  (when (= *mp-mode* (mp-mode host))
+    (let ((e (mp-econ-challenge-entry node)))
+      (set! (-> e at) (mp-now))
+      (set! (-> e reached) 0)
+      (set! (-> e credited) 0)
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-challenge-result ((slot int) (node int) (reached int) (score float))
+  "Host: player `slot`'s result of challenge `node` (reached 1 or 0, its score), kept for its orbs."
+  (when (and (= *mp-mode* (mp-mode host)) (>= slot 0) (< slot MP_MAX_PLAYERS))
+    (let ((e (mp-econ-challenge-entry node)))
+      (set! (-> e at) (mp-now))
+      (if (nonzero? reached)
+          (logior! (-> e reached) (ash 1 slot))
+          (logclear! (-> e reached) (ash 1 slot))
+          )
+      (set! (-> e score slot) score)
+      )
+    )
+  (none)
+  )
+
+(defun mp-econ-challenge-claim ((slot int) (node int) (amount float))
+  "Player `slot` won challenge `node`: its `amount` orbs for its account. A guest asks the host; the
+   host credits them once, when that player reached the objective with the best score it saw."
+  (cond
+    ((!= *mp-mode* (mp-mode host))
+     (let ((ev (new 'stack 'mp-event)))
+       (set! (-> ev kind) (mp-event-kind econ-pick))
+       (set! (-> ev to) 0)
+       (set! (-> ev iarg 0) 0)
+       (set! (-> ev iarg 1) node)
+       (set! (-> ev fvec x) amount)
+       (pc-mp-send-event ev)
+       )
+     )
+    (else
+      (let ((e (mp-econ-challenge-entry node))
+            (best -1000000000.0)
+            (orbs (the int (+ amount 0.5)))
+            (why (the-as string #f))
+            )
+        (dotimes (i MP_MAX_PLAYERS)
+          (if (logtest? (-> e reached) (ash 1 i))
+              (set! best (fmax best (-> e score i)))
+              )
+          )
+        (cond
+          ((not (-> *mp-econ* open?))
+           (set! why "no accounts")
+           )
+          ((not (and (>= slot 0) (< slot MP_MAX_PLAYERS) (logtest? (-> e reached) (ash 1 slot))))
+           (set! why "no objective reached")
+           )
+          ((< (-> e score slot) (+ best -0.001))
+           (set! why "not the best")
+           )
+          ((logtest? (-> e credited) (ash 1 slot))
+           (set! why "already credited")
+           )
+          ((or (<= orbs 0) (> orbs 100))
+           (set! why "not a reward")
+           )
+          )
+        (cond
+          (why
+            (+! (-> *mp-econ* refused) 1)
+            (format 0 "[multiplayer] economy: challenge reward of player ~D refused: ~S~%" slot why)
+            )
+          (else
+            (logior! (-> e credited) (ash 1 slot))
+            (+! (-> *mp-econ* credits) 1)
+            (pc-mp-econ-credit slot 0 orbs (mp-econ-player-name slot))
+            (format 0 "[multiplayer] economy: ~D orb(s) of a challenge for player ~D~%" orbs slot)
+            (mp-econ-send slot 0)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-econ-buy ((slot int) (item int))
   "Host: player `slot` buys shop item `item`: paid and owned when its account has the orbs and does
    not own it yet; the answer sent back."
@@ -8202,10 +8467,17 @@
       (let* ((proc (handle->process arg2))
              (aid (if (and proc (-> proc entity)) (-> proc entity aid) (the-as uint 0)))
              )
-        (if (= *mp-mode* (mp-mode host))
-            (mp-econ-claim-orb *mp-local-slot* aid)
+        ;; an orb without an entity (a challenge's reward) has its own claim (mp-econ-challenge-claim)
+        (cond
+          ((zero? aid)
+           )
+          ((= *mp-mode* (mp-mode host))
+           (mp-econ-claim-orb *mp-local-slot* aid)
+           )
+          (else
             (mp-send-event (mp-event-kind econ-pick) 0 (the-as int aid) arg1)
             )
+          )
         )
       )
     ret

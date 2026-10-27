@@ -99,6 +99,7 @@
 ;;   log-copies <slot>                                       every object of a player received here, drawn or not
 ;;   goto-float | log-float                                  floating platforms (volcano)
 ;;   log-play | trace-play                                   our player's state, modes, task managers; each new state
+;;   choose-character <0|1> | log-role                       in-game character choice (co-op: swap); roles, minimap icons
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
@@ -3003,8 +3004,9 @@
                 "[mp-test] look ~D player color #x~X minimap #x~X markers drawn ~D last #x~X~%"
                 slot
                 (mp-color-rgba (-> st color))
+                ;; the dot's class of that color (hidden where its cone shows: mp-puppet-update)
                 (if (-> puppet minimap)
-                    (-> puppet minimap class color)
+                    (-> *mp-minimap-nodes* node (mp-color-index (-> st color)) color)
                     0
                     )
                 (-> *mp-marker-stats* drawn)
@@ -3497,6 +3499,38 @@
                  (-> *display* target-clock frame-counter) (-> *display* entity-clock frame-counter)
                  (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
                  )
+         )
+        ((string= cmd "choose-character")
+         ;; choose-character <0|1>: our character chosen in game, as Options > Multiplayer > Character
+         ;; does (in co-op the other player takes the other one)
+         (mp-choose-character (mp-test-int))
+         )
+        ((string= cmd "log-role")
+         ;; log-role: our character, whether we play Daxter's mode, the roles swapped so far, the
+         ;; other player's character, its minimap dot and cone here and the cone's color
+         (format 0 "[mp-test] role character ~D indax ~A swapped ~D" (-> *mp-config* character)
+                 (and *target* (focus-test? *target* indax)) *mp-roles-swapped*
+                 )
+         (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+           (dotimes (i MP_MAX_PLAYERS)
+             (let ((st (mp-remote-state i))
+                   (pup (if mgr (the-as mp-puppet (handle->process (-> mgr puppets i)))))
+                   )
+               (when st
+                 (format 0 " remote ~D character ~D dot ~A cone ~A" i (logand (-> st character) 15)
+                         (and pup (-> pup minimap) #t) (and pup (-> pup cone) #t)
+                         )
+                 (if (and pup (-> pup cone))
+                     (format 0 " cone-color #x~X class ~S" (-> pup cone class color) (-> pup cone class name))
+                     )
+                 (if (and pup (-> pup minimap))
+                     (format 0 " dot-shown ~A" (!= (-> pup minimap class) *mp-minimap-no-dot*))
+                     )
+                 )
+               )
+             )
+           )
+         (format 0 "~%")
          )
         ((string= cmd "trace-play")
          ;; trace-play: log each new state of our player from now on (mp-test-update)

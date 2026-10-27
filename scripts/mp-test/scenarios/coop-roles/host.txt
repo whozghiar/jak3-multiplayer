@@ -1,0 +1,24 @@
+# Co-op roles swapped in game, host side: the host (Jak) takes Daxter (Options > Multiplayer >
+# Character): the guest (Daxter) becomes Jak. Later the guest takes Daxter back: the host is Jak
+# again. Both minimaps show the other player's cone in its color.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission sewer-met-hum
+63 press x 100
+70 wait-player 1
+75 log-role
+76 screenshot before
+90 choose-character 1
+100 log-role
+100.5 screenshot swapped
+125 log-role
+125.5 screenshot back
+127 log

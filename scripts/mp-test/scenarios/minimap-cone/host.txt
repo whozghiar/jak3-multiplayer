@@ -1,0 +1,17 @@
+# Minimap cone, host side (free roam, Spargus): the guest walks about 30 m away and faces the
+# host; the host's minimap shows its cone, turned toward us, in its color (blue), its dot hidden.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+63 press x 100
+70 wait-player 1
+97 log-role
+98 screenshot cone
+100 log

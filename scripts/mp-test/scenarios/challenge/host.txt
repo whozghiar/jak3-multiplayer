@@ -15,6 +15,7 @@
 31 coop-mission sewer-met-hum
 63 press x 100
 70 wait-player 1
+71 log-econ
 72 continue ctygenb-bbush-1
 88 log-me
 89 log-challenge
@@ -29,4 +30,5 @@
 99 log-challenge
 99.5 screenshot decided
 103 log-challenge
+103.5 log-econ
 104 log

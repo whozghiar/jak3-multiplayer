@@ -1,0 +1,18 @@
+# Free roam: each player chooses its own character in game, host side: the host stays Jak while
+# the guest (Daxter) takes Jak too.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+63 press x 100
+70 wait-player 1
+75 log-role
+90 log-role
+90.5 screenshot both-jak
+94 log

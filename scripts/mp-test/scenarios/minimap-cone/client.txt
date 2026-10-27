@@ -1,0 +1,23 @@
+# Minimap cone, guest side: walks away from the host for 10 s (rocks stop it about 30 m away),
+# then faces it.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+74 stick 128 0 10000
+85 face-player 0
+86 log-me
+92 screenshot cone
+95 log

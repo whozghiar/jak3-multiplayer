@@ -36,7 +36,9 @@ Daxter co-op duo with its own multiplayer save.
     host can start another mission for both players (START > Options > Multiplayer > Choose a
     mission). The campaign is saved on
     the host's computer as a multiplayer save of its own, apart from the memory card's save
-    slots. A guest who picks the host's character is offered the other one. In cutscenes, Jak
+    slots. A guest who picks the host's character is offered the other one, and in game either
+    player can swap the roles (START > Options > Multiplayer > Character): there is always one
+    Jak and one Daxter. In cutscenes, Jak
     wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
     on foot while the other one is alive nearby watches them for 5 seconds ("Spectating"), their
     body on the ground, then comes back next to them, and the mission goes on. When one player
@@ -45,7 +47,7 @@ Daxter co-op duo with its own multiplayer save.
     waits for both: when both chose to retry (or to quit), both are put back together, at the
     mission's start or at the respawn point. When one player starts a burning bush challenge,
     the other can join it for 30 seconds (D-pad up): both play it, each with their own score (the
-    player playing Daxter plays it as Jak), and only the best of those who complete it gets the
+    player playing Daxter plays it as Jak), the same in free roam, and only the best of those who complete it gets the
     reward. Players cannot hurt each other or each other's vehicles, and where the
     game leaves a lizard, two wait side by side, one for each player. A cutscene is skipped once both players asked
     (triangle); only the host can pause it. A waypoint (the yellow beam) waits for both players to
@@ -79,8 +81,8 @@ Daxter co-op duo with its own multiplayer save.
 - **Appearance:** Options > Multiplayer > Appearance colors each part of Jak's and Daxter's
   clothes (shirt, armor, pants, boots, scarf, hair, fur...), with a turning preview. Every player
   sees your outfit.
-- **Your color:** ten colors, shown as a small square before your name and as your dot on the
-  minimap.
+- **Your color:** ten colors, shown as a small square before your name and on the minimap, as
+  a cone turned the way you face (like your own marker) and as a dot on its edge when you are far.
 - **See each other:** every player appears with their name and health bar over their head, as a
   dot on the minimap, with Daxter on their shoulder, their gun and its laser sight, their shots,
   their hoverboard and the vehicle they drive, in their own outfit, moving exactly as they move
@@ -138,7 +140,8 @@ Daxter co-op duo with its own multiplayer save.
    missions). The host starts the
    countdown (X) once everyone is ready, and the guests follow into its world when it ends. Circle opens the multiplayer options
    (name, color, address), triangle leaves the lobby.
-4. In game, START > **Options > Multiplayer** changes your name, character, color and
+4. In game, START > **Options > Multiplayer** changes your name, character (in free roam your
+   own; in co-op it swaps the roles), color and
    appearance. In co-op the host also finds **Choose a mission** there: an act, then a mission,
    started for both players (the guest loads the host's world again). The server administration, hosting and joining are at the title screen and in the
    lobby.

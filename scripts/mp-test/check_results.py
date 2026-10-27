@@ -974,7 +974,46 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
-    elif scenario in ("challenge", "challenge-one"):
+    elif scenario == "minimap-cone":
+        ROLE = r"\] role character (\d) indax (#t|#f) swapped (\d+) remote (\d) character (\d) dot (#t|#f) cone (#t|#f) cone-color #x(\w+) class (\S+) dot-shown (#t|#f)"
+        hr = grab(host, ROLE)
+        moved = grab(client, r"\] me ([-\d.]+) ([-\d.]+) ([-\d.]+) ")
+        c.check(scenario, "the guest walked away (about 30 m in Spargus); the host's minimap marks it with its cone in its color, its dot hidden there (the cone alone, as our own marker)",
+                bool(hr) and hr[-1][6] == "#t" and hr[-1][7].lower() == "80ff8040" and hr[-1][8] == "racer" and hr[-1][9] == "#f",
+                f"host log {hr[-1:]}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
+    elif scenario in ("coop-roles", "free-roles"):
+        ROLE = r"\] role character (\d) indax (#t|#f) swapped (\d+)(?: remote (\d) character (\d) dot (#t|#f) cone (#t|#f)(?: cone-color #x(\w+) class (\S+))?)?"
+        hr, gr = grab(host, ROLE), grab(client, ROLE)
+        def who(f):
+            return (f[0], f[1]) if f else None
+        c.check(scenario, "at the start the host plays Jak and the guest Daxter (its mode), each seeing the other's character",
+                len(hr) >= 1 and len(gr) >= 1 and who(hr[0]) == ("0", "#f") and who(gr[0]) == ("1", "#t")
+                and hr[0][4] == "1" and gr[0][4] == "0", f"host {hr[:1]}, guest {gr[:1]}")
+        if scenario == "coop-roles":
+            c.check(scenario, "the host takes Daxter in game: the guest becomes Jak (told, its mode left), the host enters Daxter's mode",
+                    len(hr) >= 2 and len(gr) >= 2 and who(hr[1]) == ("1", "#t") and who(gr[1]) == ("0", "#f")
+                    and any("co-op: player 0 plays daxter now: we play jak" in l for l in client),
+                    f"host {hr[1:2]}, guest {gr[1:2]}")
+            c.check(scenario, "the guest takes Daxter back: the host is Jak again; always one Jak and one Daxter",
+                    len(hr) >= 3 and len(gr) >= 3 and who(hr[2]) == ("0", "#f") and who(gr[2]) == ("1", "#t")
+                    and any("co-op: player 1 plays daxter now: we play jak" in l for l in host)
+                    and all(f[0] != f[4] for f in hr + gr), f"host {hr[2:3]}, guest {gr[2:3]}")
+            c.check(scenario, "each minimap has the other player's icons: its cone (the racer marker) in that player's color, and its dot (shown when far)",
+                    all(f[5] == "#t" and f[6] == "#t" and f[8] == "racer" for f in hr + gr)
+                    and all(f[7].lower() == "80ff8040" for f in hr) and all(f[7].lower() == "803030ff" for f in gr),
+                    f"host sees {[f[7] for f in hr]}, guest sees {[f[7] for f in gr]}")
+        else:
+            c.check(scenario, "free roam: the guest takes Jak in game while the host keeps Jak (no swap, two Jaks)",
+                    len(hr) >= 2 and len(gr) >= 2 and who(gr[1]) == ("0", "#f") and who(hr[1]) == ("0", "#f")
+                    and hr[1][4] == "0" and hr[1][2] == "0" and not any("co-op: " in l for l in host + client),
+                    f"host {hr[1:2]}, guest {gr[1:2]}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
+    elif scenario in ("challenge", "challenge-one", "challenge-free"):
         CH = r"\] challenge phase (\d+) node (\d+) starter (\d+) players #x(\w+) results #x(\w+) reached #x(\w+) winners #x(\w+) pending ([\d.]+) given ([\d.]+) skill ([\d.]+)"
         ME = r"\] me ([-\d.]+) ([-\d.]+) ([-\d.]+) "
         RES = r"our challenge result: (\w+) score ([-\d.]+)"
@@ -1010,6 +1049,13 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and hc[-1][4] == "3" and gc[-1][4] == "3", f"host {hc[-1:]}, guest {gc[-1:]}")
         win, lose = (client, host) if one else (host, client)
         wc, lc = (gc, hc) if one else (hc, gc)
+        if scenario != "challenge-one":
+            ECON = r"\] econ orbs (\d+) trophies"
+            he, ge = grab(host, ECON), grab(client, ECON)
+            c.check(scenario, "the winner's account gets the reward's orbs too (the host checked its result as the best), the other's nothing",
+                    len(he) >= 2 and len(ge) >= 2 and int(he[-1][0]) - int(he[0][0]) == 3 and int(ge[-1][0]) == int(ge[0][0])
+                    and any("economy: 3 orb(s) of a challenge for player 0" in l for l in host),
+                    f"host orbs {[f[0] for f in he]}, guest orbs {[f[0] for f in ge]}")
         c.check(scenario, "the reward waits for every result: the winner gets it (3 orbs), the other none",
                 any("waits for every result" in l for l in win) and any("its reward (3.0) is ours" in l for l in win)
                 and float(wc[-1][8]) == 3.0 and float(wc[-1][9]) == 3.0

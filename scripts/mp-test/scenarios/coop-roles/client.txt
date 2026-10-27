@@ -1,0 +1,26 @@
+# Co-op roles swapped in game, guest side: the guest (Daxter) becomes Jak when the host takes
+# Daxter, then takes Daxter back itself: the host is Jak again.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+64 log-role
+64.5 screenshot before
+100 log-role
+100.5 screenshot swapped
+106 choose-character 1
+120 log-role
+120.5 screenshot back
+127 log

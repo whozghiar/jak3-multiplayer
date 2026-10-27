@@ -17,6 +17,7 @@
 38.5 wait-menu mp-lobby-join
 57 press x 100
 62 wait-joined
+79 log-econ
 80 log-challenge
 82 wait-challenge 1
 83 log-challenge
@@ -32,4 +33,5 @@
 98 log-challenge
 98.5 screenshot decided
 102 log-challenge
+103 log-econ
 104 log

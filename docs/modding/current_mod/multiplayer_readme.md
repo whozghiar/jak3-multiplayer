@@ -500,14 +500,14 @@ world and has NPCs react to online players, and to take the best of both. Read i
 | Free roam: the end of the game, everything unlocked for everyone | 1.7. |
 | Co-op: two players, a mission chosen, a new campaign or the campaign continued, saved at the host's as multiplayer; no Daxter on Jak's shoulder when the other plays Daxter | 1.7. |
 | Jak or Daxter | **Character** carousel, L1 / R1 in the lobby. Daxter is the stock playable-Daxter mode (`indax`), made resident in GAME (section 3). He fights with the guns like Jak, and drives vehicles as Daxter (4.3). |
-| Color | **Color** carousel. A marker, not a tint: a small square of the player's color before its name, and its minimap dot in that color (own copies of the stock dot class, `*mp-minimap-nodes*`). |
+| Color | **Color** carousel. A marker, not a tint: a small square of the player's color before its name, and its minimap icons in that color (own copies of stock classes): a cone (`*mp-minimap-cones*`, the racers' class 29: the marker our player has, `map-target-marker`, turned as the player faces, at twice the dot's intensity as ours; `draw-racer-2` draws it into the map's texture within 50 texels of us) and a dot (`*mp-minimap-nodes*`, the stock clamped dot, 117) on the minimap's edge for a player farther away, hidden nearer (`*mp-minimap-no-dot*`, no size: drawn after the cone, it covered it). On the big map the cone's class is drawn as that dot (its `bigmap` flag, icon and scale). |
 | Cheats menu per player | Mods menu (L3 + SELECT) > multiplayer: every weapon, refill ammo, restore health, dark eco, light eco, invincibility, teleport to a zone, teleport to a player. Greyed out for guests when the host disallows cheats. |
 | Health bar above players | Name, color square and health bar (green, yellow, red) over every remote player in view. |
 | Shared vehicle: steal or sit next to the driver | Next to a remote driver's vehicle: press triangle to steal it, L1 + triangle to ride as passenger when it has a free seat (himstan's binding). A guest can also take the host's NPC vehicles. The prompts are the game's own kind: `print-game-text` with a `<PAD_TRIANGLE>` icon, where the game draws its vehicle prompt (`vehicle-method-144`). See 4.3. |
 | Synchronize everything | Section 1.2. |
 | Players hit each other, with a reaction | Section 1.3: an `mp-hurtbox` child of each puppet receives the local player's blows and shots; the victim plays the stock hit reaction, pushed away from the attacker. Host setting **Players can hit each other** (on by default). |
 | Game entities focus any player | Puppets are `process-focusable` in the player collide list with `collide-spec jak`, which `enemy::find-best-focus` considers. |
-| Players on the minimap in real time | Each puppet has a minimap icon in its player's color. |
+| Players on the minimap in real time | Each puppet has two minimap icons in its player's color (`mp-puppet-icons-on`): a cone turned as it faces, as our own marker, near us, and a dot on the edge when it is farther (`mp-puppet-update`). |
 | Administration page when hosting | Options > Multiplayer > **Server administration**, at the title screen and in the lobby: pick a player, kick, ban, teleport them or everyone to you, cheats for guests, players hitting each other (never in co-op, 4.23), share story progress, share time of day, stop the server. The host's Mods menu also credits it 100 precursor orbs or 100 Metal Head trophies (4.20). |
 | A 10-second countdown in the lobby, the host can cancel it | 1.8. |
 | The host's SELECT pauses everyone, the game resumes 3 s after the host asks | 4.10. |
@@ -1318,14 +1318,14 @@ Checked by `tints`: in Haven's port, the guest has a copy of each of the host's 
 its tint within 1/100 (a car painted 0.6 1.2 1.2 drawn 0.601 1.203 1.203); `tints-before` (test
 switch `tints-off`) shows them in the default paint.
 
-### 4.29 Co-op: burning bush challenges
+### 4.29 Burning bush challenges, co-op and free roam
 
 A burning bush (`levels/desert/des-burning-bush.gc`) offers a side challenge: a place to reach in
 time (with a precursor orb there), rings, a chase, a jet-board or vehicle score, a time trial...
 Talking to it closes the challenge's introduction node, which opens its resolution node, whose
 task manager runs the challenge and gives its reward: precursor orbs (`give 'skill`, with the
 manager's handle or the handle of the orb it left). Both nodes carry the `bbush` flag. In co-op
-(multiplayer.gc "Co-op: burning bush challenges"):
+and in free roam alike (multiplayer.gc "Burning bush challenges, side by side"):
 
 - **Each player's own.** The challenges' nodes are not shared (1.5) and their failures are not
   voted (4.26: `personal?`): a player who fails one chooses alone, the others play on.
@@ -1355,6 +1355,13 @@ manager's handle or the handle of the orb it left). Both nodes carry the `bbush`
   winner of a tie); the winner gets its reward ("Host wins the challenge"), the others none. The
   reward is given with our player's handle: the stock's per-level count reads the parent of the
   handle's process, and the manager may be gone by then.
+- **The winner's account.** Those orbs are the game's (`give 'skill`); the shop's money is the
+  account the host keeps (4.20), which credits only what it checks: a reward has no orb entity to
+  check. Every result goes to every player, so the host keeps them by challenge, playing or not
+  (`mp-econ-challenge-result`, a start empties them); the winner claims its orbs (`econ-pick`
+  with the challenge's node, `mp-econ-challenge-claim`), credited once when its player reached the
+  objective with the best score the host saw. A `give` without an entity no longer sends an orb
+  claim the host refused.
 
 Checked by `challenge`: the host starts the city's get-to challenge 26 at Haven's ruins bush, the
 guest accepts and stands 7 m from it; both reach the orb (the host in 6.05 s, the guest in 8.81
@@ -1365,7 +1372,8 @@ touched); the judges score 500000 trick points (host) and 300000 (guest), both g
 gets its 18 orbs, the guest's are lost, and the guest is Daxter again. `challenge-ring` (Spargus's
 rings, `wascity-bbush-ring-3`) and `challenge-eggs` (the desert's egg hunt,
 `desert-bbush-egg-spider-1`, its prerequisite closed with `close-node`): each player ends it on its
-own, the faster gets the manager's 10 (or 18) orbs. A challenge's introduction is open only outside
+own, the faster gets the manager's 10 (or 18) orbs. `challenge-free`: `challenge` in free roam;
+in both the winner's account gains the 3 orbs, the other's nothing. A challenge's introduction is open only outside
 an exclusive story mission (`game-task-node-info-method-12`): the bush offers nothing during one,
 and an invitation finds it "not open here".
 
@@ -1470,6 +1478,25 @@ object (misaligned)` when a turret goes is the stock's (`target-turret` `deactiv
 HUD's handle with `valid?`). A goalc started elsewhere (another project's REPL) can connect to a
 test instance's debug port and send it code: `[DECI2] Connected!` in its log, then
 `call_method_of_type failed!` and crashes; such a run says nothing about the mod.
+
+### 4.33 Jak or Daxter in game, and the duo
+
+START > Options > Multiplayer > **Character** chooses Jak or Daxter in game too
+(`mp-choose-character`); our mode follows once we stand (`mp-update-character`: Daxter's mode from
+the stance, out of it from his stance).
+
+- **Free roam:** each player plays the character it chooses, two Jaks or two Daxters alike.
+- **Co-op:** the duo stays a Jak and a Daxter. A choice in game swaps the roles: the player sends
+  the character it takes (`role` event); the other one, playing it too, takes the other one, saved,
+  "Co-op: roles swapped, you play Jak" (`mp-apply-role`). A Daxter on a Jak's shoulder who becomes
+  Jak jumps off (`mp-update-perch`). At a game's start a guest with the host's character still gets
+  the other one (`mp-update-coop-roles`).
+
+Checked by `coop-roles`: in the sewers, the host (Jak) takes Daxter, the guest (Daxter) becomes Jak;
+the guest takes Daxter back, the host is Jak again; always one of each, each player's mode
+following; both minimaps mark the other with its cone in its color. `free-roles`: in free roam the
+guest takes Jak, the host stays Jak. `minimap-cone`: the guest 30 m away shows as its cone alone on
+the host's minimap, as our own marker.
 
 ## 5. Testing in game
 
@@ -1595,6 +1622,7 @@ A script line is `<seconds> <command>`:
 | `trick-points <n>` | Our player's trick points, what the jet-board's judge scores. |
 | `close-node <name>` | That task node closed, as the story closes it (a challenge's prerequisite). |
 | `unlock-board`, `log-bodax` | The jet-board and its zap unlocked; our player on the jet-board as Daxter: state, on, camera, the board's scale and whether it is drawn, the sidekick drawn, his board clips loaded (56 of 67). |
+| `choose-character <0\|1>`, `log-role` | Our character chosen in game, as the Character carousel does (co-op: the roles swap); our character, Daxter's mode or not, the swaps, each other player's character and its minimap dot and cone here (the cone's color and class). |
 | `log-play`, `trace-play` | Our player's state, its modes (vehicle, board, lizard, Daxter, turret, rail, tube, mech, grabbed, dead), the task managers alive, the turrets (state, distance); each new state from now on. |
 | `log-mem` | The process heap (free, used), the global heap's free room, the processes alive, our copies, the NPCs forced to compute every bone, the art groups loaded for others. |
 | `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
@@ -1829,7 +1857,11 @@ passed, no crash.
 | `tints`, `tints-before` | Tints of the copies | Haven's port: the copies of the host's tinted vehicles wear their tint on the guest within 1/100; before (`tints-off`), the default paint; 3 checks each. |
 | `challenge-board` | Co-op: the jet-board challenge | The guest (Daxter) joins the host's jet-board challenge as Jak; the judges score 500000 and 300000 trick points (`trick-points`): the higher wins the 18 orbs of its gold cup; the guest is Daxter again; 6 checks. |
 | `challenge-ring`, `challenge-eggs` | Co-op: rings and an egg hunt | Spargus's rings and the desert's egg hunt: invited, joined, each ended on its own (7.3 s and 8.5 to 9 s), the faster gets the manager's orbs (10, 18); 5 checks each. |
-| `challenge`, `challenge-one` | Co-op: burning bush challenges | The host starts the city's get-to challenge 26, the guest is invited, accepts, comes to its start and plays it; both reach the orb, the faster (the host) gets the 3 orbs once both results are in; or the host fails and quits, the guest gets them; 6 checks each. |
+| `challenge`, `challenge-one` | Co-op: burning bush challenges | The host starts the city's get-to challenge 26, the guest is invited, accepts, comes to its start and plays it; both reach the orb, the faster (the host) gets the 3 orbs once both results are in; or the host fails and quits, the guest gets them; `challenge` also checks the winner's account (3 orbs more, the other's none); 7 and 6 checks. |
+| `coop-roles` | Co-op roles swapped in game, the minimap cones | The host takes Daxter: the guest becomes Jak; the guest takes Daxter back: the host is Jak again; each mode follows; each minimap marks the other with a dot and a cone in its color; 5 checks. |
+| `free-roles` | Characters in free roam | The guest takes Jak, the host stays Jak; 3 checks. |
+| `minimap-cone` | The cone on the minimap | In Spargus the guest walks about 30 m away and faces the host: the host's minimap shows its blue cone alone (its dot hidden there), turned toward us (screenshot); 4 checks. |
+| `challenge-free` | A burning bush challenge in free roam | As `challenge`, in free roam, with the winner's account credited; 7 checks. |
 | `daxter-board` | Daxter on the jet-board | The guest (Daxter) takes the board out with R2: board states, the board at 60 % and drawn, X's jump, R2 puts it away (Daxter on foot); the host draws his board; 6 checks. |
 | `soak` | Memory over a long session | 5 minutes in Haven's port, the host away and back twice: the heaps and the processes come back to the same levels; 4 checks. |
 | `mission-fail`, `mission-fail-retry` | A mission failed, for every player | The jump training's failure (no choice) or a retry-or-quit one: shown on host and guest; it does not reset by itself; votes that differ decide nothing; both retry (or go on), then a second failure both quit (or go on): decided on both machines within 0.2 s (host time), both at the same spot; 8 checks each. |
@@ -2014,6 +2046,11 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-28:** the user asked for Jak or Daxter in game (co-op: always one of each, so a choice
+  swaps the roles; free roam: each its own), the other players on the minimap in their color with
+  the cone our player has, and the burning bush challenges in free roam too, the best winning the
+  orbs (4.33, 4.29). The winner's orbs now reach its account in co-op too. Scenarios `coop-roles`,
+  `free-roles`, `minimap-cone`, `challenge-free`; commands `choose-character`, `log-role`.
 - **2026-10-27 (night):** the user asked that every mission play in co-op, special phases included
   (4.32): Daxter takes the modes only Jak had, three crashes fixed (the copies' death effect, the
   glider, the torpedo), a racing lizard for every player of the leaper race, the mission's gun

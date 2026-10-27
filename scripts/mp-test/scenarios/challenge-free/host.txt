@@ -1,0 +1,33 @@
+# Burning bush challenge in free roam, host side: at Haven's ruins bush (ctygenb-bbush-1), starts the
+# city get-to challenge 26 as talking to the bush does (no skull gems); the guest is invited, accepts and comes. The
+# host reaches the objective (its orb) about 5 s after its start, the guest about 8 s after its own: the host
+# wins, gets the reward (held until the guest's result), the guest gets none.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+63 press x 100
+70 wait-player 1
+71 log-econ
+72 continue ctygenb-bbush-1
+88 log-me
+89 log-challenge
+90 challenge-start city-bbush-get-to-26
+90.5 wait-challenge 3
+91 log-challenge
+91.5 screenshot started
+96 goto-challenge-orb
+97 log-challenge
+97.5 log-fail
+98 wait-challenge 5
+99 log-challenge
+99.5 screenshot decided
+103 log-challenge
+103.5 log-econ
+104 log
