@@ -1,5 +1,5 @@
 # Places at the same coordinates, as before (places-off: every level in one place), host side: Haven's
-# stadium gate, 22 m from the guest in the volcano: each machine draws the other player in its own
+# ctygenb-bbush-4, 50 m from the guest in the volcano: each machine draws the other player in its own
 # place, and the guest shows the host's NPCs instead of its own.
 1 enable
 1 name Host
@@ -8,12 +8,13 @@
 1 places-off
 38 host 0.0.0.0:7777
 44.9 wait-player 1
-70 continue ctygenb-stadium
+70 continue ctygenb-bbush-4
 99 log-places ctyfarma ctyport ctygenb stadium stadiuma stadiumb rubblea rubbleb lpattack
 99.2 log-places mhcitya mhcityb towera ltowcity volcanoa minea factoryb precura
 99.4 log-places comba raila halfpipe nsta sewa foresta wascitya desert
 100 log-place
-101 screenshot host-haven
+100.6 look-player 1
+101.5 screenshot host-haven
 112 log-place
 112.2 log-me
 116 log

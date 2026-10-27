@@ -1,5 +1,5 @@
-# Places at the same coordinates, host side: stands at Haven's stadium gate (ctygenb-stadium), about
-# 22 m from where the guest stands in the volcano (volcano-flut-1): each sees nothing of the other,
+# Places at the same coordinates, host side: stands at a burning bush of Haven (ctygenb-bbush-4), about
+# 50 m from where the guest stands in the volcano (volcanoa-ladder): each sees nothing of the other,
 # and the guest simulates its own NPCs.
 1 enable
 1 name Host
@@ -7,12 +7,13 @@
 1 mode 0
 38 host 0.0.0.0:7777
 44.9 wait-player 1
-70 continue ctygenb-stadium
+70 continue ctygenb-bbush-4
 99 log-places ctyfarma ctyport ctygenb stadium stadiuma stadiumb rubblea rubbleb lpattack
 99.2 log-places mhcitya mhcityb towera ltowcity volcanoa minea factoryb precura
 99.4 log-places comba raila halfpipe nsta sewa foresta wascitya desert
 100 log-place
-101 screenshot host-haven
+100.6 look-player 1
+101.5 screenshot host-haven
 112 log-place
 112.2 log-me
 116 log

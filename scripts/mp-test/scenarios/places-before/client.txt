@@ -1,14 +1,15 @@
-# Places at the same coordinates, as before (places-off), guest side: joins, then goes to the volcano (volcano-flut-1), about
-# 22 m from the host standing in Haven (ctygenb-stadium).
+# Places at the same coordinates, as before (places-off), guest side: joins, then goes to the volcano (volcanoa-ladder), about
+# 50 m from the host standing in Haven (ctygenb-bbush-4); both look toward the other player.
 1 enable
 1 name Guest
 1 color 2
 1 places-off
 45 join 127.0.0.1:7777
 45.1 wait-joined
-76 continue volcano-flut-1
+76 continue volcanoa-ladder
 103 log-place
-104 screenshot guest-volcano
+103.6 look-player 0
+104.5 screenshot guest-volcano
 112 log-place
 112.2 log-me
 116 log
