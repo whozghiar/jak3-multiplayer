@@ -1325,9 +1325,17 @@ manager's handle or the handle of the orb it left). Both nodes carry the `bbush`
 - **Joining.** Who accepts goes to the challenge's start (its retry continue, the one the game
   restarts it from), then closes its introduction there, as talking to the bush does: the same
   challenge runs in its game, from where the other player stands.
-- **Results.** Each plays on its own. When its task manager ends (complete or resolution: reached;
-  fail, or gone: not reached), its result goes to the others: reached or not, and a score, higher
-  is better: the jet-board's (`task-manager-bbush-board`) or a vehicle challenge's
+- **As Jak.** The challenges are made for Jak (the jet-board's needs his board): a Daxter player
+  (the co-op duo) who starts or joins one plays it as Jak, Daxter again once it is decided (not
+  saved). The jet-board's judge (`judge`, `engine/common-obs/voicebox.gc`) is spawned where the
+  player stands and starts when the player touches it: spawned next to Daxter, it never got that
+  touch; once our player is Jak, a waiting judge of our challenge is touched by it
+  (`mp-challenge-touch-judge`, the event the stock collision sends).
+- **Results.** Each plays on its own. Our task manager is followed every frame, its state and
+  score kept: complete or resolution, reached; fail, not reached. Its handle can stop answering
+  between two frames right after it gives its reward (seen with the jet-board's): then it reached
+  when its reward was given or it was last seen past it. The result goes to the others: reached or
+  not, and a score, higher is better: the jet-board's (`task-manager-bbush-board`) or a vehicle challenge's
   (`task-manager-vehicle-bbush`), read at their offsets from the decompiler's types (those types
   live in level code), else minus the seconds it took.
 - **The reward.** `give` holds a reward from our challenge's manager or a child of it until every
@@ -1340,7 +1348,10 @@ manager's handle or the handle of the orb it left). Both nodes carry the `bbush`
 Checked by `challenge`: the host starts the city's get-to challenge 26 at Haven's ruins bush, the
 guest accepts and stands 7 m from it; both reach the orb (the host in 6.05 s, the guest in 8.81
 s); the host gets the 3 orbs once the guest's result is in, the guest none. `challenge-one`: the
-host fails and quits, the guest reaches it and gets the 3 orbs.
+host fails and quits, the guest reaches it and gets the 3 orbs. `challenge-board`: the jet-board
+challenge (city-jetboard-bbush); the guest, Daxter, joins it as Jak and stands still (its judge is
+touched); the judges score 500000 trick points (host) and 300000 (guest), both gold cups: the host
+gets its 18 orbs, the guest's are lost, and the guest is Daxter again.
 
 ### 4.30 Events while paused
 
@@ -1473,6 +1484,7 @@ A script line is `<seconds> <command>`:
 | `places-off`, `log-place` | Every level in one place, as before 4.27; our level, place and role, and each other player's level, place, whether its puppet is drawn and on our minimap, its distance and its copies. |
 | `tints-off`, `log-tints` | Copies keep the default tint, as before 4.28; the tint of our vehicles and citizens (by pid) and of the copies here (by their owner's pid). |
 | `challenge-start <task>`, `goto-challenge-orb`, `send-complete <type>`, `log-challenge`, `wait-challenge <phase>` | What talking to that task's burning bush does (its introduction closed, no skull gems); our player onto the orb our challenge's manager left; tell the first process of that type its objective is reached; our challenge (phase, players, results, winners, reward held and given, our orbs); wait until our challenge reaches a phase (1 invited, 3 playing, 4 our result in, 5 decided). |
+| `trick-points <n>` | Our player's trick points, what the jet-board's judge scores. |
 | `log-mem` | The process heap (free, used), the global heap's free room, the processes alive, our copies, the NPCs forced to compute every bone, the art groups loaded for others. |
 | `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
 | `goto-merchant [m]`, `walk-to-merchant <frames>` | Stand at Kleiver's spot, or m meters from it facing it; walk toward it (the stick follows the camera). `log-econ` prints his model (alive, level, drawn), whether he is solid, his idle clip, how much he faces us and how far we stand. |
@@ -1704,6 +1716,7 @@ passed, no crash.
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
 | `places`, `places-before` | Places at the same coordinates | The host at Haven's stadium gate, the guest in the volcano 23.6 m away: not drawn, not on the minimap, no copy on either side, the guest keeps its own NPCs; before (`places-off`), each drew the other and the guest showed the host's NPCs; 4 checks each. |
 | `tints`, `tints-before` | Tints of the copies | Haven's port: the copies of the host's tinted vehicles wear their tint on the guest within 1/100; before (`tints-off`), the default paint; 3 checks each. |
+| `challenge-board` | Co-op: the jet-board challenge | The guest (Daxter) joins the host's jet-board challenge as Jak; the judges score 500000 and 300000 trick points (`trick-points`): the higher wins the 18 orbs of its gold cup; the guest is Daxter again; 6 checks. |
 | `challenge`, `challenge-one` | Co-op: burning bush challenges | The host starts the city's get-to challenge 26, the guest is invited, accepts, comes to its start and plays it; both reach the orb, the faster (the host) gets the 3 orbs once both results are in; or the host fails and quits, the guest gets them; 6 checks each. |
 | `soak` | Memory over a long session | 5 minutes in Haven's port, the host away and back twice: the heaps and the processes come back to the same levels; 4 checks. |
 | `mission-fail`, `mission-fail-retry` | A mission failed, for every player | The jump training's failure (no choice) or a retry-or-quit one: shown on host and guest; it does not reset by itself; votes that differ decide nothing; both retry (or go on), then a second failure both quit (or go on): decided on both machines within 0.2 s (host time), both at the same spot; 8 checks each. |
@@ -1885,10 +1898,10 @@ public IP.
   volcano, the mine, the war factory and the precursor ship, the catacombs and their rail, the
   halfpipe, the nest, all over Haven's centre) never see each other and count as far apart (4.27).
   Copies wear their original's tint, a vehicle's paint or a citizen's shade (protocol 10, 4.28).
-  Co-op burning bush challenges: the others are invited, each plays on its own, the best of those
-  who reached the objective gets the reward (4.29). A paused player keeps the events that matter
+  Co-op burning bush challenges: the others are invited, each plays on its own (a Daxter player as
+  Jak), the best of those who reached the objective gets the reward (4.29). A paused player keeps the events that matter
   (4.30); a 5 minute session measured stable. Scenarios `places`, `places-before`, `tints`,
-  `tints-before`, `challenge`, `challenge-one`, `soak`.
+  `tints-before`, `challenge`, `challenge-one`, `challenge-board`, `soak`.
 - **2026-10-21:** after the user's play test: a mission's failure shows for every player at once,
   waits for every player's choice (retry or quit, or go on), and puts every player back together
   (4.26). Scenarios `mission-fail`, `mission-fail-retry`; commands `send-fail`,
