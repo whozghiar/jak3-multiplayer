@@ -886,6 +886,24 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario == "daxter-board":
+        BS = r"\] bodax state (\S+) on (\S+) art \S+ board (\S+) scale ([\d.]+) drawn (\S+)"
+        bs = grab(client, BS)
+        riding = [f for f in bs if f[0].startswith("target-board") and f[1] == "#t"]
+        c.check(scenario, "R2 in Daxter's mode takes the jet-board out: he rides it (the stock board states)",
+                any("Daxter takes the jet-board out" in l for l in client) and bool(riding), f"{[f[0] for f in bs]}")
+        c.check(scenario, "the board under him is drawn at 60 % of its size",
+                bool(riding) and all(f[3] == "0.60" and f[4] == "#t" for f in riding), f"{riding[:2]}")
+        c.check(scenario, "the same mechanics as Jak: board stance and X's jump",
+                any(f[0] == "target-board-stance" for f in riding) and any(f[0] == "target-board-jump" for f in riding), "")
+        c.check(scenario, "R2 puts the board away: Daxter on foot again (his mode)",
+                any("Daxter puts the jet-board away" in l for l in client) and bool(bs) and bs[-1][0].startswith("target-indax"),
+                f"{bs[-1:]}")
+        c.check(scenario, "the other player draws his board (and his model on it)",
+                any(re.search(r"\] copy 1 skel-board id \d+ owner-hides #f drawn #t", l) for l in host), "")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "challenge-board":
         CH = r"\] challenge phase (\d+) node (\d+) starter (\d+) players #x(\w+) results #x(\w+) reached #x(\w+) winners #x(\w+) pending ([\d.]+) given ([\d.]+) skill ([\d.]+)"
         MG = r"\] challenge manager \S+ live \S+ judge (\S+) character (\d+) indax (\S+)"

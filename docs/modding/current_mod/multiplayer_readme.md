@@ -1380,6 +1380,34 @@ and the processes return to the same levels in the same place (host 742-747 KB i
 away), the global heap lost 4.5 KB on the host (its first level change, then 224 bytes per new
 skeleton name kept for the far art: bounded by the game's skeletons).
 
+### 4.31 Daxter on the jet-board
+
+Jak takes the jet-board out with R2 (`want-to-board?` in his stance, `target-board-start`);
+Daxter's mode ignored R2. multiplayer.gc "Daxter on the jet-board":
+
+- **Taking it out.** R2 in his stance or walk sends `'change-mode 'board` (`mp-bodax-update`); his
+  handler (`mp-indax-handler`) goes to the stock `target-board-start`, which leaves his mode. The
+  stock board runs from there: the same mechanics as Jak (jumps, ducks, tricks, grinds, the zap).
+  R2 on the board puts it away; his mode comes back as after a vehicle (`mp-update-character`).
+- **His clips.** The player's own model plays Jak's board clips, hidden (`no-draw-bounds2`), so
+  the board stays under its feet as for Jak. The sidekick plays Daxter's board clips as when he
+  rides on Jak's back (`sidekick.gc`, `'matrix 'board`: the clips `daxter-board-*` matched to Jak's,
+  loaded with Jak's from `jak-board+0-ag`); its root is moved from Jak's joint 37 onto the board,
+  oriented as the board (`mp-cspace<-board-daxter!`, set every frame: the get-on asks `'board`
+  again). Those clips show him clinging to Jak's back: crouched while he rides, lying on the board
+  at rest, stretched in the air (the rendering the user chose over his standing clips or Jak's
+  poses copied joint by joint).
+- **The board** (`board-util.gc`) hid with the player's model (`board-post`): its `use` state's
+  post (`mp-board-post`) draws it under Daxter, at 60 % of its size (`board-scale`).
+- **His camera.** Leaving his mode removed his closer camera (`target-indax-init`'s string length,
+  height and head offset): it is set again while he rides.
+- **The others** draw Daxter's model: for the player, the sidekick's bones are sent (`mp-send-poses`),
+  with the player's effects and sounds (the board's); the board is one of his props.
+
+Checked by `daxter-board`: in the industrial quarter, the guest (Daxter) takes the board out with R2,
+rides it at 60 % (stance, X's jump, riding), puts it away with R2 and is Daxter on foot again; the
+host draws his board.
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1496,6 +1524,7 @@ A script line is `<seconds> <command>`:
 | `tints-off`, `log-tints` | Copies keep the default tint, as before 4.28; the tint of our vehicles and citizens (by pid) and of the copies here (by their owner's pid). |
 | `challenge-start <task>`, `goto-challenge-orb`, `send-complete <type>`, `log-challenge`, `wait-challenge <phase>` | What talking to that task's burning bush does (its introduction closed, no skull gems); our player onto the orb our challenge's manager left; tell the first process of that type its objective is reached; our challenge (phase, players, results, winners, reward held and given, our orbs); wait until our challenge reaches a phase (1 invited, 3 playing, 4 our result in, 5 decided). |
 | `trick-points <n>` | Our player's trick points, what the jet-board's judge scores. |
+| `unlock-board`, `log-bodax` | The jet-board and its zap unlocked; our player on the jet-board as Daxter: state, on, camera, the board's scale and whether it is drawn, the sidekick drawn, his board clips loaded (56 of 67). |
 | `log-mem` | The process heap (free, used), the global heap's free room, the processes alive, our copies, the NPCs forced to compute every bone, the art groups loaded for others. |
 | `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
 | `goto-merchant [m]`, `walk-to-merchant <frames>` | Stand at Kleiver's spot, or m meters from it facing it; walk toward it (the stick follows the camera). `log-econ` prints his model (alive, level, drawn), whether he is solid, his idle clip, how much he faces us and how far we stand. |
@@ -1729,6 +1758,7 @@ passed, no crash.
 | `tints`, `tints-before` | Tints of the copies | Haven's port: the copies of the host's tinted vehicles wear their tint on the guest within 1/100; before (`tints-off`), the default paint; 3 checks each. |
 | `challenge-board` | Co-op: the jet-board challenge | The guest (Daxter) joins the host's jet-board challenge as Jak; the judges score 500000 and 300000 trick points (`trick-points`): the higher wins the 18 orbs of its gold cup; the guest is Daxter again; 6 checks. |
 | `challenge`, `challenge-one` | Co-op: burning bush challenges | The host starts the city's get-to challenge 26, the guest is invited, accepts, comes to its start and plays it; both reach the orb, the faster (the host) gets the 3 orbs once both results are in; or the host fails and quits, the guest gets them; 6 checks each. |
+| `daxter-board` | Daxter on the jet-board | The guest (Daxter) takes the board out with R2: board states, the board at 60 % and drawn, X's jump, R2 puts it away (Daxter on foot); the host draws his board; 6 checks. |
 | `soak` | Memory over a long session | 5 minutes in Haven's port, the host away and back twice: the heaps and the processes come back to the same levels; 4 checks. |
 | `mission-fail`, `mission-fail-retry` | A mission failed, for every player | The jump training's failure (no choice) or a retry-or-quit one: shown on host and guest; it does not reset by itself; votes that differ decide nothing; both retry (or go on), then a second failure both quit (or go on): decided on both machines within 0.2 s (host time), both at the same spot; 8 checks each. |
 | `menu-buttons` | Buttons under the START menu | The menu opened with START, R1, square, L1, the D-pad, X (choosing entries) and triangle pressed, X again right after it closes: no shot, no gun change, no jump or attack, host (Jak, gun out) and guest (Daxter); X made both jump before the history fix (reproduced); 6 checks. |
@@ -1907,6 +1937,8 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-27 (evening):** the user asked that Daxter ride the jet-board alone, with his board
+  clips, the board at his size, the same mechanics as Jak (4.31). Scenario `daxter-board`.
 - **2026-10-27:** memory, events and sync. Vehicles are sent to 350 m (the port's barges on every
   screen). Players in places at the same coordinates (the
   volcano, the mine, the war factory and the precursor ship, the catacombs and their rail, the

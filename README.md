@@ -63,7 +63,8 @@ Daxter co-op duo with its own multiplayer save.
   with the mod and its ammo shown at the bottom of the screen, on foot, on Jak's shoulder, riding
   along or on a lizard. He holds the gun in his hands and aims and fires it with the game's own
   Daxter animations, on every screen. He gets in vehicles and drives them as Daxter, and rides
-  the lizards (triangle next to one), drawn as Daxter on it.
+  the lizards (triangle next to one), drawn as Daxter on it. R2 takes the jet-board out, a board
+  at his size that he rides as Jak does, with his own board animations.
 - **Every weapon:** a Mods menu option gives the gun with its twelve mods, their upgrades and full
   ammo, for Jak and for Daxter alike.
 - **See each other through walls:** a player hidden by a wall, a vehicle or anything else shows
