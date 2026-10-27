@@ -224,7 +224,7 @@
     (when pos
       (dotimes (q MP_MAX_PLAYERS)
         (let ((other (mp-player-pos q)))
-          (if (and (!= q slot) other (mp-authority-flag? q) (< (vector-vector-distance pos other) (meters 90)))
+          (if (and (!= q slot) other (mp-authority-flag? q) (mp-same-space? q slot) (< (vector-vector-distance pos other) (meters 90)))
               (return q)
               )
           )
@@ -253,7 +253,7 @@
                      (when me
                        (dotimes (q *mp-local-slot*)
                          (let ((other (mp-player-pos q)))
-                           (if (and other (mp-authority-flag? q))
+                           (if (and other (mp-authority-flag? q) (mp-slot-here? q))
                                (set! nearest (fmin nearest (vector-vector-distance me other)))
                                )
                            )
@@ -324,7 +324,7 @@
       )
   (dotimes (i MP_MAX_PLAYERS)
     (let ((st (mp-remote-state i)))
-      (if (and st (< (vector-vector-distance pos (-> st trans)) (meters 100)))
+      (if (and st (mp-slot-here? i) (< (vector-vector-distance pos (-> st trans)) (meters 100)))
           (return #t)
           )
       )
@@ -2033,8 +2033,9 @@
 
 (defun mp-replica-wanted? ((st mp-actor-state))
   "#f for an NPC of another authority standing nearer to us than to that player: our own world
-   covers that place, so its copy would be a double; and for a copy of a vehicle we just took."
-  (and (not (mp-stolen-copy? (-> st id) (-> st flags))) (or (not *mp-authority*)
+   covers that place, so its copy would be a double; for a copy of a vehicle we just took; and for
+   what a player in another place at our coordinates sends (\"Places at the same coordinates\")."
+  (and (not (mp-stolen-copy? (-> st id) (-> st flags))) (mp-slot-here? (the-as int (shr (-> st id) 24))) (or (not *mp-authority*)
       (logtest? (-> st flags) (mp-actor-flag owned))
       (let ((me (mp-player-pos *mp-local-slot*))
             (owner (mp-player-pos (the-as int (shr (-> st id) 24))))
@@ -2120,8 +2121,11 @@
               (seen?
                (+! i 1)
                )
-              ;; a vehicle we took: gone with no lingering, ours stands there
-              ((mp-stolen-copy? (-> ws replica-id i) (-> proc net flags))
+              ;; a vehicle we took: gone with no lingering, ours stands there; a copy whose owner went
+              ;; to another place at our coordinates too
+              ((or (mp-stolen-copy? (-> ws replica-id i) (-> proc net flags))
+                   (not (mp-slot-here? (the-as int (shr (-> ws replica-id i) 24))))
+                   )
                (mp-replica-remove i)
                )
               ;; its owner no longer sends it (it left, or the owner went away) while it is in
@@ -3530,11 +3534,11 @@
   )
 
 (defun mp-remote-distance ((pos vector))
-  "Distance from `pos` to the nearest other player."
+  "Distance from `pos` to the nearest other player in our place."
   (let ((best (meters 1000000)))
     (dotimes (i MP_MAX_PLAYERS)
       (let ((st (mp-remote-state i)))
-        (if st
+        (if (and st (mp-slot-here? i))
             (set! best (fmin best (vector-vector-distance pos (-> st trans))))
             )
         )

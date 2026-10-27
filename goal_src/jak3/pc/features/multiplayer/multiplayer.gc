@@ -557,6 +557,83 @@
   #f
   )
 
+;; -------------------------------------------------------------------------------------------------
+;; Places at the same coordinates
+;; -------------------------------------------------------------------------------------------------
+;;
+;; Jak 3 puts several places at the coordinates of Haven's centre, reached through a loading
+;; transition (their entities, decompiler_out/jak3/entities/: the volcano, the mine, the war factory
+;; and the precursor ship above it, the catacombs and their rail below it, the halfpipe, the nest).
+;; A player in one of them stands, in numbers, inside Haven's ruins: its model, its props, its NPCs
+;; and its effects would be drawn there, and the NPC authority would take it for a neighbour. Each
+;; player's place comes from the level it stands in (its state's `level`); players in different
+;; places do not see each other and count as far apart.
+
+(defun mp-charp-prefix? ((s (pointer uint8)) (prefix string))
+  "#t when the C string `s` starts with `prefix`."
+  (dotimes (i (length prefix))
+    (if (!= (-> s i) (-> prefix data i))
+        (return #f)
+        )
+    )
+  #t
+  )
+
+(define *mp-test-places-off* #f) ;; test switch (places-off): every level in place 0, as before
+
+(defun mp-level-space ((name (pointer uint8)))
+  "The place of the level called `name` (a C string): 0 for Haven, the wasteland and every level
+   that never overlaps another place; 1 the volcano, 2 the mine, 3 the war factory, 4 the precursor
+   ship, 5 the catacombs and their rail, 6 the halfpipe, 7 the nest."
+  (cond
+    (*mp-test-places-off* 0)
+    ((mp-charp-prefix? name "volcano") 1)
+    ((mp-charp-prefix? name "mine") 2)
+    ((or (mp-charp-prefix? name "factory") (mp-charp-prefix? name "lfacout")) 3)
+    ((or (mp-charp-prefix? name "precur") (mp-charp-prefix? name "lprecur")) 4)
+    ((or (mp-charp-prefix? name "comb") (mp-charp-prefix? name "rail")) 5)
+    ((mp-charp-prefix? name "halfpipe") 6)
+    ((or (mp-charp-prefix? name "nst") (mp-charp-prefix? name "lnst")) 7)
+    (else 0)
+    )
+  )
+
+(defun mp-slot-space ((slot int))
+  "The place player `slot` stands in (this player included), 0 when unknown."
+  (let ((st (if (= slot *mp-local-slot*)
+                *mp-local*
+                (mp-remote-state slot)
+                )
+            )
+        )
+    (if st
+        (mp-level-space (-> st level))
+        0
+        )
+    )
+  )
+
+(defun mp-same-space? ((a int) (b int))
+  "#t when players `a` and `b` stand in the same place: only then do they see each other."
+  (= (mp-slot-space a) (mp-slot-space b))
+  )
+
+(defun mp-slot-here? ((slot int))
+  "#t when player `slot` stands in our place."
+  (mp-same-space? slot *mp-local-slot*)
+  )
+
+(defun mp-slot-distance ((slot int))
+  "How far player `slot` stands from our player; very far when it is in another place, unknown or
+   when we have no player."
+  (let ((st (mp-remote-state slot)))
+    (if (and st *target* (mp-slot-here? slot))
+        (vector-vector-distance (-> *target* control trans) (-> st trans))
+        (meters 1000000)
+        )
+    )
+  )
+
 (defun mp-inherits? ((typ type) (name symbol))
   "#t when `typ` is the type called `name` or one of its children (walks at most 16 parents)."
   (dotimes (i 16)
@@ -1571,6 +1648,22 @@
         (if (and *mp-test-hide-puppets* (not (-> self local?)))
             (set! shown? #f)
             )
+        ;; a player in another place at the same coordinates (the volcano under Haven's ruins) is
+        ;; not drawn, hit nor marked on the minimap here ("Places at the same coordinates")
+        (when (not (-> self local?))
+          (cond
+            ((not (mp-slot-here? (-> self slot)))
+             (set! shown? #f)
+             (when (-> self minimap)
+               (kill-callback (-> *minimap* engine) (-> self minimap))
+               (set! (-> self minimap) #f)
+               )
+             )
+            ((not (-> self minimap))
+             (set! (-> self minimap) (add-icon! *minimap* self (the-as uint 124) (the-as int #f) (the-as vector #t) 0))
+             )
+            )
+          )
         ;; a passenger sits in its driver's seat as this machine sees that vehicle: its own reported
         ;; position comes through the network twice and would trail behind the vehicle. Our own
         ;; model too, facing the vehicle's way: Jak's grab-ride keeps the facing he got in with.
@@ -1974,7 +2067,8 @@
     )
   :post (behavior ()
     (mp-puppet-update)
-    (if (not (-> self local?))
+    ;; its effects and sounds, unless it stands in another place at our coordinates
+    (if (and (not (-> self local?)) (mp-slot-here? (-> self slot)))
         (mp-play-emitters self (mp-puppet-pose-id (-> self slot)) (-> self fx-group) (-> self fx-tracker))
         )
     (mp-puppet-outline)
@@ -2937,7 +3031,7 @@
     (when (and (-> f regroup?) (not (get-resetter *resetter-control*)) (mp-in-game?))
       (set! (-> f regroup?) #f)
       (let ((host (mp-remote-state 0)))
-        (when (and host *target* (< (meters 40) (vector-vector-distance (-> *target* control trans) (-> host trans))))
+        (when (and host *target* (< (meters 40) (mp-slot-distance 0)))
           (format 0 "[multiplayer] put back far from the host: we go next to it~%")
           (set! *mp-request-teleport* 0)
           )
@@ -3640,14 +3734,21 @@
         (((mp-event-kind vehicle-taken))
          (mp-on-vehicle-taken ev)
          )
+        ;; what a player in another place at our coordinates sets off is not seen here
         (((mp-event-kind effect))
-         (mp-replay-effect ev)
+         (if (mp-slot-here? (-> ev from))
+             (mp-replay-effect ev)
+             )
          )
         (((mp-event-kind projectile))
-         (mp-replay-projectile ev)
+         (if (mp-slot-here? (-> ev from))
+             (mp-replay-projectile ev)
+             )
          )
         (((mp-event-kind weapon))
-         (mp-replay-weapon ev)
+         (if (mp-slot-here? (-> ev from))
+             (mp-replay-weapon ev)
+             )
          )
         (((mp-event-kind pvp))
          (when (and *target* (mp-pvp?))
@@ -4384,6 +4485,7 @@
           ;; the level names of the two players' places; in co-op Daxter never robs the Jak driving
           ;; it: triangle puts him on that Jak's shoulder (mp-update-perch)
           (when (and st
+                     (mp-slot-here? i)
                      (not race?)
                      (logtest? (-> st flags) (mp-flag driving))
                      (>= (-> st veh-type) 0)
@@ -4742,7 +4844,7 @@
                 )
            (format 0 "[multiplayer] player ~D starts ~S too: the host's start stands~%" (-> ev from) (-> node name))
            )
-          ((< (vector-vector-distance (-> *target* control trans) (-> st trans)) MP_MISSION_GATHER)
+          ((< (mp-slot-distance (-> ev from)) MP_MISSION_GATHER)
            (format 0 "[multiplayer] player ~D starts ~S next to us~%" (-> ev from) (-> node name))
            )
           (else
@@ -4912,7 +5014,7 @@
         (let ((best-dist (meters 2.5)))
           (dotimes (i MP_MAX_PLAYERS)
             (let ((st (mp-remote-state i)))
-              (when (and st (or (mp-jak-crouching? st) (mp-jak-driving? st) (mp-jak-on-foot? st)))
+              (when (and st (mp-slot-here? i) (or (mp-jak-crouching? st) (mp-jak-driving? st) (mp-jak-on-foot? st)))
                 (let ((d (cond
                            ((and (mp-jak-driving? st) (or (mp-coop?) (cpad-hold? 0 l1)))
                             (+ (vector-vector-distance (-> *target* control trans) (-> st veh-trans)) (meters -2.5))
@@ -6005,6 +6107,7 @@
         (dotimes (i MP_MAX_PLAYERS)
           (let ((st (mp-remote-state i)))
             (when (and st
+                       (mp-slot-here? i)
                        (logtest? (-> st flags) (mp-flag race-wait))
                        (logtest? (-> st flags) (mp-flag driving))
                        (>= (-> st veh-type) 0)
@@ -6655,7 +6758,7 @@
     (when (and (mp-coop?) *target*)
       (dotimes (i MP_MAX_PLAYERS)
         (let ((st (mp-remote-state i)))
-          (when (and st (not (logtest? (-> st flags) (mp-flag dead hidden))))
+          (when (and st (mp-slot-here? i) (not (logtest? (-> st flags) (mp-flag dead hidden))))
             (let ((d (vector-vector-distance (-> st trans) (-> *target* control trans))))
               (when (< d best-d)
                 (set! best-d d)

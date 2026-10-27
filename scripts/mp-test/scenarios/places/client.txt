@@ -1,0 +1,13 @@
+# Places at the same coordinates, guest side: joins, then goes to the volcano (volcano-flut-1), about
+# 22 m from the host standing in Haven (ctygenb-stadium).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+76 continue volcano-flut-1
+103 log-place
+104 screenshot guest-volcano
+112 log-place
+112.2 log-me
+116 log

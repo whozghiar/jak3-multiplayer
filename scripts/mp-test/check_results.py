@@ -886,6 +886,30 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario in ("places", "places-before"):
+        PO = r"\] place ours (\S+) space (\d+) authority (\S+)"
+        PP = r"\] place player (\d+) level (\S+) space (\d+) here (\S+) drawn (\S+) minimap (\S+) distance ([-\d.]+) copies (\d+)"
+        ho, go = grab(host, PO), grab(client, PO)
+        hp, gp = grab(host, PP), grab(client, PP)
+        c.check(scenario, "the host stands in Haven (ctygenb), the guest in the volcano, under 40 m apart",
+                bool(ho) and ho[-1][0] == "ctygenb" and bool(go) and go[-1][0].startswith("volcano")
+                and bool(hp) and float(hp[-1][6]) < 40, f"host {ho[-1:]}, guest {go[-1:]}, distance {hp[-1][6] if hp else None}")
+        if scenario == "places":
+            c.check(scenario, "each machine knows the other player is in another place: not drawn, not on the minimap, none of its copies",
+                    bool(hp) and bool(gp) and all(f[3] == "#f" and f[4] == "#f" and f[5] == "#f" and f[7] == "0" for f in hp[-2:] + gp[-2:]),
+                    f"host {hp[-1:]}, guest {gp[-1:]}")
+            c.check(scenario, "the guest in the volcano keeps simulating its own NPCs (never shows the host's)",
+                    all(f[2] == "#t" for f in go) and not any("now shows another player's NPCs" in l for l in client),
+                    f"{go}")
+        else:
+            c.check(scenario, "before: each machine draws the other player in its own place, on its minimap",
+                    bool(hp) and bool(gp) and hp[-1][4] == "#t" and gp[-1][4] == "#t" and hp[-1][5] == "#t" and gp[-1][5] == "#t",
+                    f"host {hp[-1:]}, guest {gp[-1:]}")
+            c.check(scenario, "before: the guest in the volcano shows the host's Haven NPCs instead of its own",
+                    bool(go) and go[-1][2] == "#f" and any("now shows another player's NPCs" in l for l in client), f"{go}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "menu-buttons":
         for side, lines in (("host", host), ("guest", client)):
             inp = grab(lines, r"\] input state (\S+) gun (-?\d+) ammo (\S+) (\S+) (\S+) (\S+) daxter-shots (\d+) menu (\S+)")

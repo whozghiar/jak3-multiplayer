@@ -3430,6 +3430,39 @@
                  (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
                  )
          )
+        ((string= cmd "places-off")
+         ;; places-off: every level counts as one place, as before "Places at the same coordinates"
+         (set! *mp-test-places-off* #t)
+         )
+        ((string= cmd "log-place")
+         ;; log-place: our level, place and role; each other player's level and place, whether its
+         ;; puppet is drawn and marked on the minimap here, how far, and how many of its copies
+         (string<-charp *mp-temp-string* (-> *mp-local* level))
+         (format 0 "[mp-test] place ours ~S space ~D authority ~A~%" *mp-temp-string* (mp-slot-space *mp-local-slot*) *mp-authority*)
+         (dotimes (i MP_MAX_PLAYERS)
+           (let ((st (mp-remote-state i)))
+             (when st
+               (let ((pup (the-as mp-puppet (mp-puppet-process i)))
+                     (copies 0)
+                     )
+                 (dotimes (k (-> *mp-world-state* replica-count))
+                   (if (= (the-as int (shr (-> *mp-world-state* replica-id k) 24)) i)
+                       (+! copies 1)
+                       )
+                   )
+                 (string<-charp *mp-temp-string* (-> st level))
+                 (format 0 "[mp-test] place player ~D level ~S space ~D here ~A " i *mp-temp-string* (mp-slot-space i) (mp-slot-here? i))
+                 (format 0 "drawn ~A minimap ~A distance ~,,1m copies ~D~%"
+                         (and pup (not (logtest? (-> pup draw status) (draw-control-status no-draw))))
+                         (and pup (-> pup minimap) #t)
+                         (if *target* (vector-vector-distance (-> *target* control trans) (-> st trans)) 0.0)
+                         copies
+                         )
+                 )
+               )
+             )
+           )
+         )
         ((string= cmd "log-me")
          ;; one short line: own position, speed and state (fine-grained probes)
          (when *target*

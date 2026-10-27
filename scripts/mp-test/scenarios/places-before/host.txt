@@ -1,0 +1,16 @@
+# Places at the same coordinates, as before (places-off: every level in one place), host side: Haven's
+# stadium gate, 22 m from the guest in the volcano: each machine draws the other player in its own
+# place, and the guest shows the host's NPCs instead of its own.
+1 enable
+1 name Host
+1 color 1
+1 mode 0
+1 places-off
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+70 continue ctygenb-stadium
+100 log-place
+101 screenshot host-haven
+112 log-place
+112.2 log-me
+116 log
