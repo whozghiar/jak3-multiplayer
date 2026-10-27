@@ -1369,9 +1369,11 @@
           )
         )
       )
-    ;; the host's NPC died: the stock death dissolve of characters, once. Not for a vehicle: its art
-    ;; has no "death-default" (do-effect then called address 0, a crash when a zapped buggy blew
-    ;; up); its explosion comes with the effects replayed, its parts with its state.
+    ;; the host's NPC died: the stock death dissolve of characters, once. Not for a vehicle: its
+    ;; explosion comes with the effects replayed, its parts with its state. Art without effects has
+    ;; no effect-control: #f, not 0 (effect-control-h.gc), so test it as process-taskable does;
+    ;; nonzero? let #f through and do-effect on a symbol called address 0 (crashes in Haven's KG
+    ;; missions, and when a zapped buggy blew up).
     (when (and (logtest? (-> st flags) (mp-actor-flag dead)) (not (-> self dying?)))
       (set! (-> self dying?) #t)
       (if *mp-trace-vanish*
@@ -1380,7 +1382,7 @@
                   )
           )
       (set! (-> self root root-prim prim-core collide-as) (collide-spec))
-      (when (and (nonzero? (-> self skel effect)) (not (logtest? (-> st flags) (mp-actor-flag vehicle))))
+      (when (and (nonzero? (-> self skel effect)) (-> self skel effect) (not (logtest? (-> st flags) (mp-actor-flag vehicle))))
         (logior! (-> self skel effect flags) (effect-control-flag ecf1))
         (do-effect (-> self skel effect) "death-default" 0.0 -1)
         )

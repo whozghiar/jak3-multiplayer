@@ -14,6 +14,9 @@
 
 (define-extern h-warf type)
 
+;; MOD multiplayer: the sidekick given back before Daxter drives (pc/features/multiplayer/multiplayer.gc)
+(define-extern mp-pidax-sidekick! (function none :behavior target))
+
 ;; DECOMP BEGINS
 
 (define *pilot-mods* (new 'static 'surface :name 'empty :seek0 1.0 :seek90 1.0 :seek180 1.0 :fric 1.0))
@@ -157,6 +160,8 @@
   )
 
 (defbehavior target-pilot-pidax-enter target ()
+  ;; MOD multiplayer: online a Jak player may have no sidekick, whose art this draws
+  (mp-pidax-sidekick!)
   (set! (-> self pilot art-group-backup) (-> self draw art-group))
   (set! (-> self draw art-group) (-> self sidekick 0 draw art-group))
   (logior! (-> self draw status) (draw-control-status no-draw-bounds2))

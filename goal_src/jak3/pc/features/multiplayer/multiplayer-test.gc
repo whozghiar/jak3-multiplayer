@@ -98,6 +98,7 @@
 ;;   log-look <slot>                                         a player's color: model untinted, minimap, name marker
 ;;   log-copies <slot>                                       every object of a player received here, drawn or not
 ;;   goto-float | log-float                                  floating platforms (volcano)
+;;   log-play | trace-play                                   our player's state, modes, task managers; each new state
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
 (define-extern pc-mp-test-active? (function symbol))
@@ -654,8 +655,29 @@
 (set! (-> *mp-test-path* skel) (new 'global 'string 32 (the-as string #f)))
 
 (define *mp-test-trace-gone* #f) ;; trace-gone: log each NPC counted by log-gone
+(define *mp-test-trace-play* (the-as symbol #f)) ;; trace-play: our player's last state logged, #f off
 
 (define *mp-test-tints* 0)
+(define *mp-test-managers* 0)
+
+(defun mp-test-log-turret ((p process))
+  "log-play: a turret alive (level code, by name): its state and distance to our player."
+  (when (mp-inherits? (-> p type) 'target-turret)
+    (format 0 " turret ~A:~A ~,,1fm" (-> p type symbol) (if (-> p next-state) (-> p next-state name) 'none)
+            (/ (vector-vector-distance (-> (the-as process-drawable p) root trans) (-> *target* control trans)) 4096.0)
+            )
+    )
+  #f
+  )
+
+(defun mp-test-log-manager ((p process))
+  "log-play: one task manager alive (its type and state), 6 at most."
+  (when (and (< *mp-test-managers* 6) (mp-inherits? (-> p type) 'task-manager))
+    (+! *mp-test-managers* 1)
+    (format 0 " ~A:~A" (-> p type symbol) (if (-> p next-state) (-> p next-state name) 'none))
+    )
+  #f
+  )
 (define *mp-test-procs* 0)
 
 (defun mp-test-count-proc ((p process))
@@ -3476,6 +3498,36 @@
                  (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
                  )
          )
+        ((string= cmd "trace-play")
+         ;; trace-play: log each new state of our player from now on (mp-test-update)
+         (set! *mp-test-trace-play* 'none)
+         )
+        ((string= cmd "log-play")
+         ;; log-play: what our player does in a mission: its state, its modes (vehicle, board,
+         ;; lizard, Daxter, turret, rail, tube, mech, grabbed, dead), the task managers alive
+         (when *target*
+           (format 0 "[mp-test] play state ~A modes" (mp-target-state-name))
+           (let ((fs (-> *target* focus-status)))
+             (if (logtest? fs (focus-status pilot)) (format 0 " pilot"))
+             (if (logtest? fs (focus-status pilot-riding)) (format 0 " riding"))
+             (if (logtest? fs (focus-status board)) (format 0 " board"))
+             (if (logtest? fs (focus-status flut)) (format 0 " flut"))
+             (if (logtest? fs (focus-status indax)) (format 0 " indax"))
+             (if (logtest? fs (focus-status turret)) (format 0 " turret"))
+             (if (logtest? fs (focus-status rail)) (format 0 " rail"))
+             (if (logtest? fs (focus-status tube)) (format 0 " tube"))
+             (if (logtest? fs (focus-status mech)) (format 0 " mech"))
+             (if (logtest? fs (focus-status grabbed)) (format 0 " grabbed"))
+             (if (logtest? fs (focus-status dead)) (format 0 " dead"))
+             (if (logtest? fs (focus-status in-head)) (format 0 " in-head"))
+             )
+           (format 0 " level ~A managers" (if (-> *target* current-level) (-> *target* current-level name) #f))
+           (set! *mp-test-managers* 0)
+           (iterate-process-tree *active-pool* (the-as (function object object) mp-test-log-manager) *null-kernel-context*)
+           (iterate-process-tree *active-pool* (the-as (function object object) mp-test-log-turret) *null-kernel-context*)
+           (format 0 "~%")
+           )
+         )
         ((string= cmd "close-node")
          ;; close-node <name>: that task node closed, as the story closes it (a challenge's
          ;; prerequisite done)
@@ -3836,6 +3888,15 @@
     )
   (while (pc-mp-test-poll (-> *mp-test* line))
     (mp-test-run)
+    )
+  ;; trace-play: each new state of our player, from the join on
+  (when (and *mp-test-trace-play* *target*)
+    (let ((s (mp-target-state-name)))
+      (when (!= s *mp-test-trace-play*)
+        (set! *mp-test-trace-play* s)
+        (format 0 "[mp-test] state now ~A~%" s)
+        )
+      )
     )
   (none)
   )

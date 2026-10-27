@@ -1415,6 +1415,62 @@ Checked by `daxter-board`: in the industrial quarter, the guest (Daxter) takes t
 rides it at 60 % (stance, X's jump, riding), puts it away with R2 and is Daxter on foot again,
 his board drawn nowhere and not sent; the host draws his board while he rides.
 
+### 4.32 Co-op: every story mission, special phases included
+
+The user asked that every mission play in co-op, its special phases included (a vehicle of its
+own, a turret, a missile steered...). `scripts/mp-test/mission_sweep.py` starts each of the 60
+missions the lobby offers in co-op (host Jak, guest Daxter) and records what each player is put in
+(5.3). What each phase does in co-op:
+
+| Phase | Missions | In co-op |
+|---|---|---|
+| A vehicle | the desert's drives and races (turtle training, Kleiver's race, Damas's artifact races, the hover and rescue, the lizard roundup), the nest, the glider (`desert-glide`), the gunship (`factory-sky-battle`), the rhino (`palace-ruins-attack`), the catacombs' rail, the final boss | Each machine gives its player the mission's vehicle (4.15); Daxter drives as Daxter. |
+| A gun to mount | Spargus's gun game and defense (`wascity-gungame`, `wascity-defend`), the beast battle's scorpion gun | Each player mounts the gun in its own world: the arrival is repeated for one who missed it (below). |
+| Daxter's torpedo | `city-port-attack` | Each player steers its own torpedo; a Jak player gets his Daxter back to steer it (below). |
+| The bomb robot | `city-blow-barricade` | Each player steers its own robot (`target-grab-ride`). |
+| The mech | `precursor-tour` | Both in a mech. |
+| The leaper race | `wascity-leaper-race` | A player on foot gets a racing lizard (below). |
+| Minigames | the Spargus board game (`wascity-pre-game`), Vin's maze (`city-power-game`), the gun courses | Each plays its own copy; the first win closes the mission for both; a failure is everyone's (4.26). |
+| On foot | the others | Nothing special. |
+
+`city-start` (the intro movie) has no continue point: the lobby does not offer it.
+
+What the sweep found, and the changes:
+
+- **Modes only Jak has.** Daxter's handler took only `grab`, `normal`, `falling`, `hang` and
+  `tube`: a mission putting the player in a turret, the torpedo or the robot waited for good.
+  `mp-indax-handler` gives any other `'change-mode` to Jak's handler
+  (`target-standard-event-handler`, his mode left on the way); `'pilot` becomes `'pilot-daxter`.
+  His mode comes back once he stands on foot (`mp-update-character`).
+- **Crash of the copies' death effect** (the guest, in Haven's KG missions: the hijack, the
+  barricade, the HQ). Art without effects has no effect-control: `skel effect` is `#f`, which
+  `nonzero?` let through, and `do-effect` on a symbol called address 0 (`mp-replica-update`).
+- **Crash on the glider** (the host, as `desert-glide` began). A Jak player online without a
+  Daxter rider has no sidekick (`mp-update-session`), but the stock hands Jak's gun to Daxter in a
+  vehicle (`gun-daxter`) and `gun-post` reads his hand. `target-gun-joint-points`
+  (multiplayer-guns.gc) keeps the gun in Jak's hands without a sidekick.
+- **Crash on the torpedo** (the host, as it got on). `target-pilot-pidax-enter` draws the player
+  with the sidekick's art. It calls `mp-pidax-sidekick!` first, which gives the sidekick back at
+  once (the manager's features setting removed, `apply-settings`); `mp-update-session` keeps him
+  while Daxter drives. `target-pilot.gc` is level code (HGA, LPATK, WASALL...): a redefinition from
+  a GAME file would be replaced at each load of those levels, hence the call in the stock file.
+- **The leaper race** seats Jak on his lizard through its continue point (flag `flut-racer`), which
+  only the player who starts the mission reaches; the guest's task manager moved it to the start on
+  foot. `mp-leaper-race-update`: a player on foot while the race's manager runs gets a racing lizard
+  (`'change-mode 'flut #f 'racer`), once a second at most.
+- **A gun to mount.** The continue point of those missions (flag `vehicle`) sends the gun `'pickup`
+  on arrival; a guest arrived next to it on foot, and the turret shoved it away. `mp-arrival-update`:
+  for 15 s after an arrival (`target-continue`, or the join's end), a player on foot is taken by
+  the idle turret within 20 m, or by the gun its continue point names (hellcat 7, scorpion 14), as
+  from our player.
+
+Notes for the sweep: a minigame hides the guest (a script's `wait-player` then waits for good), and
+the skip votes (triangle) also take players out of vehicles. `ERROR: object #x... is not a valid
+object (misaligned)` when a turret goes is the stock's (`target-turret` `deactivate` checks its
+HUD's handle with `valid?`). A goalc started elsewhere (another project's REPL) can connect to a
+test instance's debug port and send it code: `[DECI2] Connected!` in its log, then
+`call_method_of_type failed!` and crashes; such a run says nothing about the mod.
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1463,6 +1519,12 @@ frame, stamped with the host's clock (`pc-mp-clock`), and each copy sample is co
 host's bones interpolated at its stamp. The host reads its bones from the manager, where the batch
 reads them (the test hook runs after the frame's joint math, one frame later); a copy is stamped
 with the time of the pose laid on it.
+
+`python scripts/mp-test/mission_sweep.py [mission ...]` starts the lobby's story missions one after
+the other in co-op (host Jak, guest Daxter, about 3 minutes each, every one by default): each
+player's states traced, logged four times (`log-play`), two screenshots per player. The results go
+to `out/mp-test/mission-sweep-results/`: one folder per mission (logs, screenshots) and
+`summary.txt`, a line per mission with its crashes and each player's last state (4.32).
 
 `python scripts/mp-test/check_results.py [scenario ...]` then checks what each scenario is meant
 to show, one PASS or FAIL line per check with the measured values (both instances ran to the end,
@@ -1533,6 +1595,7 @@ A script line is `<seconds> <command>`:
 | `trick-points <n>` | Our player's trick points, what the jet-board's judge scores. |
 | `close-node <name>` | That task node closed, as the story closes it (a challenge's prerequisite). |
 | `unlock-board`, `log-bodax` | The jet-board and its zap unlocked; our player on the jet-board as Daxter: state, on, camera, the board's scale and whether it is drawn, the sidekick drawn, his board clips loaded (56 of 67). |
+| `log-play`, `trace-play` | Our player's state, its modes (vehicle, board, lizard, Daxter, turret, rail, tube, mech, grabbed, dead), the task managers alive, the turrets (state, distance); each new state from now on. |
 | `log-mem` | The process heap (free, used), the global heap's free room, the processes alive, our copies, the NPCs forced to compute every bone, the art groups loaded for others. |
 | `send-fail <type>`, `spawn-fail-or-retry`, `log-fail` | Tell the first process of that type (a mission's task manager) to fail; a failure offering retry or quit at our continue point; our failure (resetter, its message, our vote, the decision, counters) and each other player's failure flags. |
 | `goto-merchant [m]`, `walk-to-merchant <frames>` | Stand at Kleiver's spot, or m meters from it facing it; walk toward it (the stick follows the camera). `log-econ` prints his model (alive, level, drawn), whether he is solid, his idle clip, how much he faces us and how far we stand. |
@@ -1854,10 +1917,15 @@ public IP.
   runs only on the machine whose mission failed.
 - Kleiver does not speak: his art group has no talking clip (only idles and a walk), so his line
   is text and the shop is the menu page.
-- Co-op seconds are given to the lizards a level places. The leaper race and the desert's lizard
-  roundup give the player their own lizard by other means (`was-leaper-race.gc`,
-  `desert-lizard-task.gc`) and get none; the vehicles of the desert missions are spawned by the
-  mission's manager, which runs on each machine: one per player already.
+- Co-op seconds are given to the lizards a level places. The leaper race seats its player through
+  its continue point; a player on foot during it gets a racing lizard instead (4.32). The desert's
+  lizard roundup gives its own by other means (`desert-lizard-task.gc`); the vehicles of the
+  desert missions are spawned by the mission's manager, which runs on each machine: one per player
+  already.
+- A player arriving on foot within 20 m of an idle turret is mounted on it for 15 s (4.32): in
+  practice the continue points of the turret missions.
+- The mission sweep (4.32) plays no mission through: a phase is checked up to its start (each
+  player in its vehicle, gun, torpedo, robot, lizard or mech), not to its end.
 - Hovered, Choose a mission draws gray instead of white, in the lobby's co-op page as in game; it
   works.
 - Effects drawn in an object's local space (`sp-group-flag sp12`) are not replayed on the other
@@ -1946,6 +2014,10 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-27 (night):** the user asked that every mission play in co-op, special phases included
+  (4.32): Daxter takes the modes only Jak had, three crashes fixed (the copies' death effect, the
+  glider, the torpedo), a racing lizard for every player of the leaper race, the mission's gun
+  mounted on arrival. Tool `mission_sweep.py`, commands `log-play`, `trace-play`.
 - **2026-10-27 (evening):** the user asked that Daxter ride the jet-board alone, with his board
   clips, the board at his size, the same mechanics as Jak (4.31). Scenario `daxter-board`.
 - **2026-10-27:** memory, events and sync. Vehicles are sent to 350 m (the port's barges on every

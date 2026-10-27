@@ -3960,8 +3960,12 @@
     )
   )
 
+(define-perm *mp-stock-target-indax-handler* (function process int symbol event-message-block object :behavior target)
+  target-indax-handler
+  )
+
 (defbehavior mp-indax-handler target ((arg0 process) (arg1 int) (arg2 symbol) (arg3 event-message-block))
-  "Events of his stance and walk: the stock (target-indax-handler), except online a lizard offered
+  "Events of Daxter's mode: the stock (target-indax-handler), except online a lizard offered
    ('change-mode 'flut, its idle state, flut.gc): he gets on it as Jak does, drawn as Daxter; and
    the jet-board taken out ('change-mode 'board, sent on R2 by mp-bodax-update): he rides it as Jak
    does (target-board-start), drawn as Daxter."
@@ -4003,16 +4007,44 @@
              )
          )
      )
+    ;; a mode only Jak has, put on the player by a mission or its continue point (a turret, the
+    ;; mech, Dark or Light Jak, a vehicle, the gun...): his handler took only grab, normal,
+    ;; falling, hang and tube, so the mission waited for good. Jak's takes it (his mode left on the
+    ;; way: target-indax-exit), a vehicle driven as Daxter; his mode comes back once he stands on
+    ;; foot again (mp-update-character)
+    ((and (= arg2 'change-mode)
+          (mp-online?)
+          (= self *target*)
+          (not (let ((m (-> arg3 param 0)))
+                 (or (= m 'grab) (= m 'normal) (= m 'falling) (= m 'hang) (= m 'tube) (= m 'indax))
+                 )
+               )
+          )
+     (case (-> arg3 param 0)
+       (('pilot)
+        (set! (-> arg3 param 0) (the-as uint 'pilot-daxter))
+        )
+       (('pilot-race)
+        (set! (-> arg3 param 0) (the-as uint 'pilot-race-daxter))
+        )
+       )
+     (format 0 "[multiplayer] Daxter takes the mode ~A (Jak's handler)~%" (-> arg3 param 0))
+     (target-standard-event-handler arg0 arg1 arg2 arg3)
+     )
     (else
-      (target-indax-handler arg0 arg1 arg2 arg3)
+      (*mp-stock-target-indax-handler* arg0 arg1 arg2 arg3)
       )
     )
   )
 
 ;; MOD multiplayer -- engine/target/indax/target-indax.gc: a state keeps the handler it was defined
-;; with, so his stance and walk get this one.
+;; with, so his stance, walk, landing and hit states get this one; the others (jumps, attacks, grab,
+;; hang) fall back on target-indax-handler by name, which is this one too.
 (set! (-> target-indax-stance event) (the-as (function process int symbol event-message-block object) mp-indax-handler))
 (set! (-> target-indax-walk event) (the-as (function process int symbol event-message-block object) mp-indax-handler))
+(set! (-> target-indax-hit-ground event) (the-as (function process int symbol event-message-block object) mp-indax-handler))
+(set! (-> target-indax-hit event) (the-as (function process int symbol event-message-block object) mp-indax-handler))
+(set! target-indax-handler mp-indax-handler)
 
 (defun mp-fldax-update ()
   "Every frame from the manager, before the player's mode: on the lizard as Daxter, his art on the
@@ -4041,6 +4073,118 @@
          ;; the ride did not start
          (set! (-> fl on?) #f)
          )
+        )
+      )
+    )
+  (none)
+  )
+
+(define *mp-leaper-gift-at* 0) ;; real-clock time a racing lizard was last given (mp-leaper-race-update)
+
+(defun mp-leaper-race-update ()
+  "Co-op, every frame from the manager: Damas's leaper race (was-leaper-race.gc) seats Jak on his
+   lizard through its continue point (flag flut-racer), which only the player who started the
+   mission reaches; its task manager on another machine moves that player to the start on foot. A
+   player on foot while that manager runs gets a racing lizard, as the continue point gives one
+   (arrive-at-continue: no lizard process, 'racer); Daxter rides it as any lizard (mp-indax-handler).
+   Once a second at most."
+  (let ((tgt *target*)
+        (node (-> *game-info* sub-task-list (game-task-node wascity-leaper-race-resolution)))
+        (state (mp-target-state-name))
+        )
+    (when (and tgt
+               (mp-coop?)
+               (nonzero? (-> node manager))
+               (handle->process (-> node manager manager))
+               (not (focus-test? tgt flut pilot dead grabbed hit))
+               (or (= state 'target-stance) (= state 'target-walk) (= state 'target-indax-stance) (= state 'target-indax-walk))
+               (>= (- (mp-now) *mp-leaper-gift-at*) (seconds 1))
+               )
+      (set! *mp-leaper-gift-at* (mp-now))
+      (format 0 "[multiplayer] on foot in the leaper race: a racing lizard~%")
+      (send-event tgt 'change-mode 'flut #f 'racer)
+      )
+    )
+  (none)
+  )
+
+(define *mp-arrival-at* 0)    ;; real-clock time our player was last at a continue point (target-continue)
+(define *mp-arrival-tried* 0) ;; real-clock time a turret was last asked to take it (mp-arrival-update)
+
+(defun mp-arrival-turret ((cp continue-point))
+  "The gun the stock arrival at `cp` mounts (arrive-at-continue, flag vehicle) when its manager takes
+   the player: the tower's hellcat gun (vehicle-type 7), the scorpion's gun (14); #f for the others,
+   or when none runs. Level code types: found by name."
+  (cond
+    ((not (and cp (logtest? (continue-flags vehicle) (-> cp flags))))
+     #f
+     )
+    ((= (-> cp vehicle-type) 7)
+     (search-process-tree *active-pool* (lambda ((p process)) (mp-inherits? (-> p type) 'bt-gun-manager)))
+     )
+    ((= (-> cp vehicle-type) 14)
+     (search-process-tree *active-pool* (lambda ((p process)) (mp-inherits? (-> p type) 'scorpion-gun-manager)))
+     )
+    (else
+      #f
+      )
+    )
+  )
+
+(defun mp-free-turret? ((p process))
+  "A turret (target-turret, level code: by name) waiting for a rider (its idle state) within 20 m of
+   our player (one that shoved it away put it 12 m off)."
+  (and (mp-inherits? (-> p type) 'target-turret)
+       (-> p next-state)
+       (= (-> p next-state name) 'idle)
+       (< (vector-vector-distance (-> (the-as process-drawable p) root trans) (-> *target* control trans)) (meters 20))
+       )
+  )
+
+(defun mp-arrival-update ()
+  "Co-op, every frame from the manager: a mission whose continue point seats the player in a gun
+   (flag vehicle: the gun game and defense of Spargus, the beast battle, the tower) mounts it on
+   arrival (arrive-at-continue sends it 'pickup as the player). A player who joined there, or Daxter,
+   arrived on foot next to it (the guest of wascity-gungame and wascity-defend, which the turret then
+   shoved away). For 15 s after an arrival (target-continue, or the join's end in mp-update-join:
+   the manager may not run during the loading), a player on foot is taken by the idle turret within
+   20 m, or by the gun its continue point names, as from our player, once a second. Daxter takes it
+   through Jak's handler (mp-indax-handler)."
+  (let ((tgt *target*)
+        (state (mp-target-state-name))
+        (cp (-> *game-info* current-continue))
+        )
+    (when tgt
+      (if (= state 'target-continue)
+          (set! *mp-arrival-at* (mp-now))
+          )
+      (when (and (mp-coop?)
+                 (nonzero? *mp-arrival-at*)
+                 (< (- (mp-now) *mp-arrival-at*) (seconds 15))
+                 (>= (- (mp-now) *mp-arrival-tried*) (seconds 1))
+                 (not (focus-test? tgt pilot dead grabbed hit flut board))
+                 (or (= state 'target-stance) (= state 'target-walk) (= state 'target-indax-stance) (= state 'target-indax-walk))
+                 )
+        (set! *mp-arrival-tried* (mp-now))
+        (let ((gun (the-as process (or (search-process-tree *active-pool* (the-as (function process-tree object) mp-free-turret?))
+                                       (mp-arrival-turret cp)
+                                       )
+                           )
+                   )
+              )
+          (when gun
+            (format 0 "[multiplayer] on foot next to the mission's gun: it takes us, as on arrival (~A)~%" (-> gun type symbol))
+            (if (and cp (= (-> cp vehicle-type) 14))
+                (send-event gun 'restart)
+                )
+            (let ((msg (new 'stack-no-clear 'event-message-block)))
+              (set! (-> msg from) (process->ppointer tgt))
+              (set! (-> msg num-params) 0)
+              (set! (-> msg message) 'pickup)
+              (send-event-function gun msg)
+              )
+            )
+          )
         )
       )
     )
@@ -4419,6 +4563,8 @@
   "Play as the chosen character: Daxter is the stock playable-Daxter mode (indax), entered and
    left from the idle stance only, and never while riding or driving."
   (mp-fldax-update)
+  (mp-leaper-race-update)
+  (mp-arrival-update)
   (mp-bodax-update)
   (let ((daxter? (= (-> *mp-config* character) 1))
         (state (mp-target-state-name))
@@ -4826,7 +4972,11 @@
                 )
             )
        (set! (-> js stage) 4)
-       (format 0 "[multiplayer] in the host's world~%")
+       ;; arrived: a turret of the host's continue point takes us (mp-arrival-update)
+       (set! *mp-arrival-at* (mp-now))
+       (format 0 "[multiplayer] in the host's world (continue ~A)~%"
+               (if (-> *game-info* current-continue) (-> *game-info* current-continue name) #f)
+               )
        )
       )
     )
@@ -4890,7 +5040,15 @@
       (logior! (-> *game-info* features) MP_FREE_FEATURES)
       )
   (let* ((rider (mp-rider-on *mp-local-slot*))
-         (hide? (and (mp-online?) (!= (-> *mp-config* character) 1) (not (focus-test? *target* indax)) (< rider 0)))
+         ;; kept while Daxter drives for Jak (the torpedo: pilot as-daxter, target-pilot-pidax-enter
+         ;; draws the player with the sidekick's art)
+         (hide? (and (mp-online?)
+                     (!= (-> *mp-config* character) 1)
+                     (not (focus-test? *target* indax))
+                     (< rider 0)
+                     (not (and (focus-test? *target* pilot) (nonzero? (-> *target* pilot)) (-> *target* pilot as-daxter?)))
+                     )
+                )
          )
     ;; a Daxter player just sat on our shoulder: our Daxter, shown again in his outfit, climbs on (on
     ;; foot: in a vehicle he is simply seated there, as the stock does)
@@ -4914,6 +5072,28 @@
           (remove-setting! 'features)
           )
       )
+    )
+  (none)
+  )
+
+(defbehavior mp-pidax-sidekick! target ()
+  "Called first by target-pilot-pidax-enter (engine/target/target-pilot.gc, level code: a redefinition
+   here would be replaced at each load of its levels): Daxter driving for Jak (the port attack's
+   torpedo, ctyport-attack.gc 'change-mode 'pilot-daxter) draws the player with the sidekick's art.
+   A Jak player online without a Daxter rider has no sidekick (mp-update-session hides him: the
+   manager's features setting): read as a process, #f crashed the host as it got on the torpedo.
+   He comes back here, the setting removed at once (logic-target's sidekick setup would remove him
+   again within the frame otherwise); mp-update-session keeps him while Daxter drives."
+  (when (not (-> self sidekick))
+    (let ((manager (handle->process (-> *mp-globals* manager))))
+      (if manager
+          (remove-setting *setting-control* manager 'features)
+          )
+      )
+    (apply-settings *setting-control*)
+    (set! (-> *mp-session* sidekick-hidden?) #f)
+    (target-sidekick-setup #t)
+    (format 0 "[multiplayer] Daxter drives for Jak: the sidekick back~%")
     )
   (none)
   )

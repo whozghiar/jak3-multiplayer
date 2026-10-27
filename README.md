@@ -52,7 +52,9 @@ Daxter co-op duo with its own multiplayer save.
     stand on it ("Players here: 1/2"). In a race each player drives their own vehicle (no riding
     along, no shoulder): the start waits until both drive, the place on screen counts the other
     player (with six racers and two players you can be 7th), and the race is won only when both
-    players finish first and second.
+    players finish first and second. Every story mission plays in co-op: each player gets its own
+    leaper in the leaper race, its own gun in the turret missions, its own torpedo, bomb robot or
+    mech, and Daxter takes them as Jak does.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
   equipment and place, after a loading screen) and appears next to the host. Their own save is
   neither loaded nor overwritten: nothing is saved while they play in the host's world.

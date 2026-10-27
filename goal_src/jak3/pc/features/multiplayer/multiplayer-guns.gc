@@ -359,6 +359,23 @@
     )
   )
 
+;; MOD multiplayer -- who holds the gun in a vehicle (engine/target/target-gun.gc; logic-target.gc
+;; calls it every frame): the stock hands it to Daxter (gun-daxter 1) by his firing clip, and the
+;; gun's post then reads his bones (gun-post: sidekick 0). Online, a Jak player without a Daxter
+;; rider has no sidekick (mp-update-session hides him): #f read as a process crashed the host as the
+;; glider mission (desert-glide) began. Without a sidekick, Jak keeps it.
+(define-perm *mp-stock-target-gun-joint-points* (function none :behavior target) target-gun-joint-points)
+
+(defbehavior target-gun-joint-points target ()
+  "Stock, then the gun back in Jak's hands (gun-daxter 0) when there is no sidekick to hold it.
+   No arguments, no return value."
+  (*mp-stock-target-gun-joint-points*)
+  (if (not (-> self sidekick))
+      (set! (-> self gun gun-daxter) 0.0)
+      )
+  (none)
+  )
+
 (defbehavior mp-daxter-gun-aim target ()
   "Fire point and direction: from Daxter's chest, toward the nearest enemy, guard, civilian or
    crate within 40 m in a 60-degree cone ahead (as the guns' auto-aim picks), else straight ahead.
