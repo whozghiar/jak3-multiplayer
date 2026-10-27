@@ -1,0 +1,23 @@
+# Memory over a long session, guest side: joins the host in Haven's port and stays there while the
+# host goes away and comes back, twice (its copies of the host's NPCs dropped, its own woken, and back).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+71 log-mem
+91 log-mem
+111 log-mem
+131 log-mem
+151 log-mem
+171 log-mem
+191 log-mem
+211 log-mem
+231 log-mem
+251 log-mem
+271 log-mem
+291 log-mem
+311 log-mem
+331 log-mem
+351 log-mem
+353 log

@@ -656,6 +656,13 @@
 (define *mp-test-trace-gone* #f) ;; trace-gone: log each NPC counted by log-gone
 
 (define *mp-test-tints* 0)
+(define *mp-test-procs* 0)
+
+(defun mp-test-count-proc ((p process))
+  "log-mem: count the processes."
+  (+! *mp-test-procs* 1)
+  #f
+  )
 
 (defun mp-test-log-tint ((p process))
   "log-tints: one line for a vehicle or a citizen of ours (pid, type, color-mult) or for a copy
@@ -3524,6 +3531,18 @@
                    (-> ch winners) (-> ch pending) (-> ch given) (-> *game-info* skill) (-> ch invites) (-> ch decisions)
                    )
            )
+         )
+        ((string= cmd "log-mem")
+         ;; log-mem: the process heap (free, used), the global heap's free room, the processes alive,
+         ;; our copies and the NPCs forced to compute every bone, the art groups loaded for others
+         (set! *mp-test-procs* 0)
+         (iterate-process-tree *active-pool* (the-as (function object object) mp-test-count-proc) *null-kernel-context*)
+         (format 0 "[mp-test] mem heap-free ~D heap-used ~D global-free ~D procs ~D "
+                 (memory-free *nk-dead-pool*) (memory-used *nk-dead-pool*) (&- (-> global top) (-> global current)) *mp-test-procs*
+                 )
+         (format 0 "replicas ~D forced ~D art ~D tried ~D~%"
+                 (-> *mp-world-state* replica-count) (-> *mp-world-state* forced-count) (-> *mp-art-in* count) (-> *mp-art-in* tried-count)
+                 )
          )
         ((string= cmd "tints-off")
          ;; tints-off: copies keep their default tint, as before their owner's was sent

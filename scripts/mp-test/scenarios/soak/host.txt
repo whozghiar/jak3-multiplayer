@@ -1,0 +1,30 @@
+# Memory over a long session, host side: in Haven's port among its traffic with the guest, then away
+# from it (the guest simulates its own NPCs) and back, twice; the heaps, the processes and the copies
+# logged every 20 s: nothing may keep growing.
+1 enable
+1 name Host
+1 color 1
+1 mode 0
+20 continue ctyport-start
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+70 log-mem
+90 log-mem
+110 continue ctyinda-start
+110 log-mem
+130 log-mem
+150 log-mem
+170 continue ctyport-start
+170 log-mem
+190 log-mem
+210 log-mem
+230 continue ctyinda-start
+230 log-mem
+250 log-mem
+270 log-mem
+290 continue ctyport-start
+290 log-mem
+310 log-mem
+330 log-mem
+350 log-mem
+352 log

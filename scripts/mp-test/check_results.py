@@ -886,6 +886,25 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario == "soak":
+        MEM = r"\] mem heap-free (\d+) heap-used (\d+) global-free (\d+) procs (\d+) replicas (\d+) forced (\d+) art (\d+)"
+        for side, lines in (("host", host), ("guest", client)):
+            m = [tuple(int(v) for v in f) for f in grab(lines, MEM)]
+            third = max(1, len(m) // 3)
+            early, late = m[:-third], m[-third:]
+            ok = len(m) >= 12 and max(f[1] for f in late) <= max(f[1] for f in early) * 1.02 \
+                and max(f[3] for f in late) <= max(f[3] for f in early) + 5 and m[0][2] - m[-1][2] < 65536
+            c.check(scenario, f"{side}: over the session (away and back twice) the process heap, the processes and the global heap do not keep growing",
+                    ok, f"{len(m)} samples, heap used {m[0][1] if m else None}..{m[-1][1] if m else None} (max early "
+                        f"{max(f[1] for f in early) if early else None}, late {max(f[1] for f in late) if late else None}), "
+                        f"procs max early {max(f[3] for f in early) if early else None} late {max(f[3] for f in late) if late else None}, "
+                        f"global heap lost {m[0][2] - m[-1][2] if m else None} bytes")
+        c.check(scenario, "the guest's role changed with the host's moves (its own NPCs, then the host's, twice)",
+                sum(1 for l in client if "now simulates the NPCs around it" in l) >= 2
+                and sum(1 for l in client if "now shows another player's NPCs" in l) >= 2, "")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario in ("challenge", "challenge-one"):
         CH = r"\] challenge phase (\d+) node (\d+) starter (\d+) players #x(\w+) results #x(\w+) reached #x(\w+) winners #x(\w+) pending ([\d.]+) given ([\d.]+) skill ([\d.]+)"
         ME = r"\] me ([-\d.]+) ([-\d.]+) ([-\d.]+) "

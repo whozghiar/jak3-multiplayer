@@ -155,7 +155,17 @@ constexpr size_t kMaxBlob = 4 * 1024 * 1024;   // larger blobs are refused
 constexpr size_t kMaxFrame = 16384;            // larger messages are a protocol violation
 constexpr double kTimeoutMs = 15000.0;         // silence before a peer is considered gone
 constexpr double kConnectTimeoutMs = 8000.0;
+// Events wait here until GOAL takes them, once per unpaused frame: a player in the pause menu or on
+// a failure screen takes none for a while. Past kMaxEvents, the oldest event that only draws
+// something (kIsVisualEvent) goes first, so story progress, results and votes are kept, up to
+// kMaxEventsHard.
 constexpr size_t kMaxEvents = 256;
+constexpr size_t kMaxEventsHard = 4096;
+// GOAL's mp-event-kind values of the events that only draw something: effect (9), projectile
+// (10), weapon (19).
+static bool kIsVisualEvent(s32 kind) {
+  return kind == 9 || kind == 10 || kind == 19;
+}
 constexpr size_t kMaxPeers = 16;               // host: connections kept, joining ones included
 
 static bool is_reliable(u8 type) {
@@ -810,20 +820,31 @@ void Session::drop(Peer& p, const std::string& reason) {
   }
 }
 
+void Session::push_event(const Event& ev) {
+  if (m_events.size() >= kMaxEvents) {
+    auto visual = std::find_if(m_events.begin(), m_events.end(),
+                               [](const Event& e) { return kIsVisualEvent(e.kind); });
+    if (visual != m_events.end()) {
+      m_events.erase(visual);
+    } else if (kIsVisualEvent(ev.kind) || m_events.size() >= kMaxEventsHard) {
+      return;
+    }
+  }
+  m_events.push_back(ev);
+}
+
 void Session::route_event(Event ev, int sender) {
   ev.from = sender;
   ev.text[sizeof(ev.text) - 1] = 0;
   if (m_mode == Mode::Client) {
     if (ev.to == -1 || ev.to == m_local_slot) {
-      if (m_events.size() < kMaxEvents) {
-        m_events.push_back(ev);
-      }
+      push_event(ev);
     }
     return;
   }
   // Host: deliver to itself and/or forward.
-  if ((ev.to == -1 || ev.to == 0) && sender != 0 && m_events.size() < kMaxEvents) {
-    m_events.push_back(ev);
+  if ((ev.to == -1 || ev.to == 0) && sender != 0) {
+    push_event(ev);
   }
   for (auto* p : m_peers) {
     if (p->slot >= 0 && p->slot != sender && (ev.to == -1 || ev.to == p->slot)) {

@@ -314,6 +314,8 @@ class Session {
   // The pressure on the link to `p` from its last ping: see the Peer fields.
   void note_pressure(Peer& p);
   void route_event(Event ev, int sender_slot);
+  // Queue an event for GOAL; see kMaxEvents.
+  void push_event(const Event& ev);
   void store_actors(int source, const u8* data, size_t len, double recv_ms);
   void store_poses(int source, const u8* data, size_t len, double recv_ms);
   void store_blob(const u8* data, size_t len);

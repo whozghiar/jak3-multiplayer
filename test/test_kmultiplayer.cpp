@@ -164,6 +164,48 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
 
 // UDP: with a fifth of the datagrams lost, the join, a world save (blob) and every event still
 // arrive, each event once and in order.
+TEST(Multiplayer, EventsKeptWhileNotTaken) {
+  // A player paused takes no event: 400 effects (GOAL kind 9) then a story step (11) and 300 more
+  // effects reach it; the effects beyond the queue's size give way, the story step stays.
+  using namespace std::chrono;
+  auto start = steady_clock::now();
+  auto now = [&] { return duration<double, std::milli>(steady_clock::now() - start).count(); };
+  mp::Session host, client;
+  ASSERT_TRUE(host.host("0.0.0.0:47779", 4));
+  ASSERT_TRUE(client.join("127.0.0.1:47779", now()));
+  mp::PlayerState hs{}, cs{};
+  auto pump = [&](int frames) {
+    for (int i = 0; i < frames; i++) {
+      host.update(hs, now());
+      client.update(cs, now());
+      std::this_thread::sleep_for(milliseconds(5));
+    }
+  };
+  pump(200);
+  ASSERT_EQ(client.mode(), mp::Mode::Client);
+  auto send = [&](s32 kind, int count) {
+    for (int i = 0; i < count; i++) {
+      mp::Event ev{};
+      ev.kind = kind;
+      ev.to = -1;
+      host.send_event(ev);
+    }
+  };
+  send(9, 400);
+  send(11, 1);
+  send(9, 300);
+  pump(300);
+  mp::Event ev;
+  int effects = 0, steps = 0;
+  while (client.pop_event(&ev)) {
+    (ev.kind == 11 ? steps : effects)++;
+  }
+  EXPECT_EQ(steps, 1);
+  EXPECT_EQ(effects, 255);
+  host.leave("");
+  pump(5);
+}
+
 TEST(Multiplayer, ReliableChannelUnderLoss) {
   using namespace std::chrono;
   auto start = steady_clock::now();
