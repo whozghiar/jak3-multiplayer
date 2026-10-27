@@ -28,9 +28,11 @@
 92 log-challenge
 95 trick-points 300000
 96 log-challenge
+96.5 screenshot judging-guest
 97 wait-challenge 5
 98 log-challenge
 98.5 screenshot decided
 103 log-challenge
 109 log-challenge
+109.5 screenshot daxter-again
 110 log
