@@ -1267,29 +1267,37 @@ machine gave its decision within 0.2 s of the other (host time), both players at
 
 ### 4.27 Places at the same coordinates
 
-Jak 3 puts several places at the coordinates of Haven's centre, reached through a loading
-transition. Their entities (`decompiler_out/jak3/entities/<level>-actors.json`) show it: the volcano
-(`volcanoa`, about -250..129 m by -321..255 m), the mine, the halfpipe and Haven's ruins
-(`rubble*`) share the ground plan; the war factory and the precursor ship stand 200 to 570 m above
-it, overlapping each other; the catacombs (`comb*`) and their rail (`rail*`) run below it; the
-nest lies under Haven's industrial quarter. Haven, the wasteland and Spargus never overlap one
-another. Before, a guest in the volcano 23.6 m from the host in Haven drew the host's model in the
+Jak 3 puts several places at the coordinates of Haven, reached through a loading transition. Two
+levels are two places when they are never loaded together (the levels each continue point loads,
+`engine/level/level-info.gc`) and their entities (`decompiler_out/jak3/entities/<level>-actors.json`)
+fill the same volume at heights that cannot belong to one ground. The volcano (`volcanoa`, about
+-250..129 m by -321..255 m), the mine and the halfpipe share Haven's ground plan; the war factory
+and the precursor ship stand 200 to 570 m above it, overlapping each other; the catacombs
+(`comb*`) and their rail (`rail*`) run below it; the nest lies under the industrial quarter.
+Within Haven, the ruins (`rubble*`, the stadium's far side `stadiumb`, the ruins' missions
+`lpattack`, `lppatrol`), reached through the stadium, and the Metal Head city (`mhcity*`) with its
+tower (`tower*`), reached from the port, both lie over the farms (`ctyfarm*`): a gate panel of the
+ruins at 16 m stands 4 m from a farm emitter at 38 m. Haven, the wasteland and Spargus never
+overlap one another; the sewers lie below the city, a consistent space. Before, a guest in the volcano 23.6 m from the host in Haven drew the host's model in the
 volcano, put its own NPCs to sleep and showed the host's Haven NPCs instead (`places-before`).
 
 multiplayer.gc "Places at the same coordinates": each player's place comes from the level it
 stands in (`mp-level-space`, by the level name in its state: 1 volcano, 2 mine, 3 war factory, 4
-precursor ship, 5 catacombs and rail, 6 halfpipe, 7 nest, 0 the rest). A player in another place:
+precursor ship, 5 catacombs and rail, 6 halfpipe, 7 nest, 8 Haven's ruins, 9 the Metal Head city,
+0 the rest). A player in another place, unless its level is loaded here (its ground drawn: the two
+sides of a gate, `mp-slot-visible?`):
 
 - is not drawn, hit nor marked on the minimap here; its effects and sounds are not played
   (`mp-puppet-update`, the `effect`, `projectile` and `weapon` events);
 - sends no copy we keep (`mp-replica-wanted?`), and a copy whose owner goes there is removed;
-- counts as very far (`mp-slot-distance`) for the NPC authority (`mp-provider-of`,
+- counts as very far (`mp-slot-distance`) for the co-op checks below; for the NPC authority the
+  place alone counts, so that every machine decides alike (`mp-provider-of`,
   `mp-update-authority`, `mp-near-a-player?`, `mp-remote-distance`) and the co-op checks (the
   regroup after a failure, a mission's gathering, rides, the race's gift vehicle, the respawn next
   to a teammate): a mission started there brings the other player through its continue point.
 
-Checked by `places`: the host at Haven's stadium gate, the guest in the volcano 23.6 m away; on
-both machines the other player is not drawn, not on the minimap, none of its copies kept, and the
+Checked by `places`: the table (`log-places`: 25 levels, each in its place); the host at Haven's
+stadium gate, the guest in the volcano 23.6 m away; on both machines the other player is not drawn, not on the minimap, none of its copies kept, and the
 guest keeps simulating its own NPCs (`log-place`).
 
 ### 4.28 Tints of the copies
@@ -1789,7 +1797,9 @@ public IP.
 ## 6. Known limits
 
 - The places at the same coordinates (4.27) come from a table of level names made from the
-  entities' positions; a level not in it counts as Haven or the wasteland.
+  entities' positions and the continue points' loads; a level not in it counts as Haven or the
+  wasteland. Two places meet at a gate: across it, a player whose level is not loaded here is not
+  seen.
 - A challenge's invitation lasts 30 s, and its result waits for it: a player who plays alone in
   co-op gets the reward up to 30 s after the start. A player sitting on its failure screen (the
   game frozen until it chooses) takes the others' results once it leaves it.
