@@ -886,6 +886,31 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario in ("tints", "tints-before"):
+        # every tint each original showed in the host's logs and each copy in the guest's: the two
+        # machines log seconds apart, and the traffic sends a vehicle out again with a new paint
+        own, cp = {}, {}
+        for m in grab(host, r"\] tint own (\d+) (\S+) ([\d.]+) ([\d.]+) ([\d.]+)"):
+            own.setdefault(int(m[0]), []).append(tuple(float(v) for v in m[2:]))
+        for m in grab(client, r"\] tint copy (\d+) (\S+) ([\d.]+) ([\d.]+) ([\d.]+)"):
+            cp.setdefault(int(m[0]), []).append(tuple(float(v) for v in m[2:]))
+        def near(a, b):
+            return all(abs(x - y) < 0.01 for x, y in zip(a, b))
+        both = [p for p in cp if p in own]
+        tinted = [p for p in both if any(abs(v - 1.0) > 0.005 for col in own[p] for v in col)]
+        same = [p for p in tinted if all(any(near(cc, oc) for oc in own[p]) for cc in cp[p])]
+        c.check(scenario, "the guest draws copies of the host's traffic, some of them tinted on the host (a vehicle's paint, a citizen's shade)",
+                len(both) >= 5 and len(tinted) >= 1, f"{len(own)} own, {len(cp)} copies, {len(both)} matched by pid, {len(tinted)} tinted")
+        if scenario == "tints":
+            c.check(scenario, "every tinted original is drawn with its tint on the guest (within 1/100)",
+                    bool(tinted) and len(same) == len(tinted), f"{[(p, own[p], cp[p]) for p in tinted[:4]]}")
+        else:
+            c.check(scenario, "before: the tinted originals are drawn untinted on the guest",
+                    bool(tinted) and not same and all(col == (1.0, 1.0, 1.0) for p in tinted for col in cp[p]),
+                    f"{[(p, own[p], cp[p]) for p in tinted[:4]]}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario in ("places", "places-before"):
         PO = r"\] place ours (\S+) space (\d+) authority (\S+)"
         PP = r"\] place player (\d+) level (\S+) space (\d+) here (\S+) drawn (\S+) minimap (\S+) distance ([-\d.]+) copies (\d+)"

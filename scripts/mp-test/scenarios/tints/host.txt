@@ -1,0 +1,13 @@
+# Tints, host side: hosts in Haven's port, among its traffic; logs the paint of its traffic
+# vehicles and the shade of its citizens, by pid.
+1 enable
+1 name Host
+1 color 1
+1 mode 0
+20 continue ctyport-start
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+72 log-tints
+80 log-tints
+80.5 screenshot tints
+84 log

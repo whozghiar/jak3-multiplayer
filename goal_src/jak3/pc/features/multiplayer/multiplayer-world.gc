@@ -70,8 +70,11 @@
    (anim-frame float)
    (seg-mask   uint32)             ;; body variant (low half of the draw-control seg-mask)
    (skel       uint8 32)           ;; skeleton-group name
+   (color-mult uint32)             ;; draw color-mult (mp-pack-color): a vehicle's paint, a citizen's shade
+   (color-emissive uint32)         ;; draw color-emissive (mp-pack-color): a flash, a glow
+   (pad        uint32 2)
    )
-  :size-assert #x50
+  :size-assert #x60
   )
 
 (deftype mp-actor-table (structure)
@@ -495,6 +498,24 @@
 (define-extern pc-mp-add-sound (function mp-sound none))
 (define-extern pc-mp-get-sounds (function uint matrix (inline-array mp-sound) int int))
 
+(defun mp-pack-color ((col vector))
+  "A draw color (each channel 0 to 2) in 32 bits: one byte per channel, 128 = 1.0, red lowest."
+  (let ((v 0))
+    (dotimes (i 4)
+      (set! v (logior v (shl (max 0 (min 255 (the int (+ 0.5 (* 128.0 (-> col data i)))))) (* 8 i))))
+      )
+    (the-as uint v)
+    )
+  )
+
+(defun mp-unpack-color ((dst vector) (packed uint))
+  "Undo mp-pack-color into `dst`."
+  (dotimes (i 4)
+    (set! (-> dst data i) (* 0.0078125 (the float (logand (shr packed (* 8 i)) #xff))))
+    )
+  dst
+  )
+
 (defun mp-add-actor ((proc process-drawable) (flags mp-actor-flag))
   "Add `proc` to the batch being built. #f when it cannot be drawn elsewhere (no skeleton found)."
   (when (and (< *mp-collect-count* MP_MAX_ACTORS)
@@ -538,6 +559,10 @@
                 )
             )
           (set! (-> st seg-mask) (the-as uint (-> proc draw seg-mask)))
+          ;; its tint: the paint a traffic vehicle drew from its color options, a citizen's shade,
+          ;; a hit's flash (vehicle-util.gc, citizen-norm.gc, civilian.gc)
+          (set! (-> st color-mult) (mp-pack-color (-> proc draw color-mult)))
+          (set! (-> st color-emissive) (mp-pack-color (-> proc draw color-emissive)))
           (copyn-charp<-string (-> st skel) (-> sg name) 32)
           (mp-note-art sg proc)
           (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
@@ -694,6 +719,7 @@
       (set! (-> st anim-frame) 0.0)
       (set! (-> st flags) (mp-actor-flag world))
       (set! (-> st seg-mask) (the-as uint 0))
+      (set! (-> st color-mult) (the-as uint 0))
       (set! (-> st skel 0) (the-as uint 0))
       (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle proc))
       (+! *mp-collect-count* 1)
@@ -761,6 +787,7 @@
       (set! (-> st anim-frame) 0.0)
       (set! (-> st flags) (mp-actor-flag owned shot))
       (set! (-> st seg-mask) (the-as uint 0))
+      (set! (-> st color-mult) (the-as uint 0))
       (set! (-> st skel 0) (the-as uint 0))
       ;; its type after the empty name: its copy draws what the shot carries along (a light trail)
       (copyn-charp<-string (&-> st skel 1) (symbol->string (-> proc type symbol)) 30)
@@ -1074,6 +1101,7 @@
 (define-extern mp-replica-vanished (function process-drawable string none))
 
 (define *mp-test-hide-copies* #f) ;; test switch (hide-copies): every copy hidden
+(define *mp-test-tints-off* #f) ;; test switch (tints-off): copies keep their default tint, as before
 (define *mp-trace-vanish* #f) ;; trace-vanish: log each copy that vanished, faded or died near us
 
 (defconstant MP_LINGER_HOLD (seconds 3)) ;; a copy left in our view holds this long (a late state)
@@ -1311,6 +1339,11 @@
     (if (and (nonzero? (-> st seg-mask)) (!= (the-as uint (-> self draw seg-mask)) (-> st seg-mask)))
         (setup-masks (-> self draw) -1 (the-as int (-> st seg-mask)))
         )
+    ;; the owner's tint (0: none sent): without it every traffic vehicle had the same paint here
+    (when (and (nonzero? (-> st color-mult)) (not *mp-test-tints-off*))
+      (mp-unpack-color (-> self draw color-mult) (-> st color-mult))
+      (mp-unpack-color (-> self draw color-emissive) (-> st color-emissive))
+      )
     (let* ((ag (-> self draw art-group))
            (idx (-> st anim-index))
            (anim (if (and (>= idx 0) (< idx (-> ag length)))
@@ -4419,6 +4452,7 @@
       (set! (-> st anim-frame) (-> elev path-pos))
       (set! (-> st flags) (mp-actor-flag world))
       (set! (-> st seg-mask) (the-as uint (-> elev move-pos 1)))
+      (set! (-> st color-mult) (the-as uint 0))
       (set! (-> st skel 0) (the-as uint 0))
       (set! (-> *mp-pose* obj *mp-collect-count*) (process->handle elev))
       (+! *mp-collect-count* 1)

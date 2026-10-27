@@ -655,6 +655,33 @@
 
 (define *mp-test-trace-gone* #f) ;; trace-gone: log each NPC counted by log-gone
 
+(define *mp-test-tints* 0)
+
+(defun mp-test-log-tint ((p process))
+  "log-tints: one line for a vehicle or a citizen of ours (pid, type, color-mult) or for a copy
+   (its owner's pid, its skeleton, color-mult)."
+  (when (and (< *mp-test-tints* 200) (type? p process-drawable) (nonzero? (-> (the-as process-drawable p) draw)))
+    (let ((d (-> (the-as process-drawable p) draw)))
+      (cond
+        ((type? p mp-replica)
+         (+! *mp-test-tints* 1)
+         (string<-charp *mp-temp-string* (-> (the-as mp-replica p) net skel))
+         (format 0 "[mp-test] tint copy ~D ~S ~,,3f ~,,3f ~,,3f~%" (logand (-> (the-as mp-replica p) net id) #xffffff) *mp-temp-string*
+                 (-> d color-mult x) (-> d color-mult y) (-> d color-mult z)
+                 )
+         )
+        ((or (mp-inherits? (-> p type) 'vehicle) (mp-inherits? (-> p type) 'citizen))
+         (+! *mp-test-tints* 1)
+         (format 0 "[mp-test] tint own ~D ~A ~,,3f ~,,3f ~,,3f~%" (-> p pid) (-> p type symbol)
+                 (-> d color-mult x) (-> d color-mult y) (-> d color-mult z)
+                 )
+         )
+        )
+      )
+    )
+  #f
+  )
+
 (defun mp-test-note-gone ((st mp-actor-state) (proc process-drawable))
   "Print an NPC we sent that vanished near another player (trace-gone): its skeleton, why (left the
    game, inactive, hidden) and its distance to the nearest other player."
@@ -3429,6 +3456,16 @@
                  (-> *display* target-clock frame-counter) (-> *display* entity-clock frame-counter)
                  (-> *mp-pause* pad-frames) (-> *mp-pause* pauses) (mp-player-list-shown?)
                  )
+         )
+        ((string= cmd "tints-off")
+         ;; tints-off: copies keep their default tint, as before their owner's was sent
+         (set! *mp-test-tints-off* #t)
+         )
+        ((string= cmd "log-tints")
+         ;; log-tints: the tint of our traffic vehicles and citizens (by pid) and of the copies here
+         ;; (by their owner's pid), 200 lines at most
+         (set! *mp-test-tints* 0)
+         (iterate-process-tree *active-pool* (the-as (function object object) mp-test-log-tint) *null-kernel-context*)
          )
         ((string= cmd "places-off")
          ;; places-off: every level counts as one place, as before "Places at the same coordinates"

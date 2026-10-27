@@ -1,0 +1,12 @@
+# Tints, guest side (as before: tints-off, the copies keep their default tint): joins the host in Haven's port; logs the tint of the copies of the host's
+# vehicles and citizens.
+1 enable
+1 name Guest
+1 color 2
+1 tints-off
+45 join 127.0.0.1:7777
+45.1 wait-joined
+74 log-tints
+80 log-tints
+80.5 screenshot tints
+84 log

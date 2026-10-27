@@ -28,7 +28,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 9;
+constexpr u32 kProtocolVersion = 10;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -113,8 +113,11 @@ struct ActorState {
   float anim_frame;  // 40
   u32 seg_mask;      // 44  low half of the draw-control seg-mask (body variants)
   char skel[32];     // 48  skeleton-group name, e.g. "skel-citizen-norm"
+  u32 color_mult;    // 80  draw color-mult, one byte per channel, 128 = 1.0 (a vehicle's paint)
+  u32 color_emissive;  // 84  draw color-emissive, same packing
+  u32 pad[2];        // 88
 };
-static_assert(sizeof(ActorState) == 80, "ActorState must match mp-actor-state");
+static_assert(sizeof(ActorState) == 96, "ActorState must match mp-actor-state");
 
 constexpr int kMaxActors = 128;
 
