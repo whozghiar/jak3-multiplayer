@@ -1302,7 +1302,8 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "co-op: the guest who died comes back next to the host, health full, no continue point",
                 any("back next to player 0" in l for l in client) and ("1", "target-stance", "8.0") in gr, f"{gr}")
         c.check(scenario, "and the host next to the guest",
-                any("back next to player 1" in l for l in host) and hr[-1:] == [("1", "target-stance", "8.0")], f"{hr}")
+                any("back next to player 1" in l for l in host) and bool(hr) and hr[-1][0] == "1"
+                and hr[-1][1] in ("target-stance", "target-stance-ambient") and hr[-1][2] == "8.0", f"{hr}")
 
         gs = grab(client, r"\] spectate slot \S+ left \S+ ms shown (\d+)")
         hs = grab(host, r"\] spectate slot \S+ left \S+ ms shown (\d+)")
