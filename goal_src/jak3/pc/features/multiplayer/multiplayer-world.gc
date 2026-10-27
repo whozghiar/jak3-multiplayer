@@ -3603,6 +3603,25 @@
       (seated
         (mp-send-pose (the-as uint #xffffff) seated (-> seated root trans) (-> seated root quat) #f #t #t)
         )
+      ;; Daxter on the jet-board: the model drawn is the sidekick (the player's own plays Jak's
+      ;; clips, hidden); the player's effects and sounds (the board's) go with it
+      ((and *target* (mp-bodax? *target*) (ppointer->process (-> *target* sidekick)))
+       (let ((sk (the-as process-drawable (ppointer->process (-> *target* sidekick))))
+             (pid (-> *target* pid))
+             )
+         (dotimes (i (-> ps emit-count))
+           (if (= (-> ps emit-pid i) pid)
+               (set! (-> ps emit-pid i) (-> sk pid))
+               )
+           )
+         (dotimes (i (-> ps snd-count))
+           (if (= (-> ps snd-pid i) pid)
+               (set! (-> ps snd-pid i) (-> sk pid))
+               )
+           )
+         (mp-send-pose (the-as uint #xffffff) sk (-> *target* control trans) (-> *target* control quat) #f #t #t)
+         )
+       )
       (*target*
         (mp-send-pose (the-as uint #xffffff) *target* (-> *target* control trans) (-> *target* control quat) #f #t #t)
         )

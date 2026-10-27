@@ -1,0 +1,22 @@
+# Daxter on the jet-board, host side (Jak): in Haven's industrial quarter (the jet-board challenge's
+# start) with the guest, who plays Daxter and takes the jet-board out; the host faces it: Daxter on
+# a board at his size, standing, jumping, then on foot again.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+20 continue ctyinda-bbush-5
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+70 log-copies 1
+73 look-player 1
+73.6 screenshot remote-board
+75 look-player 1
+75.6 screenshot remote-board-2
+78 look-player 1
+78.6 screenshot remote-jump
+84 log-copies 1
+90 look-player 1
+90.6 screenshot remote-daxter-again
+96 log

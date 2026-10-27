@@ -1068,12 +1068,32 @@
   (and (-> *mp-fldax* on?) (= tgt *target*) (focus-test? tgt flut))
   )
 
+;; Our Daxter player on the jet-board ("Daxter on the jet-board", below).
+(deftype mp-bodax-state (structure)
+  ((on?    symbol)     ;; our Daxter player took the board out and rides it as Daxter
+   (since  time-frame) ;; real-clock time he took it out
+   (camera? symbol)    ;; Daxter's closer camera set (target-indax-init's, which his mode removed)
+   (rides  int32)      ;; boards taken out (test log)
+   )
+  )
+
+(define *mp-bodax* (new 'global 'mp-bodax-state))
+(set! (-> *mp-bodax* camera?) #f)
+(set! (-> *mp-bodax* on?) #f)
+
+(defun mp-bodax? ((tgt target))
+  "#t while `tgt`, our player, rides the jet-board as Daxter."
+  (and (-> *mp-bodax* on?) (= tgt *target*) (focus-test? tgt board))
+  )
+
 (defun mp-playing-daxter? ((tgt target))
   "#t while the player is drawn as Daxter: his playable mode (indax), driving as Daxter (pilot
-   as-daxter?, which swaps the target's art for Daxter's the same way), or on a lizard as Daxter."
+   as-daxter?, which swaps the target's art for Daxter's the same way), on a lizard or on the
+   jet-board as Daxter."
   (or (focus-test? tgt indax)
       (and (focus-test? tgt pilot) (nonzero? (-> tgt pilot)) (-> tgt pilot as-daxter?))
       (mp-fldax? tgt)
+      (mp-bodax? tgt)
       )
   )
 
@@ -1541,6 +1561,7 @@
        (or (focus-test? *target* indax)
            (and (focus-test? *target* flut) (nonzero? (-> *target* flut)) (-> *target* flut as-daxter?))
            (mp-fldax? *target*)
+           (mp-bodax? *target*)
            )
        )
   )
@@ -3941,8 +3962,23 @@
 
 (defbehavior mp-indax-handler target ((arg0 process) (arg1 int) (arg2 symbol) (arg3 event-message-block))
   "Events of his stance and walk: the stock (target-indax-handler), except online a lizard offered
-   ('change-mode 'flut, its idle state, flut.gc): he gets on it as Jak does, drawn as Daxter."
+   ('change-mode 'flut, its idle state, flut.gc): he gets on it as Jak does, drawn as Daxter; and
+   the jet-board taken out ('change-mode 'board, sent on R2 by mp-bodax-update): he rides it as Jak
+   does (target-board-start), drawn as Daxter."
   (cond
+    ((and (= arg2 'change-mode)
+          (= (-> arg3 param 0) 'board)
+          (mp-online?)
+          (= self *target*)
+          (not (focus-test? self dead hit grabbed))
+          (logtest? (logand (game-feature board) (-> *setting-control* user-current features)) (-> self game features))
+          )
+     (set! (-> *mp-bodax* on?) #t)
+     (set! (-> *mp-bodax* since) (mp-now))
+     (+! (-> *mp-bodax* rides) 1)
+     (format 0 "[multiplayer] Daxter takes the jet-board out~%")
+     (go target-board-start (the-as handle #f))
+     )
     ((and (= arg2 'change-mode)
           (= (-> arg3 param 0) 'flut)
           (mp-online?)
@@ -4010,6 +4046,122 @@
     )
   (none)
   )
+
+;; ------------------------------------------------------------------------------------------------
+;; Daxter on the jet-board
+;;
+;; Jak takes the jet-board out with R2 (want-to-board?, his stance; target-board-start); Daxter's
+;; mode ignores it. Online, R2 in his stance or walk takes it out the same way (mp-bodax-update, his
+;; handler: mp-indax-handler), and the stock board runs: the same mechanics as Jak (jumps, ducks,
+;; tricks, grinds, the zap). On it, the player's model plays Jak's board clips, hidden, and the
+;; sidekick (Daxter) plays his own board clips as when he rides on Jak's shoulder (sidekick.gc:
+;; 'matrix 'board, his root on Jak's joint 37, the clips daxter-board-* matched to Jak's), his root
+;; moved down from that joint onto the board (mp-cspace<-board-daxter!). The others draw his model:
+;; its bones are sent for the player (mp-send-poses). His closer camera is kept (target-indax-init's
+;; settings, which leaving his mode removed). The board itself (board-util.gc) hid with the
+;; player's model: under Daxter it is drawn, at 60 % of its size (board-scale).
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_BODAX_SCALE 0.6) ;; the board under Daxter, of Jak's
+
+(defun mp-cspace<-board-daxter! ((dst cspace) (src cspace))
+  "The sidekick's root on the jet-board ridden as Daxter: the board's place and orientation
+   (board-trans, board-quat). His board clips move him from there as from Jak's joint 37 (`src`,
+   the stock 'board matrix, used until the board is set up); that joint's own orientation, Jak's
+   shoulder in his board stance, laid Daxter flat on the board."
+  (cond
+    ((and *target* (nonzero? (-> *target* board)))
+     (let ((m (-> dst bone transform)))
+       (quaternion->matrix m (the-as quaternion (-> *target* board board-quat)))
+       (vector-copy! (-> m trans) (-> *target* board board-trans))
+       (set! (-> m trans w) 1.0)
+       m
+       )
+     )
+    (else
+      (cspace<-cspace-normalized! dst src)
+      )
+    )
+  )
+
+(defun mp-bodax-update ()
+  "Every frame from the manager, before the player's mode: R2 in Daxter's stance or walk takes the
+   board out; on it, the player's model hidden, the sidekick on the board with Daxter's camera; off
+   it, the camera back (then his mode again, mp-update-character)."
+  (let ((b *mp-bodax*)
+        (tgt *target*)
+        )
+    (when tgt
+      (cond
+        ((not (-> b on?))
+         (if (and (mp-online?)
+                  (focus-test? tgt indax)
+                  (or (= (mp-target-state-name) 'target-indax-stance) (= (mp-target-state-name) 'target-indax-walk))
+                  (cpad-pressed? 0 r2)
+                  (not *progress-process*)
+                  )
+             (send-event tgt 'change-mode 'board)
+             )
+         )
+        ((focus-test? tgt board)
+         (logior! (-> tgt draw status) (draw-control-status no-draw-bounds2))
+         (let ((sk (the-as process-drawable (ppointer->process (-> tgt sidekick)))))
+           (when (and sk (nonzero? (-> sk node-list)))
+             ;; every frame: the get-on asks 'matrix 'board again
+             (set! (-> sk node-list data 0 param0) (the-as (function cspace transformq none) mp-cspace<-board-daxter!))
+             (set! (-> sk node-list data 0 param1) (the-as basic (-> tgt node-list data 37)))
+             (set! (-> sk node-list data 0 param2) #f)
+             )
+           )
+         ;; Daxter's camera, as his mode sets it (target-indax-init): Jak's sees him far away
+         (when (not (-> b camera?))
+           (set! (-> b camera?) #t)
+           (format 0 "[multiplayer] Daxter rides the jet-board as Daxter~%")
+           (set-setting! 'string-max-length 'low (meters 6) 0)
+           (set-setting! 'string-max-height 'low (meters 1) 0)
+           (set-setting! 'head-offset 'abs (meters 1) 0)
+           )
+         )
+        ((-> b camera?)
+         (set! (-> b camera?) #f)
+         (remove-setting! 'string-max-length)
+         (remove-setting! 'string-max-height)
+         (remove-setting! 'head-offset)
+         (logclear! (-> tgt draw status) (draw-control-status no-draw-bounds2))
+         (set! (-> b on?) #f)
+         (format 0 "[multiplayer] Daxter puts the jet-board away~%")
+         )
+        ((> (- (mp-now) (-> b since)) (seconds 1))
+         ;; the board did not come out
+         (set! (-> b on?) #f)
+         )
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-board-post board ()
+  "The board's post in use (board-post): under Daxter riding it as Daxter, at his size and drawn
+   (board-post hides it with the player's model, hidden then: Daxter is the sidekick)."
+  (let ((tgt (the-as target (ppointer->process (-> self parent)))))
+    (cond
+      ((and tgt (mp-bodax? tgt))
+       (vector-float*! (-> tgt board board-scale) (-> tgt control scale) MP_BODAX_SCALE)
+       (logclear! (-> tgt draw status) (draw-control-status no-draw-bounds2))
+       (board-post)
+       (logior! (-> tgt draw status) (draw-control-status no-draw-bounds2))
+       )
+      (else
+        (board-post)
+        )
+      )
+    )
+  (none)
+  )
+
+;; MOD multiplayer -- engine/target/board/board-util.gc: a state keeps the post it was defined with.
+(set! (-> (method-of-type board use) post) mp-board-post)
 
 ;; ------------------------------------------------------------------------------------------------
 ;; A lizard for every player (co-op)
@@ -4256,6 +4408,7 @@
   "Play as the chosen character: Daxter is the stock playable-Daxter mode (indax), entered and
    left from the idle stance only, and never while riding or driving."
   (mp-fldax-update)
+  (mp-bodax-update)
   (let ((daxter? (= (-> *mp-config* character) 1))
         (state (mp-target-state-name))
         )

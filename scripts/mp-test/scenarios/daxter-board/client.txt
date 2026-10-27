@@ -1,0 +1,26 @@
+# Daxter on the jet-board, guest side: plays Daxter, takes the jet-board out with R2 in his stance,
+# rides it as Daxter (his board clips, the board at his size, his closer camera), jumps with X, rides
+# a little, then puts the board away with R2: Daxter again on foot.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+66 unlock-board
+68 log-bodax
+70 press r2 100
+72 log-bodax
+74 log-bodax
+74.5 screenshot board-stance
+78 press x 100
+78.3 log-bodax
+78.4 screenshot board-jump
+81 stick 128 0 500
+82 log-bodax
+82.5 screenshot board-ride
+86 press r2 100
+89 log-bodax
+91 log-bodax
+91.5 screenshot daxter-again
+96 log
