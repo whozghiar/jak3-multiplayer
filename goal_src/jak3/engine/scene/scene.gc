@@ -5,6 +5,10 @@
 ;; name in dgo: scene
 ;; dgos: GAME
 
+;; MOD multiplayer: a mission's introduction waits for the other co-op players
+;; (pc/features/multiplayer/multiplayer-world.gc)
+(define-extern mp-scene-hold? (function symbol :behavior scene-player))
+
 ;; DECOMP BEGINS
 
 (deftype scene-stage (process-hidden)
@@ -1021,6 +1025,8 @@
                          *progress-process*
                          (!= (get-status *gui-control* (-> self gui-id)) 3)
                          )
+                     ;; MOD multiplayer: held while the other co-op players come
+                     (mp-scene-hold?)
                      )
             (suspend)
             )

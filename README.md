@@ -29,8 +29,11 @@ Daxter co-op duo with its own multiplayer save.
   seek and Races are listed for later (grayed out, coming soon); two can be played now:
   - **Free roam:** the end of the game. Every story mission is done and everything is unlocked
     for every player: all the guns and their upgrades, Dark and Light Jak's powers, the
-    hoverboard, the vehicles. Everyone plays Jak or Daxter and goes where they want. Nothing is
-    saved.
+    hoverboard, the vehicles. Everyone plays Jak or Daxter and goes where they want. What is left
+    to play are the activities that pay precursor orbs (the burning bush challenges, the gun
+    courses, the turret game, the power game), again and again: each one offers itself again
+    once done, and pays again. When a player starts a challenge, the others may join it or not.
+    Nothing is saved.
   - **Co-op (2 players):** the story as Jak and Daxter. The host starts a new campaign, continues
     it, or picks any mission of the story, act by act (everything before it done). In game, the
     host can start another mission for both players (START > Options > Multiplayer > Choose a
@@ -42,8 +45,11 @@ Daxter co-op duo with its own multiplayer save.
     wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
     on foot while the other one is alive nearby watches them for 5 seconds ("Spectating"), their
     body on the ground, then comes back next to them, and the mission goes on. When one player
-    starts a mission (reaching its spot, talking to someone), the other is brought there and the
-    mission starts for both. When a mission fails, the failure shows for both players at once and
+    starts a mission by talking to someone, its cutscene waits ("The mission waits for the other
+    players") while the other player is brought there, then both watch it together and the
+    mission starts for both (it needs the yes of at least half of the players: with two, the one
+    who starts it). A door that unloads the place behind it waits, open, for the other player
+    still behind it ("The door waits for ..."). When a mission fails, the failure shows for both players at once and
     waits for both: when both chose to retry (or to quit), both are put back together, at the
     mission's start or at the respawn point. When one player starts a burning bush challenge,
     the other can join it for 30 seconds (D-pad up): both play it, each with their own score (the
@@ -52,9 +58,9 @@ Daxter co-op duo with its own multiplayer save.
     game leaves a lizard, two wait side by side, one for each player. A cutscene is skipped once both players asked
     (triangle); only the host can pause it. A waypoint (the yellow beam) waits for both players to
     stand on it ("Players here: 1/2"). In a race each player drives their own vehicle (no riding
-    along, no shoulder): the start waits until both drive, the place on screen counts the other
-    player (with six racers and two players you can be 7th), and the race is won only when both
-    players finish first and second. Every story mission plays in co-op: each player gets its own
+    along, no shoulder): the start waits until both drive, then there is one race, the host's: the
+    other player takes a racer's place, the places on screen are the same for both, and the race
+    is won when one of the two finishes first. Every story mission plays in co-op: each player gets its own
     leaper in the leaper race, its own gun in the turret missions, its own torpedo, bomb robot or
     mech, and Daxter takes them as Jak does.
 - **The host's world for everyone:** a player who joins loads the host's game (its progress,
@@ -156,6 +162,7 @@ Daxter co-op duo with its own multiplayer save.
 | Player list | Hold SELECT |
 | Host: pause / resume for everyone | SELECT |
 | Co-op: ask to skip a cutscene | Triangle |
+| Join a challenge another player started | D-pad up (30 s) |
 | Steal a player's vehicle | Triangle next to it |
 | Ride as passenger | L1 + Triangle next to it |
 | Get off as passenger | Triangle |
@@ -166,10 +173,12 @@ Daxter co-op duo with its own multiplayer save.
 | Kleiver's shop: open / buy or wear / leave | Triangle next to him / X / Triangle |
 
 > [!NOTE]
-> **Playing over the Internet:** the host must open (forward) UDP port 7777, or the port they
-> chose, on their router, and give the others their public IP address. On a local network, use the
-> host's local IP (for example `192.168.1.20:7777`). Every player must have the same version of the
-> mod.
+> **Playing over the Internet:** the game asks the host's router to open its UDP port (7777, or
+> the port chosen) by itself (UPnP or NAT-PMP); once it is open, the multiplayer menu shows the
+> internet address to give to the others ("internet address ..."). If it never shows, open
+> (forward) the port on the router by hand and give your public IP address. On a local network,
+> use the host's local IP (for example `192.168.1.20:7777`). Connections are encrypted. Every
+> player must have the same version of the mod.
 
 A player who joins plays in the host's world: its progress, items and place. Their own save stays
 as it was: it is not loaded, and nothing is saved while they play in the host's world (load your

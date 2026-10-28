@@ -118,6 +118,10 @@
   (race-progress 26) ;; the sender's race: its task node iarg 0, its result iarg 1 (0 racing, 1
                      ;; finished ahead of every racer, 2 behind one), its progress fvec x; from the
                      ;; host, its racers' progress too (iarg 2 of them, floats in text) ("Races")
+  (mission-vote 32)  ;; co-op: a mission's introduction played by every player, iarg 0 its message
+                     ;; (mp-pull-msg, multiplayer-world.gc "a mission's introduction")
+  (fail-decided 33)  ;; co-op: every player chose the same for the failure shown, iarg 0 (1 retry,
+                     ;; 2 quit): the others apply it even if they missed the last vote's states
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -260,7 +264,6 @@
 (define *mp-stolen-until* 0)
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
-(define *mp-test-race-extra* 0) ;; test (race-extra-ahead): players counted ahead in a race that are not there
 (define *mp-test-coop-intro* #f) ;; test (coop-mission-intro): co-op starts at the chosen mission's introduction
 
 ;; Joining the host's world, and co-op (both described with their code, below).
@@ -268,6 +271,8 @@
   ((stage    int32)      ;; guest: 0 in its own world, 1 world asked, 2 loading it, 3 going to the
                          ;; host, 4 in the host's world
    (since    time-frame) ;; when the stage began (real clock)
+   (request  int32)      ;; guest: our last request of the host's world (its blob carries it)
+   (answered time-frame 8) ;; host: when each guest's last request was answered (one per 5 s)
    (foreign? symbol)     ;; playing in another player's world: nothing is saved
    (sent     int32)      ;; counters for the test log
    (loaded   int32)
@@ -319,25 +324,28 @@
    (aside?    symbol)     ;; our vehicle of a race start moved back
    (starts    int32)      ;; starts after every player boarded, vehicles got (test log)
    (gifts     int32)
-   ;; places and results with the players counted (mp-race-position)
-   (in-race-at  time-frame) ;; last frame our race ran
-   (own-progress float)     ;; our progress, our race's task node, our result (as sent)
-   (own-node    int32)
-   (own-done    int32)
-   (sent        time-frame) ;; last progress sent
-   (finished-at time-frame) ;; when we finished, 0 racing
-   (result-hold time-frame) ;; last frame our result waited for the other players
-   (place       int32)      ;; our place with the players counted, from 0 (test log)
-   (prog        float 8)    ;; each remote player's progress, race, result, and when it came
-   (prog-node   int32 8)
-   (prog-done   int32 8)
-   (prog-time   time-frame 8)
-   (ai          float 8)    ;; our race's racers' progress (mp-race-ai-progress), as many as ai-count
-   (ai-count    int32)
-   (host-ai     float 8)    ;; the host's racers' progress, as it sent them, and when
-   (host-ai-count int32)
-   (host-ai-time  time-frame)
-   (ai-ahead    int32)      ;; racers ahead of us (test log)
+   ;; one race for both players, the host's (mp-race-bound!, mp-race-sync)
+   (in-race-at   time-frame) ;; last frame our race ran, and its task node
+   (own-node     int32)
+   (bound-node   int32)      ;; the race binding the players, 0 none
+   (own-slot     int32)      ;; our racer slot, the other player's slot and its player slot
+   (partner-slot int32)
+   (partner      int32)
+   (verdict      int32)      ;; the host's verdict: 0 not yet, 1 won, 2 lost
+   (own-result   int32)      ;; our own result at our finish (1 first or good score, 2 not), the guest's
+   (partner-result int32)
+   (first-finish time-frame) ;; host: the first player's finish
+   (finished-at  time-frame) ;; our finish, 0 racing
+   (result-hold  time-frame) ;; last frame our result waited for the verdict
+   (sent         time-frame) ;; host: last race sent, and its bits
+   (sent-bits    int32)
+   (slot-progress float 8)   ;; our race's racers, this frame (mp-race-slot)
+   (slot-bits    int32 8)
+   (host-node    int32)      ;; guest: the host's race as last sent, and when
+   (host-count   int32)
+   (host-bits    int32)
+   (host-progress float 8)
+   (host-time    time-frame)
    )
   )
 
@@ -561,6 +569,12 @@
   (-> *display* real-clock frame-counter)
   )
 
+(defun mp-elapsed? ((since time-frame) (duration time-frame))
+  "#t once `duration` passed since `since`, both on the real clock of mp-now (time-elapsed? reads the
+   game clock of the current process)."
+  (>= (- (mp-now) since) duration)
+  )
+
 (defun mp-show-message ((msg string))
   "Show `msg` at the bottom of the screen for a few seconds."
   (copy-string<-string *mp-message* msg)
@@ -588,9 +602,10 @@
 
 (define-extern mp-coop? (function symbol)) ;; defined below
 (define-extern mp-apply-role (function mp-event none))                        ;; "Co-op mode"
-(define-extern mp-econ-challenge-start (function int none))                   ;; "Economy"
-(define-extern mp-econ-challenge-result (function int int int float none))
-(define-extern mp-econ-challenge-claim (function int int float none))
+(define-extern mp-econ-challenge-start (function int int none))               ;; "Economy"
+(define-extern mp-econ-challenge-result (function int int int int float none))
+(define-extern mp-econ-challenge-claim (function int int int float none))
+(define-extern mp-free-replay-note (function game-task-node-info none)) ;; "Free roam: the orb activities"
 
 (defun mp-bbush-node? ((node game-task-node-info))
   "#t for a task node of a burning bush challenge (its introduction or its resolution)."
@@ -1096,6 +1111,7 @@
   ((on?    symbol)     ;; our Daxter player got on a lizard and rides it as Daxter
    (since  time-frame) ;; real-clock time he got on
    (art    art-group)  ;; Daxter's art group with Jak's lizard clips replaced, #f until needed
+   (size   int32)      ;; bytes allocated for it (the copy is made again for every ride)
    (backup art-group)  ;; the player's art group under it
    (rides  int32)      ;; lizards got on (test log)
    )
@@ -2491,6 +2507,7 @@
   (if (not *mp-progress-replaying*)
       (set! (-> *mp-session* step-at) (mp-now))
       )
+  (mp-free-replay-note node)
   (when (and (mp-online?)
              (logtest? *mp-world* (mp-world-flag progress))
              (not *mp-progress-replaying*)
@@ -2599,8 +2616,9 @@
 
 (define *mp-world-save* (the-as game-save #f)) ;; the save sent or received, allocated once
 
-(define-extern pc-mp-send-blob (function int pointer int none))
+(define-extern pc-mp-send-blob (function int pointer int int none))
 (define-extern pc-mp-blob-ready (function int))
+(define-extern pc-mp-blob-id (function int))
 (define-extern pc-mp-blob-take (function pointer int int))
 
 (defun mp-world-save-buffer ()
@@ -2611,12 +2629,13 @@
   *mp-world-save*
   )
 
-(defbehavior mp-send-world-save mp-manager ((to int))
-  "Host: our game, written into the in-memory save, to player `to` (who just joined)."
+(defbehavior mp-send-world-save mp-manager ((to int) (request int))
+  "Host: our game, written into the in-memory save, to player `to` (who just joined), answering its
+   request `request`."
   (let ((save (mp-world-save-buffer)))
     (save-game *game-info* save "multiplayer")
     (let ((size (+ (-> save type size) (-> save length))))
-      (pc-mp-send-blob to (the-as pointer (&-> save type)) (the-as int size))
+      (pc-mp-send-blob to (the-as pointer (&-> save type)) (the-as int size) request)
       (+! (-> *mp-join* sent) 1)
       (set! (-> *mp-join* bytes) (the-as int size))
       (format 0 "[multiplayer] world sent to player ~D (~D bytes, continue ~S)~%" to size (-> *game-info* current-continue name))
@@ -3171,6 +3190,10 @@
           (set! (-> f decided?) #t)
           (set! (-> f inject) (-> f vote))
           (+! (-> f decisions) 1)
+          ;; the votes travel in the players' states, which may be lost: the last voter leaves its
+          ;; failure screen at once, and the others could wait for it forever. The decision goes
+          ;; on the reliable channel.
+          (mp-send-event (mp-event-kind fail-decided) -1 (-> f vote) 0.0)
           (if (= (-> f vote) 2)
               (format 0 "[multiplayer] every player chose to quit the failed mission~%")
               (format 0 "[multiplayer] every player chose to retry the failed mission~%")
@@ -3188,6 +3211,23 @@
           (set! *mp-request-teleport* 0)
           )
         )
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-fail-decided ((ev mp-event))
+  "Another player saw every player choose the same for the failure (mp-update-fail): its decision
+   applies here too, when our failure screen still waits."
+  (let ((f *mp-fail*))
+    (when (and (mp-coop?) (mp-fail-resetter) (not (-> f decided?)) (or (= (-> ev iarg 0) 1) (= (-> ev iarg 0) 2)))
+      (set! (-> f decided?) #t)
+      (set! (-> f vote) (-> ev iarg 0))
+      (set! (-> f inject) (-> ev iarg 0))
+      (+! (-> f decisions) 1)
+      (format 0 "[multiplayer] player ~D saw every player choose to ~S the failed mission~%" (-> ev from)
+              (if (= (-> ev iarg 0) 2) "quit" "retry")
+              )
       )
     )
   (none)
@@ -3286,11 +3326,14 @@
 
 (defun mp-unlock-everything ()
   "Free roam, once in game: every story step closed with its rewards (the last node closes the ones
-   it needs: the whole story), everything else unlocked, ammo and eco full. The closures are not
-   sent to the others: a guest loads this world."
+   it needs: the whole story), the activities that pay no orb closed, everything else unlocked,
+   ammo and eco full. The closures are not sent to the others: a guest loads this world."
   (let ((replaying *mp-progress-replaying*))
     (set! *mp-progress-replaying* #t)
     (task-node-close! (game-task-node city-win-resolution) 'event)
+    ;; the only activities left that pay no orb (Ratchet's gun courses): only orb activities remain
+    (task-node-close! (game-task-node city-gun-course-play-for-fun-bronze-rnc-1) 'event)
+    (task-node-close! (game-task-node city-gun-course-play-for-fun-bronze-rnc-2) 'event)
     (set! *mp-progress-replaying* replaying)
     )
   (logior! (-> *game-info* features) MP_FREE_FEATURES)
@@ -3420,6 +3463,11 @@
 (define-extern mp-replay-effect (function mp-event none))
 (define-extern mp-apply-elevator (function mp-event none))
 (define-extern mp-apply-scene (function mp-event none :behavior mp-manager))
+;; co-op mission introductions played by everyone (multiplayer-world.gc)
+(define-extern mp-apply-mission-vote (function mp-event none :behavior mp-manager))
+(define-extern mp-pull-input (function none))
+(define-extern mp-pull-update (function none))
+(define-extern mp-draw-pull (function none))
 (define-extern mp-apply-challenge (function mp-event none))
 (define-extern mp-apply-art-level (function mp-event none))
 (define-extern mp-apply-skel-def (function mp-event none))
@@ -3855,9 +3903,15 @@
         (((mp-event-kind world-request))
          ;; a host at the title screen or loading has no world to give yet: the guest asks again
          ;; every 10 s
-         (if (and (= *mp-mode* (mp-mode host)) (mp-in-game?) (not (-> *mp-session* unlock-pending)))
-             (mp-send-world-save (-> ev from))
-             )
+         (when (and (= *mp-mode* (mp-mode host))
+                    (mp-in-game?)
+                    (not (-> *mp-session* unlock-pending))
+                    ;; a save of the world and 40 to 120 KB sent: once per 5 s per guest at most
+                    (mp-elapsed? (-> *mp-join* answered (-> ev from)) (seconds 5))
+                    )
+           (set! (-> *mp-join* answered (-> ev from)) (mp-now))
+           (mp-send-world-save (-> ev from) (-> ev iarg 0))
+           )
          )
         (((mp-event-kind elevator))
          (mp-apply-elevator ev)
@@ -3877,8 +3931,10 @@
              )
          )
         (((mp-event-kind hit))
+         ;; an enemy's hit: a few points at most (a player's health is 12 or so); a bad value sent
+         ;; does no more
          (if *target*
-             (mp-take-hit (the-as vector #f) (-> ev fvec x))
+             (mp-take-hit (the-as vector #f) (fmax 0.0 (fmin 20.0 (-> ev fvec x))))
              )
          )
         (((mp-event-kind actor-hit))
@@ -3910,9 +3966,11 @@
            )
          )
         (((mp-event-kind teleport))
-         (when (and *target* (!= (-> ev iarg 0) *mp-local-slot*))
+         ;; the host's administration alone; applied once no cutscene plays and our player is free
+         ;; (mp-update-pending-teleport): moved during a cutscene, a player fell through the world
+         (when (and *target* (zero? (-> ev from)) (!= (-> ev iarg 0) *mp-local-slot*) (mp-remote-state (-> ev iarg 0)))
            (mp-show-message "The host teleports you")
-           (mp-teleport-to-player (-> ev iarg 0))
+           (set! *mp-request-teleport* (-> ev iarg 0))
            )
          )
         (((mp-event-kind world))
@@ -3924,7 +3982,7 @@
         (((mp-event-kind econ-pick))
          (when (= *mp-mode* (mp-mode host))
            (if (nonzero? (-> ev iarg 1))
-               (mp-econ-challenge-claim (-> ev from) (-> ev iarg 1) (-> ev fvec x))
+               (mp-econ-challenge-claim (-> ev from) (-> ev iarg 1) (-> ev iarg 2) (-> ev fvec x))
                (mp-econ-claim-orb (-> ev from) (the-as uint (-> ev iarg 0)))
                )
            )
@@ -3948,6 +4006,12 @@
          )
         (((mp-event-kind mission-start))
          (mp-apply-mission-start ev)
+         )
+        (((mp-event-kind mission-vote))
+         (mp-apply-mission-vote ev)
+         )
+        (((mp-event-kind fail-decided))
+         (mp-apply-fail-decided ev)
          )
         (((mp-event-kind race-progress))
          (mp-apply-race-progress ev)
@@ -4019,30 +4083,36 @@
 (defconstant MP_FLDAX_CLIPS 27)
 
 (defun mp-fldax-art ()
-  "Daxter's art group with Jak's lizard clips replaced by his (*mp-fldax-map*), copied once from
-   the sidekick's; #f without a sidekick or his lizard clips."
-  (let ((fl *mp-fldax*))
-    (when (not (-> fl art))
-      (let* ((sk (if *target* (the-as process-drawable (ppointer->process (-> *target* sidekick)))))
-             (dax (if (and sk (nonzero? (-> sk draw))) (-> sk draw art-group)))
+  "Daxter's art group with Jak's lizard clips replaced by his (*mp-fldax-map*), copied from the
+   sidekick's for every ride: its clips live in the level of the lizard (the desert's, the
+   village's), and a copy kept from a level since unloaded drew freed memory. #f without a sidekick
+   or his lizard clips."
+  (let* ((fl *mp-fldax*)
+         (sk (if *target* (the-as process-drawable (ppointer->process (-> *target* sidekick)))))
+         (dax (if (and sk (nonzero? (-> sk draw))) (-> sk draw art-group)))
+         )
+    (cond
+      ((and dax (< 432 (-> dax length)) (-> dax data 391) (= (-> dax data 391 type) art-joint-anim))
+       ;; a basic starts 4 bytes before its address (its type): the copy takes it along; its memory
+       ;; is kept for the next ride (global memory is never given back)
+       (let ((size (+ 36 (* 4 (-> dax length)))))
+         (when (or (not (-> fl art)) (< (-> fl size) size))
+           (set! (-> fl art) (the-as art-group (&+ (malloc 'global size) 4)))
+           (set! (-> fl size) size)
+           )
+         (mem-copy! (&+ (the-as pointer (-> fl art)) -4) (&+ (the-as pointer dax) -4) size)
+         (let ((ag (-> fl art)))
+           (dotimes (i MP_FLDAX_CLIPS)
+             (set! (-> ag data (-> *mp-fldax-map* (* 2 i))) (-> dax data (-> *mp-fldax-map* (+ (* 2 i) 1))))
              )
-        (when (and dax (< 432 (-> dax length)) (-> dax data 391) (= (-> dax data 391 type) art-joint-anim))
-          ;; a basic starts 4 bytes before its address (its type): the copy takes it along
-          (let* ((size (+ 36 (* 4 (-> dax length))))
-                 (mem (malloc 'global size))
-                 )
-            (mem-copy! mem (&+ (the-as pointer dax) -4) size)
-            (let ((ag (the-as art-group (&+ mem 4))))
-              (dotimes (i MP_FLDAX_CLIPS)
-                (set! (-> ag data (-> *mp-fldax-map* (* 2 i))) (-> dax data (-> *mp-fldax-map* (+ (* 2 i) 1))))
-                )
-              (set! (-> fl art) ag)
-              )
-            )
-          )
+           ag
+           )
+         )
+       )
+      (else
+        (the-as art-group #f)
         )
       )
-    (-> fl art)
     )
   )
 
@@ -5017,12 +5087,19 @@
        (set! (-> js stage) 0)
        )
       ((and (= (-> js stage) 0) (mp-remote-state 0))
-       (mp-send-event (mp-event-kind world-request) 0 0 0.0)
+       ;; each request numbered: a world sent for an earlier one (asked again after 10 s, or before
+       ;; the host chose another mission) is not loaded
+       (+! (-> js request) 1)
+       (mp-send-event (mp-event-kind world-request) 0 (-> js request) 0.0)
        (set! (-> js stage) 1)
        (set! (-> js since) (mp-now))
        )
       ((= (-> js stage) 1)
        (cond
+         ((and (> (pc-mp-blob-ready) 0) (!= (pc-mp-blob-id) (-> js request)))
+          (format 0 "[multiplayer] a world of an earlier request (~D, ours ~D): dropped~%" (pc-mp-blob-id) (-> js request))
+          (pc-mp-blob-take (the-as pointer 0) 0)
+          )
          ((> (pc-mp-blob-ready) 0)
           (if (mp-load-world-save)
               (set! (-> js stage) 2)
@@ -5293,9 +5370,12 @@
 (defconstant MP_CHALLENGE_RESULT_TIME (seconds 600)) ;; a player still playing this long after our result has none
 (defconstant MP_CHALLENGE_SHOW_TIME (seconds 8))     ;; the winner shown
 
+(define *mp-challenge-runs* 0) ;; challenges our play started: the count of their runs
+
 (deftype mp-challenge-state (structure)
   ((phase      int32)       ;; 0 none, 1 invited, 2 accepted (to its start), 3 playing, 4 our result in, 5 decided
    (node       int32)       ;; the challenge's resolution node (sub-task-list index)
+   (run        int32)       ;; this play of it: its starter's slot * 2^24 + a count (every message)
    (intro      int32)       ;; its introduction node
    (starter    int32)       ;; slot of the player who started it
    (since      time-frame)  ;; when the phase began (real clock)
@@ -5325,6 +5405,173 @@
 ;; a line of ours: a button icon (<PAD_DPAD_UP>) expands to about 110 characters
 (define *mp-challenge-line* (new 'global 'string 256 (the-as string #f)))
 
+;; ------------------------------------------------------------------------------------------------
+;; Free roam: the orb activities, again and again
+;;
+;; Free roam is the end of the game (mp-unlock-everything): no mission is left, only the activities
+;; that pay precursor orbs, which offer themselves again once decided, so that each play pays
+;; again. A burning bush challenge whose resolution closed offers itself again (its introduction
+;; reopened, task-node-open!, as the bush's own menu does) once its reward is settled (our
+;; challenge's phase back to 0) and no cutscene plays; a bush that offers several challenges (the
+;; desert's burning-bush-desc-4: air time, jump distance, rolls...) offers the first open one, so
+;; its challenges are reopened once all are done. A medal of the gun courses, the turret game, the
+;; power game or the pre-game (its node closed when won, which pays it) is offered again 10 s later
+;; (the first of a chain of medals: the others reopen with it). The scores are forgotten then
+;; (*game-info* game-score): a challenge paid by cups pays the cups reached, not their improvement
+;; over the best. Nothing of this is saved (free roam saves nothing).
+;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_FREE_REPLAYS 16)
+
+(deftype mp-free-replay (structure)
+  ((node   int32 MP_FREE_REPLAYS)      ;; nodes to reopen, 0 free
+   (closed time-frame MP_FREE_REPLAYS) ;; when the activity closed them
+   (count  int32)                      ;; reopened (test log)
+   )
+  )
+
+(define *mp-free-replay* (new 'global 'mp-free-replay))
+
+(defun mp-free-roam? ()
+  "#t in a free roam session: online, the host's world started as free roam."
+  (and (mp-online?) (not (mp-coop?)) (logtest? *mp-world* (mp-world-flag free)))
+  )
+
+(defun mp-free-replay-node ((n int))
+  "The node to reopen so that the activity whose node `n` just closed pays again: a burning bush
+   challenge's introduction (for its resolution), a medal (the first of a chain of medals); 0 for
+   none."
+  (let* ((nodes (-> *game-info* sub-task-list))
+         (node (-> nodes n))
+         (parent (the-as int (-> node parent-node 0)))
+         )
+    (cond
+      ((and (mp-bbush-node? node) (nonzero? parent) (mp-bbush-node? (-> nodes parent)))
+       parent
+       )
+      ((or (= n (game-task-node wascity-pre-game-bronze))
+           (= n (game-task-node wascity-pre-game-silver))
+           (= n (game-task-node wascity-pre-game-gold))
+           )
+       (the-as int (game-task-node wascity-pre-game-bronze))
+       )
+      ((or (= n (game-task-node city-power-game-bronze))
+           (= n (game-task-node city-power-game-silver))
+           (= n (game-task-node city-power-game-gold))
+           )
+       (the-as int (game-task-node city-power-game-bronze))
+       )
+      ((or (= n (game-task-node wascity-gungame-bronze))
+           (= n (game-task-node wascity-gungame-silver))
+           (= n (game-task-node wascity-gungame-gold))
+           (= n (game-task-node city-gun-course-1-bronze))
+           (= n (game-task-node city-gun-course-1-silver))
+           (= n (game-task-node city-gun-course-1-gold))
+           (= n (game-task-node city-gun-course-2-bronze))
+           (= n (game-task-node city-gun-course-2-silver))
+           (= n (game-task-node city-gun-course-2-gold))
+           )
+       n
+       )
+      (else
+        0
+        )
+      )
+    )
+  )
+
+(defun mp-free-replay-note ((node game-task-node-info))
+  "A task node closed here (ours or another player's): in free roam, the activity it ends is
+   queued to be offered again."
+  (when (mp-free-roam?)
+    (let ((n (mp-free-replay-node (get-idx-in-task-list node)))
+          (r *mp-free-replay*)
+          )
+      (when (> n 0)
+        (dotimes (i MP_FREE_REPLAYS)
+          (when (or (zero? (-> r node i)) (= (-> r node i) n))
+            (set! (-> r node i) n)
+            (set! (-> r closed i) (mp-now))
+            (return #f)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-free-replay-shared-open? ((n int))
+  "#t when another burning bush challenge offered by the same bush as introduction `n` is open:
+   that bush offers it first."
+  (let* ((nodes (-> *game-info* sub-task-list))
+         (events (-> nodes n when-open))
+         )
+    (when (and events (nonzero? (-> events length)))
+      (let ((actor (-> events 0 actor)))
+        (dotimes (i (-> nodes length))
+          (let ((other (-> nodes i)))
+            (if (and (!= i n)
+                     (mp-bbush-node? other)
+                     (-> other when-open)
+                     (nonzero? (-> other when-open length))
+                     (= (-> other when-open 0 actor) actor)
+                     (game-task-node-info-method-12 other)
+                     )
+                (return #t)
+                )
+            )
+          )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-free-replay-update ()
+  "Every frame in free roam: the activities queued (mp-free-replay-note) are offered again once
+   decided: a challenge's after 5 s with its reward settled, a medal's after 10 s, no cutscene
+   playing."
+  (when (and (mp-free-roam?)
+             (zero? (-> *mp-challenge* phase))
+             (not (and *scene-player* (ppointer->process *scene-player*)))
+             )
+    (let ((r *mp-free-replay*)
+          (nodes (-> *game-info* sub-task-list))
+          )
+      (dotimes (i MP_FREE_REPLAYS)
+        (let ((n (-> r node i)))
+          (when (and (> n 0)
+                     (mp-elapsed? (-> r closed i) (if (mp-bbush-node? (-> nodes n)) (seconds 5) (seconds 10)))
+                     )
+            (cond
+              ((game-task-node-info-method-12 (-> nodes n))
+               ;; open already (another way)
+               (set! (-> r node i) 0)
+               )
+              ((and (mp-bbush-node? (-> nodes n)) (mp-free-replay-shared-open? n))
+               ;; its bush offers another challenge first
+               )
+              (else
+                (set! (-> r node i) 0)
+                (+! (-> r count) 1)
+                (let ((scores (-> *game-info* game-score)))
+                  (dotimes (k (-> scores length))
+                    (set! (-> scores k) 0.0)
+                    )
+                  )
+                (task-node-open! (the-as game-task-node n) 'event)
+                (format 0 "[multiplayer] free roam: ~S offered again~%" (-> nodes n name))
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-challenge-reset ()
   "No challenge any more (our reward, if held, is lost: decided or abandoned); a Daxter player
    who played it as Jak is Daxter again, unless in co-op the other player took Daxter meanwhile
@@ -5352,14 +5599,16 @@
   )
 
 (defun mp-send-challenge ((msg int) (node int) (arg int) (score float))
-  "Tell every other player about our challenge (resolution node `node`): `msg` 0 we started it (arg
-   its introduction node), 1 we take part, 2 our result (arg 1 reached, 0 not; `score`)."
+  "Tell every other player about our challenge (resolution node `node`, its run in iarg 3): `msg` 0
+   we started it (arg its introduction node), 1 we take part, 2 our result (arg 1 reached, 0 not;
+   `score`)."
   (let ((ev (new 'stack 'mp-event)))
     (set! (-> ev kind) (mp-event-kind challenge))
     (set! (-> ev to) -1)
     (set! (-> ev iarg 0) msg)
     (set! (-> ev iarg 1) node)
     (set! (-> ev iarg 2) arg)
+    (set! (-> ev iarg 3) (-> *mp-challenge* run))
     (set! (-> ev fvec x) score)
     (pc-mp-send-event ev)
     )
@@ -5428,6 +5677,8 @@
        (set! (-> c node) n)
        (set! (-> c intro) (the-as int (-> node parent-node 0)))
        (set! (-> c starter) *mp-local-slot*)
+       (+! *mp-challenge-runs* 1)
+       (set! (-> c run) (logior (ash *mp-local-slot* 24) (logand *mp-challenge-runs* #xffffff)))
        (set! (-> c started) (mp-now))
        (set! (-> c since) (mp-now))
        (set! (-> c players) (ash 1 *mp-local-slot*))
@@ -5436,7 +5687,7 @@
        (mp-challenge-as-jak)
        (format 0 "[multiplayer] our challenge ~S starts: the others are invited~%" (-> node name))
        (mp-send-challenge 0 n (-> c intro) 0.0)
-       (mp-econ-challenge-start n)
+       (mp-econ-challenge-start n (-> c run))
        )
       )
     )
@@ -5455,10 +5706,10 @@
       ;; the host keeps every result, playing or not, for the winner's orbs ("Economy")
       (case (-> ev iarg 0)
         ((0)
-         (mp-econ-challenge-start n)
+         (mp-econ-challenge-start n (-> ev iarg 3))
          )
         ((2)
-         (mp-econ-challenge-result from n (-> ev iarg 2) (-> ev fvec x))
+         (mp-econ-challenge-result from n (-> ev iarg 3) (-> ev iarg 2) (-> ev fvec x))
          )
         )
       (case (-> ev iarg 0)
@@ -5480,6 +5731,7 @@
                (mp-challenge-reset)
                (set! (-> c phase) 1)
                (set! (-> c node) n)
+               (set! (-> c run) (-> ev iarg 3))
                (set! (-> c intro) intro)
                (set! (-> c starter) from)
                (set! (-> c started) (mp-now))
@@ -5745,7 +5997,7 @@
                  )
              (set! (-> c score me) (-> c live-score))
              (mp-send-challenge 2 (-> c node) (if (= end 'reached) 1 0) (-> c live-score))
-             (mp-econ-challenge-result me (-> c node) (if (= end 'reached) 1 0) (-> c live-score))
+             (mp-econ-challenge-result me (-> c node) (-> c run) (if (= end 'reached) 1 0) (-> c live-score))
              (format 0 "[multiplayer] our challenge result: ~A score ~,,2f, manager ~A~%" end (-> c live-score) (if mgr 'alive 'gone))
              )
            )
@@ -5767,7 +6019,7 @@
            ;; a live process for the stock's per-level count (it reads the handle's parent)
            (give *game-info* 'skill amount (process->handle *target*))
            ;; and to our account, which the host checks
-           (mp-econ-challenge-claim *mp-local-slot* (-> c node) amount)
+           (mp-econ-challenge-claim *mp-local-slot* (-> c node) (-> c run) amount)
            )
          )
        (if (>= (- (mp-now) (-> c since)) MP_CHALLENGE_SHOW_TIME)
@@ -6180,6 +6432,8 @@
       (mp-update-coop-roles)
       (mp-update-vehicle-interaction)
       (mp-update-pending-teleport)
+      (mp-pull-update)
+      (mp-free-replay-update)
       (mp-daxter-guns)
       (mp-update-session)
       (mp-update-race-vehicles)
@@ -6219,8 +6473,11 @@
     )
   )
 
+(define *mp-used?* #f) ;; a session ran since boot: copies and art of ours may exist (level deactivate)
+
 (defbehavior mp-manager-init-by-other mp-manager ()
   "Start with no puppet and nothing pending."
+  (set! *mp-used?* #t)
   (dotimes (i MP_MAX_PLAYERS)
     (set! (-> self puppets i) (the-as handle #f))
     )
@@ -6851,8 +7108,8 @@
 ;;
 ;; In co-op, every player races in a vehicle of its own: the race's start waits until every connected
 ;; player drives one (one still loading the host's world does not); no player rides along with
-;; another or on a Jak's shoulder meanwhile. The players count in each other's place, and the race
-;; is won only when they take the first places.
+;; another or on a Jak's shoulder meanwhile. There is one race, the host's, as in himstan's Jak and
+;; Daxter II Multiplayer: the other player takes a racer's slot, and the host decides.
 ;;   - A race gives its vehicle at a race continue point (target-death.gc arrive-at-continue, flag
 ;;     race): each machine running the race gives its own player one, at the same place. A guest's
 ;;     player is moved back before its vehicle appears (6 m per slot, behind the grid), so the
@@ -6868,18 +7125,22 @@
 ;;     players may leave their vehicle (the race forbids it, pilot-exit).
 ;;   - From the start's wait to the finish no ride along (mp-update-vehicle-interaction) and no
 ;;     shoulder (mp-update-perch): mp-race-context?.
-;;   - Places: a running race (race-manager.gc, its manager's active post) calls mp-race-position
-;;     every frame with our place among its racers and our progress (laps done and the part of the
-;;     lap, or a finish: the earlier the larger, mp-racer-progress), and mp-race-ai-progress with
-;;     each racer's; ours goes to the others 5 times a second, the host's racers' with it. The
-;;     racers every player sees and passes are the host's (a guest's own sleep, 1.2): a guest
-;;     counts the host's racers ahead of it, the host its own. The HUD's place (*game-info*
-;;     race-position, sprites 1st to 8th) adds the players ahead of us.
-;;   - Result: at its finish a player is ahead of every racer or not (counted as above). One ahead
-;;     of every racer waits (60 s at most) until the other players of the race finished ("Waiting
-;;     for the other players to finish"); the race is won when every one of them finished ahead of
-;;     every racer (the players took the first places), lost otherwise. A time trial keeps its stock
-;;     result (its score).
+;;   - Slots: when the start is released (course-race.gc mp-race-bind-players!), the other player
+;;     takes the racer slot before ours on both machines (Kleiver's race, the rally: slot 3, its
+;;     racer removed with 'go-die, as kill-npc-racers does). The host races the other player's
+;;     puppet there: its position counts its laps, place and finish, and its leaving (a puppet
+;;     gone or dead) puts it out of the race. A guest moves its own vehicle there and the host's
+;;     puppet into the host's slot (mp-race-bound!).
+;;   - The host's race counts: every frame a running race (race-manager.gc, its manager's active
+;;     post) gives each racer's progress and bits (mp-race-slot, mp-race-sync); the host sends them
+;;     10 times a second and at once when a racer starts, finishes or leaves. A guest's race takes
+;;     them for every racer but its own (race-manager.gc mp-race-mirror!): its places (the HUD's 1st
+;;     to 5th) are the host's; the racers it sees are the host's (a guest's own sleep, 1.2).
+;;   - Result: the host decides once both players finished or left the race (60 s after the first
+;;     finish at most): won when a player finished first; the rally (won by score), when a player's
+;;     score was good enough (each player's own result, the guest's sent at its finish). A player
+;;     who finished waits for that verdict ("Waiting for the other players to finish"). A time trial
+;;     (one racer) is each player's own, with its stock result.
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_RACE_READY (seconds 10)) ;; the start's countdown once every player is aboard
@@ -6954,186 +7215,250 @@
   (and (mp-coop?) (or (mp-race-waiting?) (< (- (mp-now) (-> *mp-race* in-race-at)) (seconds 1))))
   )
 
-(defun mp-race-mate? ((i int))
-  "#t when remote player `i` runs our race, by what it sent: within 3 s while racing, until another
-   race once it finished (its result stays)."
-  (let ((r *mp-race*))
-    (and (mp-coop?)
-         (mp-remote-state i)
-         (nonzero? (-> r own-node))
-         (= (-> r prog-node i) (-> r own-node))
-         (< (- (mp-now) (-> r prog-time i)) (if (zero? (-> r prog-done i))
-                                                (seconds 3)
-                                                (seconds 300)
-                                                )
-            )
-         )
+(defun mp-race-partner ()
+  "Co-op: the slot of the other player connected (the lowest), -1 none (offline, alone, free roam)."
+  (when (mp-coop?)
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (and (!= i *mp-local-slot*) (mp-remote-state i))
+          (return i)
+          )
+      )
     )
+  -1
   )
 
-(defun mp-race-ai-progress ((i int) (progress float))
-  "Called every frame by a running race (race-manager.gc) with racer `i`'s progress, before
-   mp-race-position: kept for the event the host sends (8 racers at most)."
+(defun mp-race-bound! ((node int) (own int) (partner int) (player int))
+  "Our race of task node `node` binds the players (course-race.gc mp-race-bind-players!): our racer
+   slot `own`, the other player's (`player`) `partner`. From now on the host's race counts. A
+   race that binds nobody (`player` -1) clears the last one's."
   (let ((r *mp-race*))
-    (when (< (-> r ai-count) 8)
-      (set! (-> r ai (-> r ai-count)) progress)
-      (+! (-> r ai-count) 1)
+    (set! (-> r bound-node) (if (>= player 0) node 0))
+    (set! (-> r own-slot) own)
+    (set! (-> r partner-slot) partner)
+    (set! (-> r partner) player)
+    (set! (-> r verdict) 0)
+    (set! (-> r own-result) 0)
+    (set! (-> r partner-result) 0)
+    (set! (-> r first-finish) 0)
+    (set! (-> r finished-at) 0)
+    (set! (-> r host-time) 0)
+    (if (>= player 0)
+        (format 0 "[multiplayer] race ~D: one race for both players, ours in slot ~D, player ~D's in slot ~D~%"
+                node own player partner
+                )
+        )
+    )
+  (none)
+  )
+
+(defun mp-race-bound? ((node int))
+  "#t when our race of task node `node` binds the players (co-op, mp-race-bound!)."
+  (and (mp-coop?) (nonzero? node) (= (-> *mp-race* bound-node) node))
+  )
+
+(defun mp-race-slot ((i int) (progress float) (bits int))
+  "Called every frame by a running race (race-manager.gc) for each racer slot `i`: its progress
+   (laps done and the part of the lap, or 1000 minus its finish order) and bits (1 started, 2
+   finished, 4 out of the race)."
+  (when (< i 8)
+    (set! (-> *mp-race* slot-progress i) progress)
+    (set! (-> *mp-race* slot-bits i) bits)
+    )
+  (none)
+  )
+
+(defconstant MP_RACE_RESULT_WAIT (seconds 60)) ;; after the first player's finish, the others' at most
+
+(defun mp-race-decide ((count int) (score? symbol))
+  "Host: the verdict of a race binding the players, once every player of it finished or left it (or
+   60 s after the first finish): won when a player finished first (himstan's rule); a race won by
+   score (the rally), when a player's score was good enough (its own result)."
+  (let* ((r *mp-race*)
+         (slots (logior (ash 1 (-> r own-slot)) (ash 1 (-> r partner-slot))))
+         (done #t)
+         (won? #f)
+         )
+    (dotimes (i (min count 8))
+      (when (logtest? slots (ash 1 i))
+        (if (and (logtest? (-> r slot-bits i) 2) (zero? (-> r first-finish)))
+            (set! (-> r first-finish) (mp-now))
+            )
+        (if (not (logtest? (-> r slot-bits i) 6))
+            (set! done #f)
+            )
+        (if (and (logtest? (-> r slot-bits i) 2) (< 999.5 (-> r slot-progress i)))
+            (set! won? #t)
+            )
+        )
+      )
+    (when score?
+      ;; each player's own result, the guest's as it sent it
+      (set! won? (or (= (-> r own-result) 1) (= (-> r partner-result) 1)))
+      (if (and (zero? (-> r partner-result)) (not (logtest? (-> r slot-bits (-> r partner-slot)) 4)))
+          (set! done #f)
+          )
+      )
+    (when (and (not done) (nonzero? (-> r first-finish)) (mp-elapsed? (-> r first-finish) MP_RACE_RESULT_WAIT))
+      (format 0 "[multiplayer] race: a player did not finish within 60 s of the first~%")
+      (set! done #t)
+      )
+    (when (and done (zero? (-> r verdict)))
+      (set! (-> r verdict) (if won? 1 2))
+      (format 0 "[multiplayer] race verdict: ~S~%" (if won? "won" "lost"))
       )
     )
   (none)
   )
 
-(defun mp-race-ai-ahead ((rank int) (progress float))
-  "Racers ahead of us: a guest in co-op, the host's (they are the ones it sees), from what the host
-   sent within 3 s; else our race's own (`rank`)."
+(defun mp-race-sync ((node int) (count int) (score? symbol))
+  "Called every frame by a running race (race-manager.gc) after mp-race-slot: in a race binding the
+   players, the host decides and sends every racer's progress and bits, and its verdict, 10 times a
+   second and at once when a racer's bits change; a guest takes them (mp-race-mirror!)."
   (let ((r *mp-race*))
-    (cond
-      ((and (mp-coop?)
-            (!= *mp-mode* (mp-mode host))
-            (= (-> r prog-node 0) (-> r own-node))
-            (< (- (mp-now) (-> r host-ai-time)) (seconds 3))
-            )
-       (let ((n 0))
-         (dotimes (i (-> r host-ai-count))
-           (if (< progress (-> r host-ai i))
-               (+! n 1)
-               )
-           )
-         n
-         )
-       )
-      (else
-        rank
-        )
-      )
-    )
-  )
-
-(defun mp-race-position ((rank int) (progress float) (done int) (node int))
-  "Called every frame by a running race (race-manager.gc) with our place among its racers (from 0),
-   our progress (above), our result (0 racing, 1 finished ahead of every racer, 2 behind one) and
-   its task node: sent to the others 5 times a second, at once when the result changes. Returns our
-   place with the players of the race ahead of us counted, 7 (8th) at most."
-  (let* ((r *mp-race*)
-         (ai-ahead (begin
-                     (set! (-> r own-node) node)
-                     (mp-race-ai-ahead rank progress)
-                     )
-                   )
-         (place ai-ahead)
-         )
     (set! (-> r in-race-at) (mp-now))
-    (set! (-> r ai-ahead) ai-ahead)
-    ;; our result, fixed at our finish: ahead of every racer (1) or not (2)
-    (cond
-      ((zero? done)
-       (set! (-> r finished-at) 0)
-       )
-      ((zero? (-> r own-done))
-       (set! (-> r finished-at) (mp-now))
-       (set! done (if (zero? ai-ahead) 1 2))
-       )
-      (else
-        (set! done (-> r own-done))
-        )
-      )
-    (let ((changed? (!= done (-> r own-done))))
-      (set! (-> r own-progress) progress)
-      (set! (-> r own-node) node)
-      (set! (-> r own-done) done)
-      (when (and (mp-coop?) (or changed? (>= (- (mp-now) (-> r sent)) (seconds 0.2))))
-        (set! (-> r sent) (mp-now))
-        (let ((ev (new 'stack 'mp-event)))
-          (set! (-> ev kind) (mp-event-kind race-progress))
-          (set! (-> ev to) -1)
-          (set! (-> ev iarg 0) node)
-          (set! (-> ev iarg 1) done)
-          (set! (-> ev fvec x) progress)
-          ;; the host's racers, the ones every player races against
-          (set! (-> ev iarg 2) (if (= *mp-mode* (mp-mode host)) (-> r ai-count) 0))
-          (dotimes (i (-> ev iarg 2))
-            (set! (-> (the-as (pointer float) (-> ev text)) i) (-> r ai i))
+    (set! (-> r own-node) node)
+    (when (and (mp-race-bound? node) (= *mp-mode* (mp-mode host)))
+      (if (zero? (-> r verdict))
+          (mp-race-decide count score?)
+          )
+      (let ((bits 0))
+        (dotimes (i (min count 8))
+          (set! bits (logior bits (ash (logand (-> r slot-bits i) 7) (* 3 i))))
+          )
+        (set! bits (logior bits (ash (-> r verdict) 24)))
+        (when (or (!= bits (-> r sent-bits)) (mp-elapsed? (-> r sent) (seconds 0.1)))
+          (set! (-> r sent-bits) bits)
+          (set! (-> r sent) (mp-now))
+          (let ((ev (new 'stack 'mp-event)))
+            (set! (-> ev kind) (mp-event-kind race-progress))
+            (set! (-> ev to) -1)
+            (set! (-> ev iarg 0) node)
+            (set! (-> ev iarg 1) 0)
+            (set! (-> ev iarg 2) bits)
+            (set! (-> ev iarg 3) (min count 8))
+            (dotimes (i (min count 8))
+              (set! (-> (the-as (pointer float) (-> ev text)) i) (-> r slot-progress i))
+              )
+            (pc-mp-send-event ev)
             )
-          (pc-mp-send-event ev)
           )
         )
       )
-    (dotimes (i MP_MAX_PLAYERS)
-      (if (and (mp-race-mate? i) (< progress (-> r prog i)))
-          (+! place 1)
-          )
-      )
-    ;; a test counts players that are not there (race-extra-ahead): a third or fourth player's place
-    (+! place *mp-test-race-extra*)
-    (set! (-> r place) place)
-    (set! (-> r ai-count) 0)
-    (min place 7)
     )
+  (none)
   )
 
 (defun mp-apply-race-progress ((ev mp-event))
-  "Another player's race progress (mp-race-position)."
-  (let ((r *mp-race*)
-        (i (-> ev from))
-        )
-    (when (and (>= i 0) (< i MP_MAX_PLAYERS))
-      (set! (-> r prog i) (-> ev fvec x))
-      (set! (-> r prog-node i) (-> ev iarg 0))
-      (set! (-> r prog-done i) (-> ev iarg 1))
-      (set! (-> r prog-time i) (mp-now))
-      (when (and (zero? i) (> (-> ev iarg 2) 0))
-        (set! (-> r host-ai-count) (min 8 (-> ev iarg 2)))
-        (dotimes (k (-> r host-ai-count))
-          (set! (-> r host-ai k) (-> (the-as (pointer float) (-> ev text)) k))
-          )
-        (set! (-> r host-ai-time) (mp-now))
-        )
+  "A race-progress event: the host's race (iarg 1 0: every racer's progress in text, bits iarg 2, its
+   verdict above bit 24), or a guest's own result (iarg 1 1: iarg 2 1 good enough, 2 not)."
+  (let ((r *mp-race*))
+    (case (-> ev iarg 1)
+      ((0)
+       (when (zero? (-> ev from))
+         (set! (-> r host-node) (-> ev iarg 0))
+         (set! (-> r host-count) (min 8 (-> ev iarg 3)))
+         (set! (-> r host-bits) (-> ev iarg 2))
+         (dotimes (i (-> r host-count))
+           (set! (-> r host-progress i) (-> (the-as (pointer float) (-> ev text)) i))
+           )
+         (set! (-> r host-time) (mp-now))
+         (if (and (= (-> ev iarg 0) (-> r bound-node)) (zero? (-> r verdict)))
+             (set! (-> r verdict) (logand (ash (-> ev iarg 2) -24) 3))
+             )
+         )
+       )
+      ((1)
+       (if (and (= *mp-mode* (mp-mode host)) (= (-> ev iarg 0) (-> r bound-node)))
+           (set! (-> r partner-result) (-> ev iarg 2))
+           )
+       )
       )
     )
   (none)
   )
 
-(defconstant MP_RACE_RESULT_WAIT (seconds 60))
-
-(defun mp-race-result-wait? ((first? symbol))
-  "Called by a race every frame once our player finished: #t while, in co-op, we finished ahead of
-   every racer (our result, mp-race-position; `first?` #f for a time trial) and another player of
-   the race still races, 60 s at most: our result waits for theirs."
-  (let ((r *mp-race*)
-        (wait? #f)
-        )
-    (when (and (mp-coop?) (= (-> r own-done) 1) first? (< (- (mp-now) (-> r finished-at)) MP_RACE_RESULT_WAIT))
-      (dotimes (i MP_MAX_PLAYERS)
-        (if (and (mp-race-mate? i) (zero? (-> r prog-done i)))
-            (set! wait? #t)
-            )
-        )
-      )
-    (when wait?
-      (if (>= (- (mp-now) (-> r result-hold)) (seconds 1))
-          (format 0 "[multiplayer] race finished: our result waits for the other players~%")
-          )
-      (set! (-> r result-hold) (mp-now))
-      )
-    wait?
+(defun mp-race-mirroring? ((node int))
+  "#t on a guest whose race of task node `node` binds the players and has the host's race fresh
+   (within 3 s): its racers but ours take the host's progress (race-manager.gc mp-race-mirror!)."
+  (let ((r *mp-race*))
+    (and (!= *mp-mode* (mp-mode host))
+         (mp-race-bound? node)
+         (= (-> r host-node) node)
+         (nonzero? (-> r host-time))
+         (not (mp-elapsed? (-> r host-time) (seconds 3)))
+         )
     )
   )
 
-(defun mp-race-won? ((first? symbol))
-  "Our race's result: the stock (finished ahead of every racer of our race, `first?`) offline or in
-   free roam; in co-op, won only when every player of the race finished ahead of every racer (our
-   result as mp-race-position counted it, theirs as they sent it)."
-  (let* ((r *mp-race*)
-         (won? (if (mp-coop?) (= (-> r own-done) 1) first?))
-         )
-    (when (mp-coop?)
-      (dotimes (i MP_MAX_PLAYERS)
-        (if (and (mp-race-mate? i) (!= (-> r prog-done i) 1))
-            (set! won? #f)
-            )
-        )
-      (format 0 "[multiplayer] race result: ~S (ours ~S)~%" (if won? "won" "lost") (if (= (-> r own-done) 1) "ahead of every racer" "behind a racer"))
+(defun mp-race-slot-progress ((i int))
+  "The host's progress of racer slot `i` (mp-race-mirroring?)."
+  (if (< i (-> *mp-race* host-count))
+      (-> *mp-race* host-progress i)
+      0.0
       )
+  )
+
+(defun mp-race-slot-bits ((i int))
+  "The host's bits of racer slot `i` (1 started, 2 finished, 4 out of the race)."
+  (if (< i (-> *mp-race* host-count))
+      (logand (ash (-> *mp-race* host-bits) (- (* 3 i))) 7)
+      0
+      )
+  )
+
+(defun mp-race-result-wait? ((local-win? symbol))
+  "Called by a race every frame once our player finished, with its own result (finished first, or a
+   good enough score): #t while, in a race binding the players, the host's verdict is not in (90 s
+   at most); a guest sends its own result to the host first. Offline, alone, free roam: #f."
+  (let ((r *mp-race*)
+        (node (-> *mp-race* own-node))
+        )
+    (cond
+      ((not (mp-race-bound? node))
+       #f
+       )
+      (else
+        (when (zero? (-> r finished-at))
+          (set! (-> r finished-at) (mp-now))
+          (set! (-> r own-result) (if local-win? 1 2))
+          (when (!= *mp-mode* (mp-mode host))
+            (let ((ev (new 'stack 'mp-event)))
+              (set! (-> ev kind) (mp-event-kind race-progress))
+              (set! (-> ev to) 0)
+              (set! (-> ev iarg 0) node)
+              (set! (-> ev iarg 1) 1)
+              (set! (-> ev iarg 2) (-> r own-result))
+              (pc-mp-send-event ev)
+              )
+            )
+          )
+        (let ((wait? (and (zero? (-> r verdict)) (not (mp-elapsed? (-> r finished-at) (seconds 90))))))
+          (when wait?
+            (if (mp-elapsed? (-> r result-hold) (seconds 1))
+                (format 0 "[multiplayer] race finished: our result waits for the host's verdict~%")
+                )
+            (set! (-> r result-hold) (mp-now))
+            )
+          wait?
+          )
+        )
+      )
+    )
+  )
+
+(defun mp-race-won? ((local-win? symbol))
+  "Our race's result: the host's verdict in a race binding the players (co-op), else our own
+   (`local-win?`, the stock)."
+  (let* ((r *mp-race*)
+         (won? (if (and (mp-race-bound? (-> r own-node)) (nonzero? (-> r verdict)))
+                   (= (-> r verdict) 1)
+                   local-win?
+                   )
+               )
+         )
+    (if (mp-coop?)
+        (format 0 "[multiplayer] race result: ~S (ours ~S)~%" (if won? "won" "lost") (if local-win? "first" "not first"))
+        )
     won?
     )
   )
@@ -7269,6 +7594,29 @@
   )
 
 (define *mp-race-line* (new 'global 'string 128 (the-as string #f)))
+
+;; Co-op doors (multiplayer-world.gc mp-door-hold?): when an open door near our player last waited
+;; for a teammate behind it, and that teammate's slot.
+(define *mp-door-wait-time* (the-as time-frame 0))
+(define *mp-door-wait-slot* -1)
+
+(defun mp-draw-door-wait ()
+  "While a door near our player waits for a teammate behind it: that it does, with the teammate's
+   name."
+  (let ((st (if (>= *mp-door-wait-slot* 0) (mp-remote-state *mp-door-wait-slot*))))
+    (when (and st (< (- (mp-now) *mp-door-wait-time*) (seconds 0.3)))
+      (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 296 0.0 (font-color default) (font-flags shadow kerning middle large))))
+        (set-width! ctx 512)
+        (set-height! ctx 40)
+        (set! (-> ctx scale) 0.5)
+        (string<-charp *mp-temp-string* (-> st name))
+        (format (clear *mp-race-line*) (lookup-text! *common-text* (text-id progress-mp-door-wait) #f) *mp-temp-string*)
+        (print-game-text *mp-race-line* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+        )
+      )
+    )
+  (none)
+  )
 
 (defun mp-draw-race-wait ()
   "While our race start waits: how many players are aboard, then the start's countdown; above, that
@@ -7447,6 +7795,7 @@
   (mp-skip-input)
   (mp-fail-input)
   (mp-challenge-input)
+  (mp-pull-input)
   (if *progress-process*
       (set! (-> *mp-pause* menu-at) (mp-now))
       )
@@ -7565,6 +7914,7 @@
     ;; draws its own (outside the bucket above: they fill their own DMA)
     (mp-draw-beam-count)
     (mp-draw-race-wait)
+    (mp-draw-door-wait)
     (mp-draw-merchant)
     (mp-draw-spectate)
     (cond
@@ -8237,15 +8587,18 @@
   )
 
 ;; A challenge's reward (precursor orbs given by its task manager, "Burning bush challenges") has no
-;; entity to check: the winner claims it (econ-pick with iarg 1 = the challenge's node, fvec x the
-;; orbs). Every result goes to every player, so the host keeps them by challenge (a start empties
-;; its results) and credits a claim once per player and challenge: its player reached the
-;; objective with the best score, for at most MP_ECON_CHALLENGE_MAX orbs.
+;; entity to check: the winner claims it (econ-pick with iarg 1 = the challenge's node, iarg 2 its
+;; run, fvec x the orbs). Every result goes to every player, so the host keeps them by play of a
+;; challenge (its run: the starter's slot and count; free roam replays a challenge again and again)
+;; and credits a claim once per player and run: its player reached the objective with the best
+;; score, for at most MP_ECON_CHALLENGE_MAX orbs. A start or a claim sent again (same run) pays
+;; nothing more; a claim of a run the host does not know is refused.
 (defconstant MP_ECON_CHALLENGES 4)     ;; challenges whose results the host keeps
 (defconstant MP_ECON_CHALLENGE_MAX 20) ;; most orbs a challenge's claim may ask
 
 (deftype mp-econ-challenge (structure)
   ((node     int32)      ;; its resolution node, 0 free
+   (run      int32)      ;; the play of it (mp-challenge-state run)
    (at       time-frame) ;; last change (real clock): the oldest entry is reused
    (reached  int32)      ;; one bit per slot that reached the objective
    (credited int32)      ;; one bit per slot credited
@@ -8260,13 +8613,13 @@
 
 (define *mp-econ-challenges* (new 'global 'mp-econ-challenges))
 
-(defun mp-econ-challenge-entry ((node int))
-  "Host: the entry of challenge `node`: the one kept, else the oldest, emptied for it."
+(defun mp-econ-challenge-entry ((node int) (run int))
+  "Host: the entry of run `run` of challenge `node`: the one kept, else the oldest, emptied for it."
   (let ((all *mp-econ-challenges*)
         (oldest 0)
         )
     (dotimes (i MP_ECON_CHALLENGES)
-      (if (= (-> all entry i node) node)
+      (if (and (= (-> all entry i node) node) (= (-> all entry i run) run))
           (return (-> all entry i))
           )
       (if (< (-> all entry i at) (-> all entry oldest at))
@@ -8275,6 +8628,7 @@
       )
     (let ((e (-> all entry oldest)))
       (set! (-> e node) node)
+      (set! (-> e run) run)
       (set! (-> e at) (mp-now))
       (set! (-> e reached) 0)
       (set! (-> e credited) 0)
@@ -8283,22 +8637,20 @@
     )
   )
 
-(defun mp-econ-challenge-start ((node int))
-  "Host: challenge `node` starts (again): its results so far are gone. Who was credited stays: a
-   challenge pays each player once (a start sent again by a guest would credit it again)."
+(defun mp-econ-challenge-start ((node int) (run int))
+  "Host: run `run` of challenge `node` starts: an entry of its own (the same run sent again keeps
+   who was credited)."
   (when (= *mp-mode* (mp-mode host))
-    (let ((e (mp-econ-challenge-entry node)))
-      (set! (-> e at) (mp-now))
-      (set! (-> e reached) 0)
-      )
+    (set! (-> (mp-econ-challenge-entry node run) at) (mp-now))
     )
   (none)
   )
 
-(defun mp-econ-challenge-result ((slot int) (node int) (reached int) (score float))
-  "Host: player `slot`'s result of challenge `node` (reached 1 or 0, its score), kept for its orbs."
+(defun mp-econ-challenge-result ((slot int) (node int) (run int) (reached int) (score float))
+  "Host: player `slot`'s result of run `run` of challenge `node` (reached 1 or 0, its score), kept
+   for its orbs."
   (when (and (= *mp-mode* (mp-mode host)) (>= slot 0) (< slot MP_MAX_PLAYERS))
-    (let ((e (mp-econ-challenge-entry node)))
+    (let ((e (mp-econ-challenge-entry node run)))
       (set! (-> e at) (mp-now))
       (if (nonzero? reached)
           (logior! (-> e reached) (ash 1 slot))
@@ -8310,9 +8662,10 @@
   (none)
   )
 
-(defun mp-econ-challenge-claim ((slot int) (node int) (amount float))
-  "Player `slot` won challenge `node`: its `amount` orbs for its account. A guest asks the host; the
-   host credits them once, when that player reached the objective with the best score it saw."
+(defun mp-econ-challenge-claim ((slot int) (node int) (run int) (amount float))
+  "Player `slot` won run `run` of challenge `node`: its `amount` orbs for its account. A guest asks
+   the host; the host credits them once per run, when that player reached the objective with the
+   best score it saw."
   (cond
     ((!= *mp-mode* (mp-mode host))
      (let ((ev (new 'stack 'mp-event)))
@@ -8320,12 +8673,13 @@
        (set! (-> ev to) 0)
        (set! (-> ev iarg 0) 0)
        (set! (-> ev iarg 1) node)
+       (set! (-> ev iarg 2) run)
        (set! (-> ev fvec x) amount)
        (pc-mp-send-event ev)
        )
      )
     (else
-      (let ((e (mp-econ-challenge-entry node))
+      (let ((e (mp-econ-challenge-entry node run))
             (best -1000000000.0)
             (orbs (the int (+ amount 0.5)))
             (why (the-as string #f))
@@ -8872,6 +9226,7 @@
      (mp-draw-fail-votes)
      (mp-update-challenge)
      (mp-draw-challenge)
+    (mp-draw-pull)
      ;; no outline over a menu (the players behind it would show through the page)
      (set! (-> *pc-merc-outlines* off?) (if *progress-process* #t #f))
      (mp-skin-watch)

@@ -411,5 +411,8 @@
   "15a6": "~S remporte le défi",
   "15a7": "Égalité : chaque gagnant reçoit la récompense",
   "15a8": "Personne n'a réussi le défi",
-  "15a9": "Hébergement : ~D joueur(s), adresse internet ~S"
+  "15a9": "Hébergement : ~D joueur(s), adresse internet ~S",
+  "15aa": "La porte attend ~S",
+  "15ab": "La mission attend les autres joueurs : ~D/~D prêts",
+  "15ac": "~S lance une mission : croix haut oui, croix bas non (~D)"
 }

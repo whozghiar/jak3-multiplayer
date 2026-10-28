@@ -22,6 +22,7 @@
 #include <cstring>
 #include <condition_variable>
 #include <ctime>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <random>
@@ -75,8 +76,7 @@ enum Msg : u8 {
   MSG_POSES = 8,    // both ways: u8 source slot, u32 source time ms, u16 count, count x entry:
                     // u32 id, u16 joints, u8 emitters, u8 sounds, PoseJoint..., PoseEmitter...,
                     // PoseSound...
-  MSG_BLOB = 9,     // both ways: u8 from, u8 to, u32 total size, u32 offset, bytes (the host
-                    // relays a chunk whose `to` is another guest)
+  MSG_BLOB = 9,     // both ways: u8 from, u8 to, u32 total size, u32 offset, u32 id, bytes
 };
 
 enum Lane : u16 { kLaneControl, kLaneCritical, kLaneGameplay, kLaneNormal, kLaneBulk, kLaneCount };
@@ -103,10 +103,11 @@ constexpr int kEndLeft = 1002;
 // kMaxEventsHard.
 constexpr size_t kMaxEvents = 256;
 constexpr size_t kMaxEventsHard = 4096;
-// GOAL's mp-event-kind values of the events that only draw something: effect (9), projectile
-// (10), weapon (19).
+// GOAL's mp-event-kind values of the events that may give way: those that only draw something,
+// effect (9), projectile (10), weapon (19), and the level of a kind's art (15, sent again every
+// 10 s).
 static bool kIsVisualEvent(s32 kind) {
-  return kind == 9 || kind == 10 || kind == 19;
+  return kind == 9 || kind == 10 || kind == 15 || kind == 19;
 }
 constexpr size_t kMaxPeers = 16;               // host: connections kept, joining ones included
 
@@ -508,6 +509,66 @@ static void encode_joint(PoseJoint* j, const float* rel) {
   for (int i = 0; i < 3; i++) {
     j->t[i] = to_s16(t[i] / 4.f);
     j->s[i] = to_s16(sc[i] * 2048.f);
+  }
+}
+
+// Wire encoding of a bone (a PoseJoint once read): its rotation in 6 bytes (the three smallest
+// components of the unit quaternion, 15 bits each, and which one is left out, 2 bits: it is
+// rebuilt from the others), its translation in 6, and its scale in 6 more only in an entry with a
+// bone not at scale 1 (kPoseScaled): 12 bytes a bone instead of 20 for most objects.
+static size_t bone_bytes(bool scaled) {
+  return scaled ? 18 : 12;
+}
+
+static void write_bone(u8* out, const PoseJoint& j, bool scaled) {
+  float q[4];
+  decode_quat(q, j.q);
+  int big = 0;
+  for (int i = 1; i < 4; i++) {
+    if (std::fabs(q[i]) > std::fabs(q[big])) {
+      big = i;
+    }
+  }
+  // q and -q are the same rotation: the one whose largest component is positive
+  float sign = q[big] < 0 ? -1.f : 1.f;
+  u64 bits = (u64)big;
+  int shift = 2;
+  for (int i = 0; i < 4; i++) {
+    if (i != big) {
+      // the other components lie within +-1/sqrt(2)
+      float v = std::clamp(q[i] * sign * 1.41421356f, -1.f, 1.f);
+      bits |= ((u64)std::lround((v + 1.f) * 16383.5f) & 0x7fff) << shift;
+      shift += 15;
+    }
+  }
+  memcpy(out, &bits, 6);
+  memcpy(out + 6, j.t, 6);
+  if (scaled) {
+    memcpy(out + 12, j.s, 6);
+  }
+}
+
+static void read_bone(const u8* in, PoseJoint* j, bool scaled) {
+  u64 bits = 0;
+  memcpy(&bits, in, 6);
+  int big = (int)(bits & 3);
+  float q[4];
+  float sum = 0;
+  int shift = 2;
+  for (int i = 0; i < 4; i++) {
+    if (i != big) {
+      q[i] = ((float)((bits >> shift) & 0x7fff) / 16383.5f - 1.f) / 1.41421356f;
+      sum += q[i] * q[i];
+      shift += 15;
+    }
+  }
+  q[big] = std::sqrt(std::max(0.f, 1.f - sum));
+  encode_quat(j->q, q);
+  memcpy(j->t, in + 6, 6);
+  if (scaled) {
+    memcpy(j->s, in + 12, 6);
+  } else {
+    j->s[0] = j->s[1] = j->s[2] = 2048;
   }
 }
 
@@ -914,20 +975,13 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         return;
       }
       case MSG_BLOB: {
-        if (p.slot < 0 || len < 10) {
+        // only blobs sent to the host itself (no blob goes from a guest to another)
+        if (p.slot < 0 || len < 14 || data[1] != 0) {
           return;
         }
         std::vector<u8> copy(data, data + len);
         copy[0] = (u8)p.slot;  // never trust the sender's claim
-        if (copy[1] == 0) {
-          store_blob(copy.data(), copy.size());
-        } else {
-          for (auto* o : m_peers) {
-            if (o->slot == copy[1]) {
-              o->queue(MSG_BLOB, copy.data(), copy.size());
-            }
-          }
-        }
+        store_blob(copy.data(), copy.size());
         return;
       }
       case MSG_EVENT: {
@@ -985,7 +1039,8 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
       }
       return;
     case MSG_BLOB:
-      if (len >= 10 && data[1] == m_local_slot) {
+      // the host's world save: from the host alone
+      if (len >= 14 && data[0] == 0 && data[1] == m_local_slot) {
         store_blob(data, len);
       }
       return;
@@ -1067,7 +1122,7 @@ static bool poses_have_effects(const u8* data, size_t len) {
     if (bones & kPoseHasEffects) {
       return true;
     }
-    at += 8 + (bones & 0x7fff) * sizeof(PoseJoint) + data[at + 6] * sizeof(PoseEmitter) +
+    at += 8 + (bones & 0x3fff) * bone_bytes(bones & kPoseScaled) + data[at + 6] * sizeof(PoseEmitter) +
           data[at + 7] * sizeof(PoseSound);
   }
   return false;
@@ -1099,37 +1154,40 @@ int Session::player_ping(int slot) const {
 }
 
 void Session::store_blob(const u8* data, size_t len) {
-  u32 total, offset;
+  u32 total, offset, id;
   memcpy(&total, data + 2, 4);
   memcpy(&offset, data + 6, 4);
-  size_t n = len - 10;
+  memcpy(&id, data + 10, 4);
+  size_t n = len - 14;
   if (total == 0 || total > kMaxBlob || (size_t)offset + n > total) {
     return;
   }
-  if (offset == 0 || m_blob.size() != total) {
+  if (offset == 0 || m_blob.size() != total || id != m_blob_id) {
     m_blob.assign(total, 0);  // a new blob starts
     m_blob_got = 0;
+    m_blob_id = id;
   }
-  memcpy(m_blob.data() + offset, data + 10, n);
+  memcpy(m_blob.data() + offset, data + 14, n);
   m_blob_got += n;
 }
 
-void Session::send_blob(int to, const u8* bytes, size_t size) {
+void Session::send_blob(int to, const u8* bytes, size_t size, u32 id) {
   if (m_local_slot < 0 || size == 0 || size > kMaxBlob || to < 0 || to >= kMaxPlayers) {
     return;
   }
   for (size_t at = 0; at < size; at += kBlobChunk) {
     size_t n = std::min(kBlobChunk, size - at);
-    std::vector<u8> frame(10 + n);
+    std::vector<u8> frame(14 + n);
     frame[0] = (u8)m_local_slot;
     frame[1] = (u8)to;
     u32 total = (u32)size, offset = (u32)at;
     memcpy(frame.data() + 2, &total, 4);
     memcpy(frame.data() + 6, &offset, 4);
-    memcpy(frame.data() + 10, bytes + at, n);
+    memcpy(frame.data() + 10, &id, 4);
+    memcpy(frame.data() + 14, bytes + at, n);
     for (auto* p : m_peers) {
-      // the host sends to the guest's peer; a guest sends to the host, which relays
-      if ((m_mode == Mode::Host && p->slot == to) || m_mode == Mode::Client) {
+      // the host sends to the guest's peer; a guest to the host
+      if ((m_mode == Mode::Host && p->slot == to) || (m_mode == Mode::Client && to == 0)) {
         p->queue(MSG_BLOB, frame.data(), frame.size());
       }
     }
@@ -1392,16 +1450,22 @@ void Session::add_pose(u32 id, const float* frame, const float* bones, int count
   float inv[16];
   rigid_inverse(inv, frame);
   memcpy(m_pose_frame, frame, sizeof(m_pose_frame));
-  std::vector<u8> entry(8 + count * sizeof(PoseJoint));
-  u16 joints = (u16)count | (effects ? kPoseHasEffects : 0);
-  memcpy(entry.data(), &id, 4);
-  memcpy(entry.data() + 4, &joints, 2);
+  std::vector<PoseJoint> js(count);
+  bool scaled = false;
   for (int i = 0; i < count; i++) {
     float rel[16];
     mat_mul(rel, bones + 16 * i, inv);
-    PoseJoint j;
-    encode_joint(&j, rel);
-    memcpy(entry.data() + 8 + i * sizeof(PoseJoint), &j, sizeof(j));
+    encode_joint(&js[i], rel);
+    for (int k = 0; k < 3; k++) {
+      scaled = scaled || std::abs(js[i].s[k] - 2048) > 1;
+    }
+  }
+  std::vector<u8> entry(8 + count * bone_bytes(scaled));
+  u16 joints = (u16)count | (effects ? kPoseHasEffects : 0) | (scaled ? kPoseScaled : 0);
+  memcpy(entry.data(), &id, 4);
+  memcpy(entry.data() + 4, &joints, 2);
+  for (int i = 0; i < count; i++) {
+    write_bone(entry.data() + 8 + i * bone_bytes(scaled), js[i], scaled);
   }
   m_pose_out.push_back(std::move(entry));
 }
@@ -1461,6 +1525,14 @@ void Session::send_poses(double now, bool bulk) {
   if (m_local_slot < 0 || (m_mode != Mode::Host && m_mode != Mode::Client)) {
     return;
   }
+  // between two batches, 60 a second at most: at 144 or 240 frames a second the bytes sent grew
+  // with the frame rate
+  if (bulk) {
+    if (now - m_last_bulk_poses < kStateIntervalMs) {
+      return;
+    }
+    m_last_bulk_poses = now;
+  }
   u32 time = (u32)(now * kBatchTicksPerMs);
   size_t at = 0;
   while (at < entries.size()) {
@@ -1503,11 +1575,12 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
     u16 raw;
     memcpy(&id, data + at, 4);
     memcpy(&raw, data + at + 4, 2);
-    u16 joints = raw & ~kPoseHasEffects;
+    u16 joints = raw & 0x3fff;
     bool effects = raw & kPoseHasEffects;
+    bool scaled = raw & kPoseScaled;
     u8 emitters = data[at + 6];
     u8 sounds = data[at + 7];
-    size_t size = 8 + joints * sizeof(PoseJoint) + emitters * sizeof(PoseEmitter) +
+    size_t size = 8 + joints * bone_bytes(scaled) + emitters * sizeof(PoseEmitter) +
                   sounds * sizeof(PoseSound);
     if (joints > kMaxPoseJoints || at + size > len) {
       return;
@@ -1517,8 +1590,10 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
     snap.emitters.resize(emitters);
     snap.sounds.resize(sounds);
     const u8* body = data + at + 8;
-    memcpy(bones.data(), body, joints * sizeof(PoseJoint));
-    body += joints * sizeof(PoseJoint);
+    for (u16 b = 0; b < joints; b++) {
+      read_bone(body + b * bone_bytes(scaled), &bones[b], scaled);
+    }
+    body += joints * bone_bytes(scaled);
     memcpy(snap.emitters.data(), body, emitters * sizeof(PoseEmitter));
     body += emitters * sizeof(PoseEmitter);
     memcpy(snap.sounds.data(), body, sounds * sizeof(PoseSound));
@@ -1531,7 +1606,11 @@ void Session::store_poses(int source, const u8* data, size_t len, double recv) {
         track.joints.clear();
       }
       track.joints.emplace_back(sent, std::move(bones));
-      while (track.joints.size() > 16) {  // 100 ms back at 60 entries a second, and some slack
+      // as far back as the objects' states (the drawn time stays inside at any frame rate)
+      while (track.joints.size() > 2 && sent - track.joints.front().first > kActorHistoryMs) {
+        track.joints.pop_front();
+      }
+      while (track.joints.size() > 64) {
         track.joints.pop_front();
       }
     }
@@ -1844,13 +1923,33 @@ static fs::path econ_log_path() {
   return file_util::get_user_settings_dir(g_game_version) / "multiplayer-sessions.log";
 }
 
+// Write a file whole or not at all: a temporary file renamed over it, so a crash or a full disk
+// while writing leaves the previous one.
+static void write_file_safely(const fs::path& path, const void* data, size_t size) {
+  file_util::create_dir_if_needed_for_file(path);
+  fs::path tmp = path;
+  tmp += ".tmp";
+  file_util::write_binary_file(tmp, data, size);
+  std::error_code ec;
+  fs::rename(tmp, path, ec);
+  if (ec) {
+    lg::warn("[multiplayer] {} not written: {}", path.string(), ec.message());
+  }
+}
+
 static nlohmann::json econ_read_all() {
   try {
     if (fs::exists(econ_path())) {
       return nlohmann::json::parse(file_util::read_text_file(econ_path()));
     }
   } catch (...) {
-    lg::warn("[multiplayer] {} unreadable: the economy starts from it empty", econ_path().string());
+    // kept aside, not written over: the accounts of every session stay in it
+    fs::path bad = econ_path();
+    bad += fmt::format(".bad-{}", (long long)std::time(nullptr));
+    std::error_code ec;
+    fs::rename(econ_path(), bad, ec);
+    lg::warn("[multiplayer] {} unreadable: kept as {}, the economy starts empty",
+             econ_path().string(), bad.string());
   }
   return nlohmann::json::object();
 }
@@ -1866,8 +1965,8 @@ void econ_save(double now) {
         {"name", a.name}, {"orbs", a.orbs}, {"trophies", a.trophies}, {"items", a.items}};
   }
   all[g_econ.key] = {{"accounts", accounts}, {"orbs_taken", g_econ.orbs_taken}};
-  file_util::create_dir_if_needed_for_file(econ_path());
-  file_util::write_text_file(econ_path(), all.dump(2));
+  std::string text = all.dump(2);
+  write_file_safely(econ_path(), text.data(), text.size());
   g_econ.dirty = false;
   g_econ.last_save = now;
   g_econ.saves++;
@@ -1924,8 +2023,7 @@ void econ_close(double now) {
     line += fmt::format(" [{} orbs {} trophies {} items {:x}]", a.name, a.orbs, a.trophies, a.items);
   }
   file_util::create_dir_if_needed_for_file(econ_log_path());
-  std::string prev = fs::exists(econ_log_path()) ? file_util::read_text_file(econ_log_path()) : "";
-  file_util::write_text_file(econ_log_path(), prev + line + "\n");
+  std::ofstream(econ_log_path(), std::ios::app) << line << "\n";
   lg::info("[multiplayer] economy \"{}\" closed and recorded", g_econ.key);
   g_econ.open = false;
 }
@@ -2182,10 +2280,11 @@ void pc_mp_send_event(u32 ev) {
   }
 }
 
-// (pc-mp-send-blob to addr size): send `size` bytes at `addr` to player `to` (MSG_BLOB).
-void pc_mp_send_blob(u32 to, u32 addr, u32 size) {
+// (pc-mp-send-blob to addr size id): send `size` bytes at `addr` to player `to` (MSG_BLOB), tagged
+// `id`.
+void pc_mp_send_blob(u32 to, u32 addr, u32 size, u32 id) {
   if (addr && size <= mp::kMaxBlob) {
-    mp::session().send_blob((int)to, Ptr<u8>(addr).c(), size);
+    mp::session().send_blob((int)to, Ptr<u8>(addr).c(), size, id);
   }
 }
 
@@ -2194,9 +2293,15 @@ u64 pc_mp_blob_ready() {
   return mp::session().blob_ready();
 }
 
-// (pc-mp-blob-take addr max) -> bytes copied to `addr` (the blob is then forgotten).
+// (pc-mp-blob-id) -> the id of the blob being received or ready.
+u64 pc_mp_blob_id() {
+  return mp::session().blob_id();
+}
+
+// (pc-mp-blob-take addr max) -> bytes copied to `addr` (the blob is then forgotten); addr 0 only
+// forgets it.
 u64 pc_mp_blob_take(u32 addr, u32 max) {
-  return addr ? mp::session().take_blob(Ptr<u8>(addr).c(), max) : 0;
+  return addr ? mp::session().take_blob(Ptr<u8>(addr).c(), max) : mp::session().take_blob(nullptr, 0);
 }
 
 // (pc-mp-pop-event dest) -> #t when an event was copied into dest.
@@ -2285,11 +2390,11 @@ void pc_mp_config_save(u32 src) {
   for (int i = 0; i < 16; i++) {
     skin += fmt::format("{}{:x}", i ? "," : "", cfg->skin[i]);
   }
-  file_util::write_text_file(
-      config_path(),
+  std::string text =
       fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\nskin={}\nuid={:x}\n",
                   name, address, cfg->character, cfg->color, cfg->enabled, cfg->mode, skin,
-                  mp::player_uid()));
+                  mp::player_uid());
+  mp::write_file_safely(config_path(), text.data(), text.size());
 }
 
 // (pc-mp-send-actors states count): send the `count` mp-actor-state this player simulates.
@@ -2399,8 +2504,7 @@ u64 pc_mp_campaign_write(u32 addr, u32 size) {
   std::vector<u8> bytes(sizeof(kCampaignStamp) + size);
   memcpy(bytes.data(), kCampaignStamp, sizeof(kCampaignStamp));
   memcpy(bytes.data() + sizeof(kCampaignStamp), Ptr<u8>(addr).c(), size);
-  file_util::create_dir_if_needed_for_file(campaign_path());
-  file_util::write_binary_file(campaign_path(), bytes.data(), bytes.size());
+  mp::write_file_safely(campaign_path(), bytes.data(), bytes.size());
   lg::info("[multiplayer] campaign saved ({} bytes) to {}", size, campaign_path().string());
   return to_symbol(true);
 }
@@ -2778,6 +2882,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-send-actors", (void*)pc_mp_send_actors);
   make_function_symbol_from_c("pc-mp-send-blob", (void*)pc_mp_send_blob);
   make_function_symbol_from_c("pc-mp-blob-ready", (void*)pc_mp_blob_ready);
+  make_function_symbol_from_c("pc-mp-blob-id", (void*)pc_mp_blob_id);
   make_function_symbol_from_c("pc-mp-blob-take", (void*)pc_mp_blob_take);
   make_function_symbol_from_c("pc-mp-get-actors", (void*)pc_mp_get_actors);
   make_function_symbol_from_c("pc-mp-add-pose", (void*)pc_mp_add_pose);

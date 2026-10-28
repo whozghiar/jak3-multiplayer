@@ -162,6 +162,56 @@ TEST(Multiplayer, HostAndClientOverLoopback) {
   host.leave("");
 }
 
+// A pose whose bones are all at scale 1 goes without scale (12 bytes a bone), its rotations as
+// their three smallest components; a blob carries the id of the request it answers.
+TEST(Multiplayer, CompactPosesAndBlobIds) {
+  using namespace std::chrono;
+  auto start = steady_clock::now();
+  auto now = [&] { return duration<double, std::milli>(steady_clock::now() - start).count(); };
+  mp::Session host, client;
+  ASSERT_TRUE(host.host("0.0.0.0:47780", 4));
+  ASSERT_TRUE(client.join("127.0.0.1:47780", now()));
+  mp::PlayerState hs{}, cs{};
+  auto pump = [&](int frames) {
+    for (int i = 0; i < frames; i++) {
+      host.update(hs, now());
+      client.update(cs, now());
+      std::this_thread::sleep_for(milliseconds(10));
+    }
+  };
+  pump(50);
+  ASSERT_EQ(client.mode(), mp::Mode::Client);
+
+  const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  // a bone turned 0.7 rad around (1, 2, -2)/3, 3 m away
+  const float x = 1 / 3.f, y = 2 / 3.f, z = -2 / 3.f, c = std::cos(0.7f), s = std::sin(0.7f);
+  const float k = 1 - c;
+  const float bone[16] = {c + x * x * k,     x * y * k + z * s, x * z * k - y * s, 0,
+                          y * x * k - z * s, c + y * y * k,     y * z * k + x * s, 0,
+                          z * x * k + y * s, z * y * k - x * s, c + z * z * k,     0,
+                          12288,             -4096,             2048,              1};
+  float bones[32];
+  memcpy(bones, identity, sizeof(identity));
+  memcpy(bones + 16, bone, sizeof(bone));
+  client.add_pose(3, identity, bones, 2, true);
+  client.send_poses(now());
+  pump(10);
+  float out[32];
+  ASSERT_EQ(host.get_pose((1u << 24) | 3u, now(), identity, out, 8), 2);
+  for (int i = 0; i < 16; i++) {
+    EXPECT_NEAR(out[i], identity[i], 1e-3f) << i;
+    EXPECT_NEAR(out[16 + i], bone[i], i >= 12 ? 4.f : 1e-3f) << i;
+  }
+
+  std::vector<u8> blob(30000, 7);
+  host.send_blob(1, blob.data(), blob.size(), 5);
+  pump(20);
+  ASSERT_EQ(client.blob_ready(), blob.size());
+  EXPECT_EQ(client.blob_id(), 5u);
+  host.leave("");
+  pump(5);
+}
+
 // UDP: with a fifth of the datagrams lost, the join, a world save (blob) and every event still
 // arrive, each event once and in order.
 TEST(Multiplayer, EventsKeptWhileNotTaken) {

@@ -1,0 +1,19 @@
+# Co-op doors wait for everyone, guest side: next to the host, then 20 m behind the door nearest
+# to it; it goes through the door late (next to the host, 30 m in front of it), and the door no
+# longer waits.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+46 goto-player 0
+48 goto-door-at -20
+50 log-door
+56 goto-door-at -20
+60 log-door
+66 goto-door-at -20
+70 log-door
+78 goto-player 0
+80 log-door
+84 log-door
+88 log

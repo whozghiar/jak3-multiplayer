@@ -35,6 +35,18 @@
    )
   )
 
+;; MOD multiplayer: a racer may be another player's puppet (one race for both players,
+;; pc/features/multiplayer/multiplayer.gc "Races"), which has no rigid body
+(defun mp-racer-fvec! ((dst vector) (proc process))
+  "MOD multiplayer: the forward direction of racer `proc` into `dst`: its rigid body's, or for
+   another player's puppet (no rigid body) its root orientation's."
+  (if (type? proc rigid-body-object)
+      (vector-copy! dst (-> (the-as rigid-body-object proc) rbody matrix fvec))
+      (vector-z-quaternion! dst (-> (the-as process-drawable proc) root quat))
+      )
+  dst
+  )
+
 ;; DECOMP BEGINS
 
 (defmethod race-select-path-randomly-from-mask ((this wvehicle) (arg0 uint))
@@ -187,7 +199,8 @@
             (when (!= v1-60 this)
               (vector-copy! (-> gp-0 vec2) (-> (the-as process-drawable v1-60) root trans))
               (vector-copy! (-> gp-0 vec3) (-> (the-as process-drawable v1-60) root transv))
-              (vector-copy! (-> gp-0 vec4) (-> (the-as process-drawable v1-60) rbody matrix fvec))
+              ;; MOD multiplayer: a racer without a rigid body (another player's puppet)
+              (mp-racer-fvec! (-> gp-0 vec4) v1-60)
               (set! (-> gp-0 float6)
                     (nearest-dist2-between-moving-points (-> gp-0 vec0) (-> gp-0 vec1) (-> gp-0 vec2) (-> gp-0 vec3) 0.5)
                     )

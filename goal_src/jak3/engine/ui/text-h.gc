@@ -1763,6 +1763,9 @@
   (progress-mp-challenge-tie #x15a7)
   (progress-mp-challenge-none #x15a8)
   (progress-mp-status-internet #x15a9)
+  (progress-mp-door-wait #x15aa)
+  (progress-mp-mission-wait #x15ab)
+  (progress-mp-mission-vote #x15ac)
   )
 ;; ---text-id
 

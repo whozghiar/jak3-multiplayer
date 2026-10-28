@@ -131,13 +131,14 @@ struct ActorTrack {
 // A pose: every bone of an object, relative to the object's frame (its root position and
 // orientation, without scale), so it can be laid on the copy of the object another player draws.
 // This carries everything the owner's animation system produced: blended channels, streamed
-// animations, joint mods (look-at, aiming), ragdolls. Wire encoding of one bone:
+// animations, joint mods (look-at, aiming), ragdolls. One bone as kept (its wire encoding is
+// smaller: kmultiplayer.cpp write_bone):
 struct PoseJoint {
   s16 q[4];  // rotation, x 32767
   s16 t[3];  // translation, in units of 4 game units (1 mm), +-32 m
   s16 s[3];  // scale per axis, x 2048 (negative: mirrored axis)
 };
-static_assert(sizeof(PoseJoint) == 20, "PoseJoint is a wire format");
+static_assert(sizeof(PoseJoint) == 20, "PoseJoint layout");
 
 // Wire encoding of one particle emitter an object used since the previous batch.
 struct PoseEmitter {
@@ -193,8 +194,10 @@ constexpr int kMaxPoseEmitters = 32;
 constexpr int kMaxPoseSounds = 32;
 
 // Bit 15 of an entry's joint count: the entry carries the object's effects (emitters and sounds,
-// with each batch). Entries sent between batches carry the bones only.
+// with each batch). Entries sent between batches carry the bones only. Bit 14: its bones carry
+// their scale (a bone of the object is not at scale 1).
 constexpr u16 kPoseHasEffects = 0x8000;
+constexpr u16 kPoseScaled = 0x4000;
 
 struct PoseSnap {
   std::vector<PoseEmitter> emitters;
@@ -253,10 +256,12 @@ class Session {
   bool get_player(int slot, double now_ms, PlayerState* out) const;
   void send_event(Event ev);
   // Send `size` bytes to player `to` (the host's world save for a guest that joins), in frames
-  // of at most kBlobChunk bytes; the host relays a guest's blob.
-  void send_blob(int to, const u8* data, size_t size);
-  // A blob fully received: its size (0 while none or still arriving).
+  // of at most kBlobChunk bytes, tagged `id` (the request it answers). A guest takes blobs from the
+  // host alone; the host takes those sent to it and relays none.
+  void send_blob(int to, const u8* data, size_t size, u32 id = 0);
+  // A blob fully received: its size (0 while none or still arriving), and its id.
   size_t blob_ready() const { return m_blob_got && m_blob_got == m_blob.size() ? m_blob.size() : 0; }
+  u32 blob_id() const { return m_blob_id; }
   // Copy the received blob into `out` (at most `max` bytes) and forget it. Returns the size copied.
   size_t take_blob(u8* out, size_t max);
   // Send the objects this player simulates (the host relays a guest's batch to the others).
@@ -352,11 +357,13 @@ class Session {
   std::vector<std::vector<u8>> m_pose_out;  // entries queued by add_pose, sent by send_poses
   float m_pose_frame[16] = {};              // frame of the last queued entry
   std::deque<Event> m_events;
-  std::vector<u8> m_blob;  // blob being received (sized by its first chunk)
+  std::vector<u8> m_blob;  // blob being received (sized by its first chunk), and its id
   size_t m_blob_got = 0;
+  u32 m_blob_id = 0;
   std::set<std::string> m_banned;
   double m_connect_start = 0;
   double m_last_state_sent = -1e9;
+  double m_last_bulk_poses = -1e9;  // the last poses sent between two batches
   double m_now = 0;  // time of the last update()
 };
 

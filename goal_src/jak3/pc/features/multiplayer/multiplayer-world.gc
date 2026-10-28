@@ -1068,7 +1068,8 @@
                       :mask (vehicle-impulse-factor)
                       ((id (mp-local-attack-id (-> ev from) (the-as uint (-> ev pad))))
                        (mode mode)
-                       (damage (-> ev fvec w))
+                       ;; a weapon's damage: bounded, a bad value sent does no more
+                       (damage (fmax 0.0 (fmin 100.0 (-> ev fvec w))))
                        (penetrate-using (the-as penetrate (logior (shl (the-as uint (-> ev iarg 3)) 32)
                                                                   (logand (the-as uint (-> ev iarg 2)) #xffffffff)
                                                                   )
@@ -4242,8 +4243,10 @@
       (dotimes (i MP_MAX_PLAYERS)
         (let ((st (mp-remote-state i)))
           (when (and st (not (logtest? (-> st flags) (mp-flag hidden))))
+            ;; #f: the side only (#t would run the door's on-cross scripts for a remote player and
+            ;; overwrite its last-distance, which tells our own side)
             (let* ((pos (-> st trans))
-                   (cross (check-crossing-distance this pos #t))
+                   (cross (check-crossing-distance this pos #f))
                    (dist (vector-vector-xz-distance (-> this root trans) pos))
                    )
               (if (and (< dist (if (>= cross 0.0)
@@ -4270,6 +4273,40 @@
   #f
   )
 
+(defun mp-door-hold? ((this com-airlock))
+  "Co-op: #t while door `this`, open, waits for a teammate, as himstan's airlocks wait for every
+   player: our player went through it (in front: the side where closing runs the door's scripts,
+   which unload the level behind or close a story step) and a living teammate is still behind it,
+   within 100 m. Never opens a closed door, nor holds one a mission or the game shuts (close
+   command, airlock setting off); a dead, hidden (loading, cutscene) or distant teammate does not
+   hold it. Sets *mp-door-wait-time* and *mp-door-wait-slot* while our player stands near."
+  (when (and (mp-coop?)
+             (-> this next-state)
+             (= (-> this next-state name) 'open)
+             (!= (airlock-command-lookup (the-as pair (-> this name))) 'close)
+             (-> *setting-control* user-current airlock)
+             (< 0.0 (check-crossing-distance this (target-pos 0) #f))
+             )
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((st (mp-remote-state i)))
+        (when (and st
+                   (not (logtest? (-> st flags) (mp-flag dead)))
+                   (or (not (logtest? (-> st flags) (mp-flag hidden))) (logtest? (-> st flags) (mp-flag perched)))
+                   (< (check-crossing-distance this (-> st trans) #f) 0.0)
+                   (< (vector-vector-xz-distance (-> this root trans) (-> st trans)) (meters 100))
+                   )
+          (when (< (vector-vector-xz-distance (-> this root trans) (target-pos 0)) (meters 30))
+            (set! *mp-door-wait-time* (mp-now))
+            (set! *mp-door-wait-slot* i)
+            )
+          (return #t)
+          )
+        )
+      )
+    )
+  #f
+  )
+
 ;; MOD multiplayer -- doors open for every player (engine/common-obs/airlock.gc)
 (define-perm *mp-stock-want-cross-airlock?* (function com-airlock object)
   (the-as (function com-airlock object) (method-of-type com-airlock want-cross-airlock?))
@@ -4277,8 +4314,11 @@
 
 (defmethod want-cross-airlock? ((this com-airlock))
   "Stock decision for the local player; online, a remote player in front of the door opens it too,
-   so the doors are the same on every machine."
-  (or (*mp-stock-want-cross-airlock?* this) (and (mp-online?) (mp-remote-wants-airlock? this)))
+   so the doors are the same on every machine; in co-op an open door waits for a teammate still
+   behind it (mp-door-hold?)."
+  (or (*mp-stock-want-cross-airlock?* this)
+      (and (mp-online?) (or (mp-remote-wants-airlock? this) (mp-door-hold? this)))
+      )
   )
 
 ;; Floating platforms (rigid-body-platform, level code of the volcano) take the weight of whoever
@@ -4349,26 +4389,33 @@
   )
 
 (defun mp-elevator-slot ((aid uint))
-  "Entry of elevator `aid` in the elevator table (added when new), -1 when the table is full."
-  (let ((ws *mp-world-state*))
+  "Entry of elevator `aid` in the elevator table (added when new; once the table is full, in the
+   entry of an elevator with no trip under way, which holds nothing more), -1 when every entry is
+   busy."
+  (let ((ws *mp-world-state*)
+        (free -1)
+        )
     (dotimes (i (-> ws elev-count))
       (if (= (-> ws elev-aid i) aid)
           (return i)
           )
+      (if (and (< free 0) (not (-> ws elev-trip i)) (not (-> ws elev-muted i)) (not (-> ws elev-local i)))
+          (set! free i)
+          )
       )
     (when (< (-> ws elev-count) 64)
-      (let ((i (-> ws elev-count)))
-        (set! (-> ws elev-aid i) aid)
-        (set! (-> ws elev-trip i) #f)
-        (set! (-> ws elev-muted i) #f)
-        (set! (-> ws elev-local i) #f)
-        (set! (-> ws elev-driven i) 0)
-        (+! (-> ws elev-count) 1)
-        (return i)
-        )
+      (set! free (-> ws elev-count))
+      (+! (-> ws elev-count) 1)
       )
+    (when (>= free 0)
+      (set! (-> ws elev-aid free) aid)
+      (set! (-> ws elev-trip free) #f)
+      (set! (-> ws elev-muted free) #f)
+      (set! (-> ws elev-local free) #f)
+      (set! (-> ws elev-driven free) 0)
+      )
+    free
     )
-  -1
   )
 
 ;; An elevator's scripts (entity res: on-activate, on-deactivate...) load levels, change the
@@ -4695,10 +4742,11 @@
   )
 
 (defmethod deactivate ((this level))
-  "What this mod made from the level goes first (always: copies can remain after a session), then
-   the stock deactivation. unload! calls it too, also for a level only loaded (not active), whose
-   art and particle groups copies may use as well."
-  (when (!= (-> this status) 'inactive)
+  "What this mod made from the level goes first (once a session ran since boot: copies can remain
+   after it; never before, the mod off or unused), then the stock deactivation. unload! calls it
+   too, also for a level only loaded (not active), whose art and particle groups copies may use as
+   well."
+  (when (and *mp-used?* (!= (-> this status) 'inactive))
     (mp-on-level-leaving this)
     (mp-far-leaving this)
     )
@@ -4867,6 +4915,7 @@
    (skel        symbol 160) ;; skeleton name, interned
    (level       symbol 160) ;; the level whose art array holds its art group
    (sent        symbol 160)
+   (next        int32)      ;; receiver, table full: the entry the next one replaces (in turn)
    (time        time-frame)
    (tried       symbol 32)  ;; receiver: art groups loaded or tried in this art heap
    (tried-count int32)
@@ -4900,6 +4949,29 @@
   (the-as level #f)
   )
 
+(defun mp-art-out-slot ()
+  "Sender: a free entry of *mp-art-out*: a new one, else, the table full, one of a level no longer
+   loaded here (its kinds are not sent any more); -1 none."
+  (let ((tbl *mp-art-out*))
+    (cond
+      ((< (-> tbl count) 160)
+       (+! (-> tbl count) 1)
+       (+ (-> tbl count) -1)
+       )
+      (else
+        (dotimes (i 160)
+          (let ((st (level-status? *level* (-> tbl level i) #f)))
+            (if (or (not st) (= st 'inactive))
+                (return i)
+                )
+            )
+          )
+        -1
+        )
+      )
+    )
+  )
+
 (defun mp-note-art ((sg skeleton-group) (proc process-drawable))
   "Sender: note the level holding the art of skeleton `sg` (sent by mp-send-art), once per skeleton."
   (let ((tbl *mp-art-out*)
@@ -4910,13 +4982,14 @@
           (return 0)
           )
       )
-    (when (< (-> tbl count) 160)
-      (let ((lev (mp-level-of-art (-> proc draw art-group))))
-        (when lev
-          (set! (-> tbl skel (-> tbl count)) name)
-          (set! (-> tbl level (-> tbl count)) (-> lev name))
-          (set! (-> tbl sent (-> tbl count)) #f)
-          (+! (-> tbl count) 1)
+    (let ((lev (mp-level-of-art (-> proc draw art-group))))
+      (when lev
+        (let ((i (mp-art-out-slot)))
+          (when (>= i 0)
+            (set! (-> tbl skel i) name)
+            (set! (-> tbl level i) (-> lev name))
+            (set! (-> tbl sent i) #f)
+            )
           )
         )
       )
@@ -4939,7 +5012,6 @@
                 (when (and sg
                            (type? sg skeleton-group)
                            (not (mp-art-ours? sg))
-                           (< (-> tbl count) 160)
                            (mp-art-group-get (-> (the-as skeleton-group sg) art-group-name) (the-as (pointer level) #f))
                            )
                   (let ((name (string->symbol (-> sg name)))
@@ -4950,23 +5022,24 @@
                           (set! known? #t)
                           )
                       )
-                    (when (not known?)
-                      (set! (-> tbl skel (-> tbl count)) name)
-                      ;; its art group's level (a borrow level may hold the art of its host's group)
-                      (let* ((ag (mp-art-group-get (-> (the-as skeleton-group sg) art-group-name) (the-as (pointer level) #f)))
-                             (art-lev (if ag
-                                          (mp-level-of-art ag)
-                                          )
-                                      )
-                             )
-                        (set! (-> tbl level (-> tbl count)) (if art-lev
-                                                                (-> art-lev name)
-                                                                (-> lev name)
-                                                                )
-                              )
+                    (let ((slot (if known? -1 (mp-art-out-slot))))
+                      (when (>= slot 0)
+                        (set! (-> tbl skel slot) name)
+                        ;; its art group's level (a borrow level may hold the art of its host's group)
+                        (let* ((ag (mp-art-group-get (-> (the-as skeleton-group sg) art-group-name) (the-as (pointer level) #f)))
+                               (art-lev (if ag
+                                            (mp-level-of-art ag)
+                                            )
+                                        )
+                               )
+                          (set! (-> tbl level slot) (if art-lev
+                                                        (-> art-lev name)
+                                                        (-> lev name)
+                                                        )
+                                )
+                          )
+                        (set! (-> tbl sent slot) #f)
                         )
-                      (set! (-> tbl sent (-> tbl count)) #f)
-                      (+! (-> tbl count) 1)
                       )
                     )
                   )
@@ -5033,9 +5106,18 @@
               (set! slot i)
               )
           )
-        (when (and (< slot 0) (< (-> tbl count) 160))
-          (set! slot (-> tbl count))
-          (+! (-> tbl count) 1)
+        (cond
+          ((>= slot 0)
+           )
+          ((< (-> tbl count) 160)
+           (set! slot (-> tbl count))
+           (+! (-> tbl count) 1)
+           )
+          (else
+            ;; full: the entries are replaced in turn (each sender sends its kinds again every 10 s)
+            (set! slot (-> tbl next))
+            (set! (-> tbl next) (mod (+ slot 1) 160))
+            )
           )
         (when (>= slot 0)
           (set! (-> tbl skel slot) skel)
@@ -5255,13 +5337,16 @@
    (name     symbol 160)
    (sg       skeleton-group 160) ;; rebuilt groups, allocated once each
    (complete symbol 160)
-   (current  int32)             ;; entry the parts being received fill
+   (current  int32 8)           ;; per sender: the entry its parts being received fill (its parts
+                                ;; come in order, another sender's may come between them)
    (rebuilt  int32)             ;; counter for the test log
    )
   )
 
 (define *mp-skel-defs* (new 'global 'mp-skel-defs))
-(set! (-> *mp-skel-defs* current) -1)
+(dotimes (i 8)
+  (set! (-> *mp-skel-defs* current i) -1)
+  )
 
 (defun mp-send-skel-def ((sg skeleton-group))
   "Sender: the description of skeleton-group `sg`, in three skel-def events."
@@ -5346,7 +5431,7 @@
              )
            (+! (-> defs count) 1)
            )
-         (set! (-> defs current) slot)
+         (set! (-> defs current (-> ev from)) slot)
          (when (>= slot 0)
            (let ((sg (-> defs sg slot)))
              (copy-string<-string (-> sg name) (-> *mp-far* text))
@@ -5363,8 +5448,8 @@
            )
          )
        )
-      ((>= (-> defs current) 0)
-       (let ((sg (-> defs sg (-> defs current))))
+      ((and (>= (-> ev from) 0) (< (-> ev from) 8) (>= (-> defs current (-> ev from)) 0))
+       (let ((sg (-> defs sg (-> defs current (-> ev from)))))
          (cond
            ((= part 1)
             (string<-charp (-> sg art-group-name) (-> ev text))
@@ -5386,11 +5471,11 @@
             (set! (-> sg lod-dist 4) (-> ev fvec x))
             (set! (-> sg lod-dist 5) (-> ev fvec y))
             (set! (-> sg global-effects) (the-as uint (-> ev iarg 1)))
-            (when (not (-> defs complete (-> defs current)))
-              (set! (-> defs complete (-> defs current)) #t)
+            (when (not (-> defs complete (-> defs current (-> ev from))))
+              (set! (-> defs complete (-> defs current (-> ev from))) #t)
               (+! (-> defs rebuilt) 1)
               )
-            (set! (-> defs current) -1)
+            (set! (-> defs current (-> ev from)) -1)
             )
            )
          )
@@ -5441,6 +5526,46 @@
   (set! (-> *mp-scene* names i) (new 'global 'string 32 (the-as string #f)))
   )
 (set! (-> *mp-scene* continue) (new 'global 'string 32 (the-as string #f)))
+
+;; Co-op mission introductions played by everyone (see "a mission's introduction" below)
+(defenum mp-pull-msg
+  :type int32
+  (propose 0) ;; starter to everyone: node iarg 2, iarg 3 1 = answers wanted; text = the scene
+  (answer 1)  ;; to the starter: iarg 2 1 yes / 0 no
+  (result 2)  ;; starter to everyone: iarg 2 1 passed / 0 lost
+  (ready 3)   ;; to the starter: the player is there, the cutscene loaded
+  (go 4)      ;; starter to everyone: the cutscene starts
+  )
+
+(defconstant MP_PULL_ANSWER_TIME (seconds 8))
+(defconstant MP_PULL_READY_TIME (seconds 30))
+
+(deftype mp-pull-state (structure)
+  ((role     int32)      ;; 0 none, 1 our play started the mission (starter), 2 another player's
+   (id       int32)      ;; the vote (every message carries it in iarg 1): starter slot * 65536 + count
+   (count    int32)
+   (node     int32)      ;; the mission's introduction node
+   (starter  int32)      ;; role 2: the starter's slot
+   (since    time-frame) ;; the proposal (role 2: also the last teleport asked)
+   (decided  time-frame) ;; role 1: when the vote passed, 0 before
+   (asked    int32)      ;; role 1: bits of the players asked
+   (answered int32)      ;; role 1: bits of those who answered, and of those who said yes
+   (yes      int32)
+   (ready    int32)      ;; role 1: bits of those ready
+   (phase    int32)      ;; role 2: 0 asked, 1 coming, 2 ready sent, 3 said no
+   (tp-at    time-frame) ;; role 2: our last teleport to the starter asked (one per 15 s: a move
+                         ;; through a continue point takes a while)
+   (vote?    symbol)     ;; role 2: our answer is wanted
+   (scene    string)
+   (handle   handle)     ;; role 1: our held scene player
+   (passed   int32)      ;; counters for the test log
+   (pulled   int32)
+   (lost     int32)
+   )
+  )
+
+(define *mp-pull* (new 'global 'mp-pull-state))
+(set! (-> *mp-pull* scene) (new 'global 'string 32 (the-as string #f)))
 
 (defun mp-scene-name ((obj object))
   "The name of a scene argument (a name, or a scene), #f otherwise."
@@ -5501,6 +5626,39 @@
   (none)
   )
 
+(defbehavior mp-scene-spawn-received mp-manager ()
+  "Start here the cutscene another player sent last (*mp-scene*: its scenes, wait flag and continue
+   point), as a replay: not sent back."
+  (let* ((sc *mp-scene*)
+         (total (max 1 (min 8 (-> sc total))))
+         (scenes (if (= total 1)
+                     (the-as object (-> sc names 0))
+                     (let ((lst '()))
+                       (countdown (i total)
+                         (set! lst (cons (-> sc names i) lst))
+                         )
+                       lst
+                       )
+                     )
+                 )
+         )
+    (set! (-> sc replaying?) #t)
+    (process-spawn
+      scene-player
+      :init scene-player-init
+      scenes
+      (-> sc wait)
+      (if (nonzero? (length (-> sc continue)))
+          (-> sc continue)
+          (the-as string #f)
+          )
+      :name "scene-player"
+      )
+    (set! (-> sc replaying?) #f)
+    (+! (-> sc shown) 1)
+    )
+  (none)
+  )
 (define *mp-scene-not-here* 0) ;; another player's cutscenes not loaded here, so not played (test log)
 
 (defbehavior mp-apply-scene mp-manager ((ev mp-event))
@@ -5515,48 +5673,29 @@
       ((and (>= index 0) (< index 8))
        (string<-charp (-> sc names index) (-> ev text))
        )
-      ((and (= index -1)
-            (logtest? *mp-world* (mp-world-flag progress))
-            *target*
-            (>= *mp-local-slot* 0)
-            (= (mp-provider-of *mp-local-slot*) (mp-provider-of (-> ev from)))
-            (not (process-by-name "scene-player" *active-pool*))
-            )
+      ((= index -1)
        (string<-charp (-> sc continue) (-> ev text))
-       (let* ((total (max 1 (min 8 (-> ev iarg 1))))
-              (scenes (if (= total 1)
-                          (the-as object (-> sc names 0))
-                          (let ((lst '()))
-                            (countdown (i total)
-                              (set! lst (cons (-> sc names i) lst))
-                              )
-                            lst
-                            )
-                          )
-                      )
-              )
-         (cond
-           ((not (scene-lookup (-> sc names 0)))
-            (+! *mp-scene-not-here* 1)
-            (format 0 "[multiplayer] cutscene ~S of player ~D is not loaded here: not played~%" (-> sc names 0) (-> ev from))
-            )
-           (else
-             (format 0 "[multiplayer] cutscene ~S of player ~D starts here too~%" (-> sc names 0) (-> ev from))
-             (set! (-> sc replaying?) #t)
-             (process-spawn
-               scene-player
-               :init scene-player-init
-               scenes
-               (nonzero? (-> ev iarg 2))
-               (if (nonzero? (length (-> sc continue)))
-                   (-> sc continue)
-                   (the-as string #f)
-                   )
-               :name "scene-player"
+       (set! (-> sc total) (max 1 (min 8 (-> ev iarg 1))))
+       (set! (-> sc wait) (nonzero? (-> ev iarg 2)))
+       (cond
+         ((and (= (-> *mp-pull* role) 2) (string= (-> *mp-pull* scene) (-> sc names 0)))
+          ;; a mission's introduction: it starts here when its starter says go (mp-pull-start-scene)
+          )
+         ((not (and (logtest? *mp-world* (mp-world-flag progress))
+                    *target*
+                    (>= *mp-local-slot* 0)
+                    (= (mp-provider-of *mp-local-slot*) (mp-provider-of (-> ev from)))
+                    (not (process-by-name "scene-player" *active-pool*))
+                    )
                )
-             (set! (-> sc replaying?) #f)
-             (+! (-> sc shown) 1)
-             )
+          )
+         ((not (scene-lookup (-> sc names 0)))
+          (+! *mp-scene-not-here* 1)
+          (format 0 "[multiplayer] cutscene ~S of player ~D is not loaded here: not played~%" (-> sc names 0) (-> ev from))
+          )
+         (else
+           (format 0 "[multiplayer] cutscene ~S of player ~D starts here too~%" (-> sc names 0) (-> ev from))
+           (mp-scene-spawn-received)
            )
          )
        )
@@ -5564,6 +5703,421 @@
     )
   (none)
   )
+
+;; ------------------------------------------------------------------------------------------------
+;; Co-op: a mission's introduction played by every player
+;; ------------------------------------------------------------------------------------------------
+
+;; The cutscene that introduces a mission (the scene an open story node's when-open plays: an NPC
+;; talked to) is held by the player who started it (the scene player's wait loop,
+;; engine/scene/scene.gc) until the others are there, so everyone watches it together, as himstan's
+;; scene pull-in. The mission goes on with the yes of at least half of the players, its starter's
+;; included (with co-op's two players, the starter's own: decided at once); then every player is
+;; brought next to the starter (*mp-request-teleport*) and says it is ready once that cutscene is
+;; loaded there and it stands within 40 m. The starter's cutscene starts when all are ready (30 s at
+;; most), and theirs with it (mission-vote go). With three players or more, the others answer
+;; first: D-pad up yes, D-pad down no, 8 s without an answer is a yes; a vote lost releases the
+;; starter's player and drops the cutscene: the mission does not start.
+
+(defun mp-mission-intro-node ((name string))
+  "The open story node (not a challenge's) whose opening event plays scene `name`: a mission's
+   introduction; -1 when none."
+  (let ((nodes (-> *game-info* sub-task-list)))
+    (dotimes (i (-> nodes length))
+      (let ((node (-> nodes i)))
+        (when (and (nonzero? i)
+                   (-> node when-open)
+                   (not (logtest? (-> node flags) (game-task-node-flag bbush)))
+                   (game-task-node-info-method-12 node)
+                   )
+          (let ((events (-> node when-open)))
+            (dotimes (k (-> events length))
+              (let ((sc (-> events k scene)))
+                (if (and sc (string= sc name))
+                    (return i)
+                    )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  -1
+  )
+
+(defun mp-pull-send ((msg mp-pull-msg) (to int) (a int) (b int))
+  "A mission-vote event: message `msg` about our vote, with `a` and `b` (iarg 2 and 3)."
+  (let ((ev (new 'stack 'mp-event)))
+    (set! (-> ev kind) (mp-event-kind mission-vote))
+    (set! (-> ev to) to)
+    (set! (-> ev iarg 0) (the-as int msg))
+    (set! (-> ev iarg 1) (-> *mp-pull* id))
+    (set! (-> ev iarg 2) a)
+    (set! (-> ev iarg 3) b)
+    (copyn-charp<-string (-> ev text) (-> *mp-pull* scene) 32)
+    (pc-mp-send-event ev)
+    )
+  (none)
+  )
+
+(defun mp-pull-players ()
+  "Bits of the other players of the session."
+  (let ((bits 0))
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (and (!= i *mp-local-slot*) (mp-remote-state i))
+          (set! bits (logior bits (ash 1 i)))
+          )
+      )
+    bits
+    )
+  )
+
+(defun mp-bit-count ((bits int))
+  "How many player bits `bits` holds."
+  (let ((n 0))
+    (dotimes (i MP_MAX_PLAYERS)
+      (if (logtest? bits (ash 1 i))
+          (+! n 1)
+          )
+      )
+    n
+    )
+  )
+
+(defun mp-pull-passes? ()
+  "Starter: the yes (ours, the others', and the silence of those past the answer time) reach half
+   of the players."
+  (let* ((p *mp-pull*)
+         (silent (if (mp-elapsed? (-> p since) MP_PULL_ANSWER_TIME)
+                     (logand (-> p asked) (lognot (-> p answered)))
+                     0
+                     )
+                 )
+         (yes (logior (-> p yes) silent))
+         )
+    (>= (* 2 (+ 1 (mp-bit-count yes))) (+ 1 (mp-bit-count (-> p asked))))
+    )
+  )
+
+(defun mp-pull-awaited ()
+  "Starter: bits of the players whose readiness the cutscene waits for: all asked but those who said
+   no."
+  (let ((p *mp-pull*))
+    (logand (-> p asked) (lognot (logand (-> p answered) (lognot (-> p yes)))))
+    )
+  )
+
+(defbehavior mp-pull-start scene-player ((scenes object))
+  "Our play starts cutscene `scenes` (scene-player-init, before the stock init): when it introduces
+   a mission in co-op and other players are there, hold it and tell them."
+  (let* ((p *mp-pull*)
+         (first (cond
+                  ((type? scenes pair) (car (the-as pair scenes)))
+                  ((and (type? scenes array) (nonzero? (-> (the-as (array object) scenes) length)))
+                   (-> (the-as (array object) scenes) 0)
+                   )
+                  (else scenes)
+                  )
+                )
+         (name (mp-scene-name first))
+         )
+    (when (and (mp-coop?) name (zero? (-> p role)) (not (mp-joining?)) (nonzero? (mp-pull-players)))
+      (let ((node (mp-mission-intro-node name)))
+        (when (>= node 0)
+          (+! (-> p count) 1)
+          (set! (-> p role) 1)
+          (set! (-> p id) (+ (* *mp-local-slot* #x10000) (logand (-> p count) #xffff)))
+          (set! (-> p node) node)
+          (set! (-> p since) (mp-now))
+          (set! (-> p decided) 0)
+          (set! (-> p asked) (mp-pull-players))
+          (set! (-> p answered) 0)
+          (set! (-> p yes) 0)
+          (set! (-> p ready) 0)
+          (set! (-> p handle) (process->handle self))
+          (copy-string<-string (-> p scene) name)
+          (let ((vote? (not (mp-pull-passes?))))
+            (format 0 "[multiplayer] mission ~S: its introduction ~S waits for the other players (vote ~A)~%"
+                    (-> *game-info* sub-task-list node name) name vote?
+                    )
+            (mp-pull-send (mp-pull-msg propose) -1 node (if vote? 1 0))
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-pull-answer ((yes? symbol))
+  "Another player's proposal: our answer."
+  (let ((p *mp-pull*))
+    (set! (-> p vote?) #f)
+    (mp-pull-send (mp-pull-msg answer) (-> p starter) (if yes? 1 0) 0)
+    (format 0 "[multiplayer] mission vote ~D: we answer ~A~%" (-> p id) yes?)
+    )
+  (none)
+  )
+
+(defbehavior mp-pull-start-scene mp-manager ()
+  "Another player's mission introduction starts: ours too, the same cutscene and continue point
+   (sent by its scene-player-init, *mp-scene*), when we are there with it loaded."
+  (let* ((p *mp-pull*)
+         (sp (the-as scene-player (if *scene-player* (ppointer->process *scene-player*))))
+         )
+    (cond
+      ;; the giver of the mission here played it as we arrived (an NPC whose scene starts when the
+      ;; player comes near): it plays here already, with the other player's
+      ((and sp (-> sp scene) (string= (-> sp scene name) (-> p scene)))
+       (format 0 "[multiplayer] mission introduction ~S plays here with player ~D (started here)~%" (-> p scene) (-> p starter))
+       (+! (-> p pulled) 1)
+       )
+      ((and (= (-> p phase) 2) (scene-lookup (-> p scene)) (not sp))
+       (format 0 "[multiplayer] mission introduction ~S starts here with player ~D~%" (-> p scene) (-> p starter))
+       (+! (-> p pulled) 1)
+       (mp-scene-spawn-received)
+       )
+      (else
+        (format 0 "[multiplayer] mission introduction ~S started without us~%" (-> p scene))
+        )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-apply-mission-vote mp-manager ((ev mp-event))
+  "A mission-vote event (see mp-pull-msg)."
+  (let ((p *mp-pull*)
+        (bit (ash 1 (-> ev from)))
+        )
+    (case (the-as mp-pull-msg (-> ev iarg 0))
+      (((mp-pull-msg propose))
+       (cond
+         ((= (-> p role) 1)
+          ;; both started one at once: each starts its own, without the other
+          (format 0 "[multiplayer] mission vote ~D of player ~D: we start ours~%" (-> ev iarg 1) (-> ev from))
+          (let ((id (-> p id)))
+            (set! (-> p id) (-> ev iarg 1))
+            (mp-pull-send (mp-pull-msg answer) (-> ev from) 0 0)
+            (set! (-> p id) id)
+            )
+          )
+         (else
+           (set! (-> p role) 2)
+           (set! (-> p id) (-> ev iarg 1))
+           (set! (-> p node) (-> ev iarg 2))
+           (set! (-> p starter) (-> ev from))
+           (set! (-> p since) (mp-now))
+           (set! (-> p tp-at) 0)
+           (set! (-> p vote?) (nonzero? (-> ev iarg 3)))
+           (set! (-> p phase) (if (-> p vote?) 0 1))
+           (string<-charp (-> p scene) (-> ev text))
+           (format 0 "[multiplayer] player ~D starts a mission (~S): ~S~%" (-> ev from) (-> p scene)
+                   (if (-> p vote?) "vote" "we join its introduction")
+                   )
+           (if (not (-> p vote?))
+               (mp-show-message "A mission starts: you join the other player")
+               )
+           )
+         )
+       )
+      (((mp-pull-msg answer))
+       (when (and (= (-> p role) 1) (= (-> ev iarg 1) (-> p id)))
+         (logior! (-> p answered) bit)
+         (if (nonzero? (-> ev iarg 2))
+             (logior! (-> p yes) bit)
+             )
+         )
+       )
+      (((mp-pull-msg result))
+       (when (and (= (-> p role) 2) (= (-> ev iarg 1) (-> p id)))
+         (cond
+           ((nonzero? (-> ev iarg 2))
+            ;; passed: everyone comes, whatever it answered
+            (set! (-> p vote?) #f)
+            (if (zero? (-> p phase))
+                (set! (-> p phase) 1)
+                )
+            (if (= (-> p phase) 3)
+                (set! (-> p phase) 1)
+                )
+            )
+           (else
+             (format 0 "[multiplayer] mission vote ~D lost: the mission does not start~%" (-> p id))
+             (set! (-> p role) 0)
+             )
+           )
+         )
+       )
+      (((mp-pull-msg ready))
+       (if (and (= (-> p role) 1) (= (-> ev iarg 1) (-> p id)))
+           (logior! (-> p ready) bit)
+           )
+       )
+      (((mp-pull-msg go))
+       (when (and (= (-> p role) 2) (= (-> ev iarg 1) (-> p id)))
+         (mp-pull-start-scene)
+         (set! (-> p role) 0)
+         )
+       )
+      )
+    )
+  (none)
+  )
+
+(defun mp-pull-input ()
+  "Run first every frame (mp-input-update): while our answer to a mission vote is wanted, D-pad up
+   says yes, D-pad down no (both buttons hidden from what runs next: no gun change)."
+  (let ((p *mp-pull*))
+    (when (and (= (-> p role) 2) (-> p vote?) (not *progress-process*))
+      (let ((yes? (cpad-pressed? 0 up))
+            (no? (cpad-pressed? 0 down))
+            )
+        (when (or yes? no?)
+          (mp-pull-answer (the-as symbol yes?))
+          (set! (-> p phase) (if yes? 1 3))
+          (let ((pad (-> *cpad-list* cpads 0))
+                (history (-> *cpad-history-list* cpads 0))
+                (mask (pad-buttons up down))
+                )
+            (logclear! (-> pad button0-rel 0) mask)
+            (logclear! (-> pad button0-abs 0) mask)
+            (dotimes (i 15)
+              (logclear! (-> history button0-rel i) mask)
+              (logclear! (-> history button0-abs i) mask)
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-pull-update ()
+  "Every frame: the starter decides the vote and starts the cutscene once every player is there;
+   another player answers yes by itself after 8 s, goes to the starter and says when it is ready."
+  (let ((p *mp-pull*))
+    (case (-> p role)
+      ((1)
+       ;; players who left no longer count
+       (set! (-> p asked) (logand (-> p asked) (mp-pull-players)))
+       (cond
+         ((not (handle->process (-> p handle)))
+          (set! (-> p role) 0)
+          )
+         ((zero? (-> p decided))
+          (cond
+            ((mp-pull-passes?)
+             (set! (-> p decided) (mp-now))
+             (+! (-> p passed) 1)
+             (mp-pull-send (mp-pull-msg result) -1 1 0)
+             (format 0 "[multiplayer] mission vote ~D passed~%" (-> p id))
+             )
+            ((or (mp-elapsed? (-> p since) MP_PULL_ANSWER_TIME) (= (-> p answered) (-> p asked)))
+             (+! (-> p lost) 1)
+             (mp-pull-send (mp-pull-msg result) -1 0 0)
+             (format 0 "[multiplayer] mission vote ~D lost: the mission does not start~%" (-> p id))
+             (set! (-> p role) 0)
+             (if *target*
+                 (process-release? *target*)
+                 )
+             (let ((sp (handle->process (-> p handle))))
+               (if sp
+                   (deactivate sp)
+                   )
+               )
+             )
+            )
+          )
+         ((or (= (logand (mp-pull-awaited) (-> p ready)) (mp-pull-awaited))
+              (mp-elapsed? (-> p decided) MP_PULL_READY_TIME)
+              )
+          (format 0 "[multiplayer] mission introduction ~S starts (ready ~D of ~D)~%" (-> p scene)
+                  (mp-bit-count (-> p ready)) (mp-bit-count (-> p asked))
+                  )
+          (mp-pull-send (mp-pull-msg go) -1 0 0)
+          (set! (-> p role) 0)
+          )
+         )
+       )
+      ((2)
+       (cond
+         ((or (not (mp-remote-state (-> p starter)))
+              (mp-elapsed? (-> p since) (+ MP_PULL_ANSWER_TIME MP_PULL_READY_TIME (seconds 10)))
+              )
+          (set! (-> p role) 0)
+          )
+         ((and (zero? (-> p phase)) (mp-elapsed? (-> p since) MP_PULL_ANSWER_TIME))
+          (mp-pull-answer #t)
+          (set! (-> p phase) 1)
+          )
+         ((and (= (-> p phase) 1) *target*)
+          (cond
+            ;; there and settled: no teleport asked or under way, no continue point being applied
+            ;; (a player still where it stood when its own move began would be ready too early)
+            ((and (< (mp-slot-distance (-> p starter)) MP_MISSION_GATHER)
+                  (scene-lookup (-> p scene))
+                  (not (focus-test? *target* teleporting))
+                  (< *mp-request-teleport* 0)
+                  (not (and (-> *target* next-state) (= (-> *target* next-state name) 'target-continue)))
+                  )
+             (mp-pull-send (mp-pull-msg ready) (-> p starter) 0 0)
+             (set! (-> p phase) 2)
+             (format 0 "[multiplayer] mission vote ~D: ready for the introduction~%" (-> p id))
+             )
+            ((and (< *mp-request-teleport* 0)
+                  (>= (mp-slot-distance (-> p starter)) MP_MISSION_GATHER)
+                  (not (focus-test? *target* teleporting))
+                  (or (zero? (-> p tp-at)) (mp-elapsed? (-> p tp-at) (seconds 15)))
+                  )
+             (set! (-> p tp-at) (mp-now))
+             (set! *mp-request-teleport* (-> p starter))
+             )
+            )
+          )
+         )
+       )
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-scene-hold? scene-player ()
+  "#t while our cutscene introducing a mission waits for the other players (the scene player's wait
+   loop, engine/scene/scene.gc)."
+  (and (= (-> *mp-pull* role) 1) (= (handle->process (-> *mp-pull* handle)) self))
+  )
+
+(defun mp-draw-pull ()
+  "The starter: that its mission's introduction waits for the others (how many are ready); another
+   player: the vote's question while its answer is wanted."
+  (let ((p *mp-pull*))
+    (case (-> p role)
+      ((1)
+       (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-mission-wait) #f)
+               (mp-bit-count (-> p ready)) (mp-bit-count (mp-pull-awaited))
+               )
+       (mp-draw-challenge-line *mp-challenge-line*)
+       )
+      ((2)
+       (let ((st (mp-remote-state (-> p starter))))
+         (when (and st (-> p vote?))
+           (string<-charp *mp-challenge-name* (-> st name))
+           (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-mission-vote) #f)
+                   *mp-challenge-name*
+                   (max 0 (/ (- MP_PULL_ANSWER_TIME (- (mp-now) (-> p since))) (seconds 1)))
+                   )
+           (mp-draw-challenge-line *mp-challenge-line*)
+           )
+         )
+       )
+      )
+    )
+  (none)
+  )
+
 
 ;; MOD multiplayer -- every cutscene starts here (engine/scene/scene.gc)
 (define-perm *mp-stock-scene-player-init* (function object symbol string none :behavior scene-player)
@@ -5573,9 +6127,11 @@
 (defbehavior scene-player-init scene-player ((arg0 object) (arg1 symbol) (arg2 string))
   "The others in our region play this cutscene too (multiplayer mod, no-op offline), then the stock
    init, which goes on to the scene."
-  (if (and (mp-online?) (logtest? *mp-world* (mp-world-flag progress)) (not (-> *mp-scene* replaying?)))
-      (mp-send-scene arg0 arg1 arg2)
-      )
+  ;; a mission's introduction first waits for the others (mp-pull-start), told before its scenes
+  (when (and (mp-online?) (logtest? *mp-world* (mp-world-flag progress)) (not (-> *mp-scene* replaying?)))
+    (mp-pull-start arg0)
+    (mp-send-scene arg0 arg1 arg2)
+    )
   (*mp-stock-scene-player-init* arg0 arg1 arg2)
   (none)
   )

@@ -43,6 +43,7 @@
 ;;   log-coop | log-weather                                  co-op state (held steps, leash); the weather
 ;;   log-sync                                                phase of a test cycle (host clock sync)
 ;;   goto-door | log-door | goto-elevator | log-elevator     doors and elevators near player 0 / us
+;;   goto-door-at <meters>                                   stand that far in front of the nearest door (negative: behind)
 ;;   ride-shown-elevator                                     once a trip of player 0 was shown here: stand by it
 ;;   scene <name> | log-levels                               start a cutscene; levels and cutscenes
 ;;   far-levels <0|1>                                        load the art of distant players' objects (default 1)
@@ -76,11 +77,9 @@
 ;;   ride-flut | end-flut                                    ride a lizard where we stand (a level with lizards); off it
 ;;   respawn-manager <type>                                  kill that mission's task manager, which starts again
 ;;   goto-type <type>                                        stand in front of the first process of that type (a mission giver)
-;;   race-sim <progress x 1000> <result> <place>             our race reports a place, progress and result (node 999)
 ;;   goto-own-vehicle                                        stand beside the vehicle we drove last (and left)
 ;;   race-autopilot                                          a running race: our vehicle driven by the racers' AI
 ;;   race-stop-racers                                        every vehicle of ours but our player's removed
-;;   race-extra-ahead <n>                                    n more players counted ahead of us in a race
 ;;   goto-flut | log-fldax                                   stand 2 m from the nearest lizard waiting, facing it; Daxter on it
 ;;   dark-bomb                                               the dark blast ready (after power dark): jump, square
 ;;   restart | log-restart                                   START > Restart; restarts done, mode, master mode
@@ -2721,18 +2720,21 @@
          (format 0 "[mp-test] race me driving ~A riding ~A perched ~A state ~A~%" (logtest? (-> *mp-local* flags) (mp-flag driving))
                  (logtest? (-> *mp-local* flags) (mp-flag riding)) (logtest? (-> *mp-local* flags) (mp-flag perched)) (mp-target-state-name)
                  )
-         (format 0 "[mp-test] race place ~D progress ~,,3f done ~D node ~D in-race ~A context ~A~%" (-> *mp-race* place)
-                 (-> *mp-race* own-progress) (-> *mp-race* own-done) (-> *mp-race* own-node)
-                 (< (- (mp-now) (-> *mp-race* in-race-at)) (seconds 1)) (mp-race-context?)
-                 )
-         (format 0 "[mp-test] race racers ahead ~D host racers ~D sent ~,,1f s ago~%" (-> *mp-race* ai-ahead)
-                 (-> *mp-race* host-ai-count) (* 0.0033333334 (the float (- (mp-now) (-> *mp-race* host-ai-time))))
-                 )
-         )
-        ((string= cmd "race-extra-ahead")
-         ;; race-extra-ahead <n>: n more players counted ahead of us in a race (the HUD's place of a
-         ;; session with more players than co-op allows)
-         (set! *mp-test-race-extra* (mp-test-int))
+         (let ((r *mp-race*))
+           (format 0 "[mp-test] race place ~D progress ~,,3f bits ~D node ~D in-race ~A context ~A~%" (-> *game-info* race-position)
+                   (-> r slot-progress (-> r own-slot)) (-> r slot-bits (-> r own-slot)) (-> r own-node)
+                   (< (- (mp-now) (-> r in-race-at)) (seconds 1)) (mp-race-context?)
+                   )
+           (format 0 "[mp-test] race bound ~D slot ~D partner ~D (~D) verdict ~D~%"
+                   (-> r bound-node) (-> r own-slot) (-> r partner-slot) (-> r partner) (-> r verdict)
+                   )
+           (format 0 "[mp-test] race host-race ~D sent ~,,1f s ago~%" (-> r host-count)
+                   (* 0.0033333334 (the float (- (mp-now) (-> r host-time))))
+                   )
+           (format 0 "[mp-test] race slots ~,,2f ~,,2f ~,,2f ~,,2f ~,,2f~%" (-> r slot-progress 0) (-> r slot-progress 1)
+                   (-> r slot-progress 2) (-> r slot-progress 3) (-> r slot-progress 4)
+                   )
+           )
          )
         ((string= cmd "race-stop-racers")
          ;; race-stop-racers: every vehicle of ours but our player's stops (a race's racers), so the
@@ -2769,19 +2771,6 @@
                      (and last (logtest? (-> last mask) (process-mask sleep)))
                      )
              )
-           )
-         )
-        ((string= cmd "race-sim")
-         ;; race-sim <progress x 1000> <result> <place>: our race reports as a race would (node 999),
-         ;; then our place with the players and, finished, whether our result waits and is won
-         (let* ((progress (* 0.001 (the float (mp-test-int))))
-                (done (mp-test-int))
-                (rank (mp-test-int))
-                (place (mp-race-position rank progress done 999))
-                )
-           (format 0 "[mp-test] race sim place ~D wait ~A won ~A~%" place (mp-race-result-wait? (= done 1))
-                   (if (nonzero? done) (mp-race-won? (= done 1)) 'racing)
-                   )
            )
          )
         ((string= cmd "beam-at-host")
@@ -3344,6 +3333,31 @@
          )
         ((string= cmd "log-door")
          (mp-test-log-object "door" com-airlock)
+         ;; co-op: whether it waits for a teammate behind it, and our side of it
+         (let ((door (the-as com-airlock (mp-test-nearest com-airlock (mp-test-reference-pos)))))
+           (if (and door *target*)
+               (format 0 "[mp-test] door hold ~A shown ~A our side ~m~%" (mp-door-hold? door)
+                       (< (- (mp-now) *mp-door-wait-time*) (seconds 0.5))
+                       (check-crossing-distance door (target-pos 0) #f)
+                       )
+               )
+           )
+         )
+        ((string= cmd "goto-door-at")
+         ;; goto-door-at <meters>: stand that far in front of the nearest door, along its axis (its
+         ;; front side, where closing runs its scripts; negative: behind it)
+         (let ((door (if *target* (the-as com-airlock (mp-test-nearest com-airlock (-> *target* control trans)))))
+               (d (* 4096.0 (if (mp-test-word) (string->float (-> *mp-test* word)) 0.0)))
+               )
+           (when door
+             (let ((pos (vector-copy! (new 'stack-no-clear 'vector) (-> door root trans))))
+               (vector+float*! pos pos (vector-z-quaternion! (new 'stack-no-clear 'vector) (-> door root quat)) d)
+               (move-to-point! (-> *target* control) pos)
+               (vector-reset! (-> *target* control transv))
+               (format 0 "[mp-test] at door ~D, ~m in front~%" (if (-> door entity) (-> door entity aid) 0) d)
+               )
+             )
+           )
          )
         ((string= cmd "log-elevator")
          (mp-test-log-object "elevator" elevator)

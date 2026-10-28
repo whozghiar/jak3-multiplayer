@@ -1,6 +1,6 @@
-# A mission started by walking to whoever gives it, guest side: joins the host at Kleiver, goes to
-# Spargus's doors; the host's talk starts the hunt there: the guest is taken next to the host and
-# its own task manager runs.
+# A mission started by talking to whoever gives it, guest side: joins the host at Kleiver, goes to
+# Spargus's doors; the host's talk holds the intro: the guest is brought next to the host, both
+# watch it (both ask to skip it), and its own hunt's task manager runs.
 1 enable
 1 name Guest
 1 color 2
@@ -19,13 +19,15 @@
 62 wait-joined
 66 log-state task-manager-arena-training
 68 continue wasdoors-city
-69.5 log-me
-70.5 log-me
-76 log-me
-77 log-state task-manager-kanga-lizard
-144 log-me
-145 log-state task-manager-kanga-lizard
-152 log-me
-153 log-state task-manager-kanga-lizard
-154 screenshot hunt-guest
+73 log-me
+74 log-state task-manager-kanga-lizard
+76 wait-scene
+82 screenshot intro-guest
+84 press triangle 100
+85 log-skip
+142 log-me
+143 log-state task-manager-kanga-lizard
+150 log-me
+151 log-state task-manager-kanga-lizard
+152 screenshot hunt-guest
 156 log

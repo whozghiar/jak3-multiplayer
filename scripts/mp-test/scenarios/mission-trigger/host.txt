@@ -1,7 +1,7 @@
-# A mission started by walking to whoever gives it, host side: co-op from the lobby at the kanga-rat
+# A mission started by talking to whoever gives it, host side: co-op from the lobby at the kanga-rat
 # hunt's introduction (next to Kleiver at the arena); once the guest went to Spargus's doors, the
-# host talks to Kleiver (triangle): the intro cutscene, then the hunt's task manager starts here
-# and the guest is taken there, its own manager running too.
+# host talks to Kleiver (triangle): the intro waits while the guest is brought there, then both
+# watch it (both ask to skip it), and the hunt's task manager starts on both machines.
 1 enable
 1 name Host
 1 color 1
@@ -18,14 +18,17 @@
 70 wait-player 1
 72 log-state task-manager-kanga-lizard
 74 log-me
-76 goto-type kleever-npc
-76.5 screenshot kleiver
-77 goto-type kleever-npc
-78 press triangle 100
-92 press triangle 100
-142 log-state task-manager-kanga-lizard
-143 log-me
+86 goto-type kleever-npc
+86.5 screenshot kleiver
+87 goto-type kleever-npc
+88 press triangle 100
+90 wait-scene
+96 screenshot intro
+98 press triangle 100
+99 log-skip
 150 log-state task-manager-kanga-lizard
 151 log-me
-152 screenshot hunt
-156 log
+158 log-state task-manager-kanga-lizard
+159 log-me
+160 screenshot hunt
+164 log

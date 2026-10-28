@@ -24,19 +24,22 @@
 
 (declare-type turbo-pickup process-drawable)
 
-;; MOD multiplayer: in co-op the players count in each other's place, and the race is won when they
-;; take the first places (pc/features/multiplayer/multiplayer.gc, "Races")
-(define-extern mp-race-position (function int float int int int))
-(define-extern mp-race-ai-progress (function int float none))
+;; MOD multiplayer: in co-op one race for both players, the host's: the other player takes a
+;; racer's slot, the host's race counts and decides (pc/features/multiplayer/multiplayer.gc, "Races")
+(define-extern mp-race-slot (function int float int none))
+(define-extern mp-race-sync (function int int symbol none))
+(define-extern mp-race-mirroring? (function int symbol))
+(define-extern mp-race-slot-progress (function int float))
+(define-extern mp-race-slot-bits (function int int))
 (define-extern mp-race-result-wait? (function symbol symbol))
 (define-extern mp-race-won? (function symbol symbol))
 
-(defun mp-racer-progress ((rs race-state) (r racer-state))
-  "MOD multiplayer: how far racer `r` is, comparable from one machine to another: laps done and the
-   part of the lap, or once finished 1000 minus its time (the earlier the larger)."
+(defun mp-racer-progress ((r racer-state))
+  "MOD multiplayer: how far racer `r` is, as update-rankings ranks it: laps done and the part of the
+   lap, or once finished 1000 minus its finish order."
   (cond
     ((logtest? (-> r flags) (racer-state-flags rsf1))
-     (- 1000.0 (* 0.0001 (the float (- (-> r finish-time) (-> rs race-start-time)))))
+     (- 1000.0 (the float (-> r finish-count)))
      )
     ((logtest? (-> r flags) (racer-state-flags rsf0))
      (+ (the float (-> r lap-count)) (-> r lap-distance))
@@ -45,6 +48,57 @@
       0.0
       )
     )
+  )
+
+(defun mp-racer-bits ((r racer-state))
+  "MOD multiplayer: racer `r`'s state for the other players: 1 started, 2 finished, 4 out of the race."
+  (logior (if (logtest? (-> r flags) (racer-state-flags rsf0)) 1 0)
+          (if (logtest? (-> r flags) (racer-state-flags rsf1)) 2 0)
+          (if (logtest? (-> r flags) (racer-state-flags rsf2)) 4 0)
+          )
+  )
+
+(defun mp-race-mirror! ((rs race-state) (r racer-state))
+  "MOD multiplayer: on a guest whose race binds the players, every racer but ours takes the host's
+   laps, finish and leaving (the host's race counts): #t when racer `r` was set from them, its own
+   lap counting skipped."
+  (when (and (!= r (-> rs racer-array (-> rs i-player))) (mp-race-mirroring? (the-as int (-> rs info task-node))))
+    (dotimes (i (-> rs racer-count))
+      (when (= r (-> rs racer-array i))
+        (let ((v (mp-race-slot-progress i))
+              (bits (mp-race-slot-bits i))
+              (proc (handle->process (-> r racer)))
+              )
+          (if (logtest? bits 1)
+              (logior! (-> r flags) (racer-state-flags rsf0))
+              )
+          (if (logtest? bits 4)
+              (logior! (-> r flags) (racer-state-flags rsf2))
+              )
+          (cond
+            ((logtest? bits 2)
+             (when (not (logtest? (-> r flags) (racer-state-flags rsf1)))
+               (logior! (-> r flags) (racer-state-flags rsf1))
+               (set! (-> r finish-time) (-> rs current-time))
+               (+! (-> rs finished-count) 1)
+               )
+             (set! (-> r finish-count) (- 1000 (the int (+ v 0.5))))
+             )
+            (else
+              (set! (-> r lap-count) (the int v))
+              (set! (-> r lap-distance) (- v (the float (the int v))))
+              )
+            )
+          (set! (-> r pos) (+ (-> r lap-distance) (the float (-> r lap-count))))
+          (if proc
+              (vector-copy! (-> r position) (-> (the-as process-drawable proc) root trans))
+              )
+          )
+        (return #t)
+        )
+      )
+    )
+  #f
   )
 (define-extern race-turbo-pickup-spawn (function process vector turbo-pickup))
 (define-extern race-vehicle-entity-hack (function none))
@@ -207,6 +261,10 @@
   )
 
 (defmethod update-lap-distance ((this racer-state) (arg0 race-state))
+  ;; MOD multiplayer: a guest's racers but its own follow the host's race
+  (if (mp-race-mirror! arg0 this)
+      (return (the-as none 0))
+      )
   (let ((s5-0 (new 'stack-no-clear 'matrix3)))
     (-> arg0 info)
     (let ((v1-2 (handle->process (-> this racer))))
@@ -1281,32 +1339,18 @@
           )
       (set! (-> gp-0 target-pos) (-> s5-0 pos))
       (let ((v1-5 *game-info*))
-        ;; MOD multiplayer: our place with the other players of the race counted (co-op); our
-        ;; progress and result go to them, and the racers' progress (the host's racers are the
-        ;; ones every player races against)
+        ;; MOD multiplayer: every racer's progress for the host's race, which counts in co-op
         (dotimes (s4-0 (-> gp-0 racer-count))
-          (if (!= s4-0 (-> gp-0 i-player))
-              (mp-race-ai-progress s4-0 (mp-racer-progress gp-0 (-> gp-0 racer-array s4-0)))
-              )
+          (let ((a1-2 (-> gp-0 racer-array s4-0)))
+            (mp-race-slot s4-0 (mp-racer-progress a1-2) (mp-racer-bits a1-2))
+            )
           )
-        (set! (-> v1-5 race-position)
-              (mp-race-position
-                (-> s5-0 rank)
-                (mp-racer-progress gp-0 s5-0)
-                (cond
-                  ((not (logtest? (-> s5-0 flags) (racer-state-flags rsf1)))
-                   0
-                   )
-                  ((zero? (-> s5-0 finish-count))
-                   1
-                   )
-                  (else
-                    2
-                    )
-                  )
-                (the-as int (-> gp-0 info task-node))
-                )
-              )
+        (mp-race-sync
+          (the-as int (-> gp-0 info task-node))
+          (-> gp-0 racer-count)
+          (logtest? (-> gp-0 info flags) (racer-info-flag rif6))
+          )
+        (set! (-> v1-5 race-position) (-> s5-0 rank))
         (set! (-> v1-5 race-current-lap-count) (min (+ (-> s5-0 lap-count) 1) (-> self race-state info lap-count)))
         (set! (-> v1-5 race-total-lap-count) (-> self race-state info lap-count))
         (let ((a0-12 (-> gp-0 current-time)))
@@ -1342,28 +1386,31 @@
       (if (or (logtest? (-> s5-0 flags) (racer-state-flags rsf2)) (not *target*) (focus-test? *target* dead))
           (go-virtual fail)
           )
-      ;; MOD multiplayer: a finish ahead of every racer waits for the other players' result (co-op)
+      ;; MOD multiplayer: our score saved at our finish, then our result (first, or a good enough
+      ;; score) waits for the host's verdict (co-op)
+      (when (and (logtest? (-> s5-0 flags) (racer-state-flags rsf1)) (not (logtest? (-> s5-0 flags) (racer-state-flags rsf5))))
+        (logior! (-> s5-0 flags) (racer-state-flags rsf5))
+        (set! (-> gp-0 new-score?) (save-score self (the-as int (- (-> s5-0 finish-time) (-> gp-0 race-start-time)))))
+        )
       (when (and (logtest? (-> s5-0 flags) (racer-state-flags rsf1))
-                 (not (mp-race-result-wait? (and (not (logtest? (-> gp-0 info flags) (racer-info-flag rif6)))
-                                                 (zero? (-> s5-0 finish-count))
-                                                 )
+                 (not (mp-race-result-wait? (if (logtest? (-> gp-0 info flags) (racer-info-flag rif6))
+                                                (-> gp-0 new-score?)
+                                                (zero? (-> s5-0 finish-count))
+                                                )
                                             )
                       )
                  )
-        (when (not (logtest? (-> s5-0 flags) (racer-state-flags rsf5)))
-          (logior! (-> s5-0 flags) (racer-state-flags rsf5))
-          (set! (-> gp-0 new-score?) (save-score self (the-as int (- (-> s5-0 finish-time) (-> gp-0 race-start-time)))))
-          )
         (send-event (ppointer->process (-> self parent)) 'allow-fail #f)
         (set! (-> self message-id)
               (add-process *gui-control* self (gui-channel hud-lower-center) (gui-action play) "fail" 81920.0 0)
               )
         (set! (-> self show-stats?) #f)
-        (set! (-> gp-0 player-win?) (if (logtest? (-> gp-0 info flags) (racer-info-flag rif6))
-                                        (-> gp-0 new-score?)
-                                        ;; MOD multiplayer: in co-op, won when every player finished first
-                                        (mp-race-won? (zero? (-> s5-0 finish-count)))
-                                        )
+        ;; MOD multiplayer: in co-op, the host's verdict
+        (set! (-> gp-0 player-win?) (mp-race-won? (if (logtest? (-> gp-0 info flags) (racer-info-flag rif6))
+                                                      (-> gp-0 new-score?)
+                                                      (zero? (-> s5-0 finish-count))
+                                                      )
+                                                  )
               )
         (if (-> gp-0 player-win?)
             (go-virtual win)

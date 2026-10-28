@@ -1,0 +1,24 @@
+# Co-op doors wait for everyone, host side: the host and the guest at the door nearest the host;
+# the host goes through it and walks 30 m on, the guest stays 20 m behind it: the door, open, waits
+# (mp-door-hold?); once the guest went through too, it no longer waits.
+1 enable
+1 name Host
+1 color 1
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+60 goto-door-at -3
+62 goto-door-at 3
+63 log-door
+65 goto-door-at 30
+67 log-door
+70 log-door
+73 log-door
+76 log-door
+79 log-door
+82 log-door
+84 screenshot wait
+88 log-door
+92 log-door
+96 log-door
+98 log

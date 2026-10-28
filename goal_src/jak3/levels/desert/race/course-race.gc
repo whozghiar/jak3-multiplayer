@@ -12,8 +12,55 @@
    )
   )
 
-;; MOD multiplayer: the start waits for every player aboard (pc/features/multiplayer/multiplayer.gc)
+;; MOD multiplayer: the start waits for every player aboard, then one race for both players, the
+;; host's (pc/features/multiplayer/multiplayer.gc, "Races")
 (define-extern mp-race-hold? (function symbol))
+(define-extern mp-race-partner (function int))
+(define-extern mp-race-bound! (function int int int int none))
+(define-extern mp-puppet-process (function int process-focusable))
+(define-extern *mp-local-slot* int)
+
+(defun mp-race-bind-players! ((rs race-state))
+  "MOD multiplayer: in co-op, once the start is released, the other player takes the racer slot
+   before ours on both machines, its racer removed: the host races that player's puppet there; a
+   guest moves its own vehicle there and the host's puppet into the host's slot. A race of one
+   racer (a time trial), offline, alone or in free roam: nothing (the last binding cleared)."
+  (let ((partner (mp-race-partner))
+        (mine (-> rs i-player))
+        )
+    (cond
+      ((and (>= partner 0) (> (-> rs racer-count) 1) (> mine 0) (mp-puppet-process partner))
+       (let ((other (+ mine -1))
+             (puppet (mp-puppet-process partner))
+             )
+         (send-event (handle->process (-> rs racer-array other racer)) 'go-die)
+         (cond
+           ((zero? *mp-local-slot*)
+            (init-racer! (-> rs racer-array other) puppet)
+            (set! (-> rs racer-array other rider) (the-as uint 12))
+            )
+           (else
+             (let ((veh (the-as process-drawable (handle->process (-> rs racer-array mine racer))))
+                   (rider (-> rs racer-array mine rider))
+                   )
+               (init-racer! (-> rs racer-array other) veh)
+               (set! (-> rs racer-array other rider) rider)
+               (init-racer! (-> rs racer-array mine) puppet)
+               (set! (-> rs racer-array mine rider) (the-as uint 12))
+               (set! (-> rs i-player) other)
+               )
+             )
+           )
+         (mp-race-bound! (the-as int (-> rs info task-node)) (-> rs i-player) (if (zero? *mp-local-slot*) other mine) partner)
+         )
+       )
+      (else
+        (mp-race-bound! (the-as int (-> rs info task-node)) mine -1 -1)
+        )
+      )
+    )
+  (none)
+  )
 
 ;; DECOMP BEGINS
 
@@ -257,6 +304,7 @@
     (while (mp-race-hold?)
       (suspend)
       )
+    (mp-race-bind-players! *race-state*)
     (while (not (-> *setting-control* user-current speech-control))
       (suspend)
       )

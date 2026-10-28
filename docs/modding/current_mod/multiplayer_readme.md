@@ -11,11 +11,12 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 | Layer | File | Role |
 |---|---|---|
-| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | UDP session (host or client), reliable channel, relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, the economy's accounts (4.20), test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | The session over GameNetworkingSockets (host or client, five lanes), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, the economy's accounts (4.20), test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
 | Renderer (C++) | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `shaders/merc2_outline.*` | Other players seen through walls: their models drawn again, at the end of the 3D scene, as an outline in their color where something hides them (4.9). |
 | Renderer (C++) | `TextureAnimator.cpp`, `.h`, `foreground/Merc2.cpp`, `shaders/merc2.vert`, `.frag` | Another player's Dark Jak skin at its own level (4.11); each player's outfit colors (4.12). |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer_nat.cpp`, `.h` | The host's UDP port opened on its router (UPnP IGD, NAT-PMP), himstan's port mapping. |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
-| Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
+| Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), a pose at scale 1 (12-byte bones) and a blob's id, events kept while not taken, and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
 | GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, Daxter on a shoulder (4.16), cutscene outfits (4.17), the co-op return next to a teammate (4.19), the economy and Kleiver's spot (4.20), missions started together and the host's choice in game (4.24), a lizard for every player (4.25), per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
 | GAME | `.../multiplayer-guns.gc` | Every weapon (Mods menu), and Daxter's guns (4.8). |
@@ -28,28 +29,44 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 - **Topology:** star. The host is slot 0 and listens on the port of its address field (default
   7777); guests get slots 1 to 7. Every message from a guest goes to the host, which relays it.
-- **Transport:** UDP, one non-blocking socket per session pumped once per frame from GOAL
-  (`pc-mp-update`), no thread. A message is `[u8 type][payload]` (at most 16 KB), cut into
-  fragments of 1180 bytes (a datagram stays under a 1280-byte MTU). Every datagram starts with
-  `['J'][kind][u32 connection id]`, the id a client draws when it joins: a datagram of an older
-  connection from the same address is told apart (the host replaces that client). Two channels:
-  - *Unreliable* (`STATE`, `ACTORS`, `POSES`, `PING`, `PONG`): `[u16 message id][u8 fragment][u8
-    fragments]`; a newer message follows within a frame, so of each peer only a message newer
-    than the last one delivered is delivered (a late one is dropped), and a message with a lost
-    fragment is lost.
-  - *Reliable* (`HELLO`, `WELCOME`, `REJECT`, `LEAVE`, `EVENT`, `BLOB`): `[u32 seq][u8
-    fragment][u8 fragments]`, each fragment its own seq; delivered once and in order; the
-    receiver answers `[u32 next seq expected][u32 bits]` (the 32 seqs after it received); a
-    fragment not acknowledged within 1.5 round trips plus 30 ms (60 ms to 1 s) is sent again; at
-    most 256 fragments in flight per peer, a peer more than 8192 behind is dropped.
-  - `BYE` (sent three times, nothing answers it): the host stopped (with its reason) or a client
-    left; the other side drops the connection at once instead of waiting for the timeout.
+- **Transport:** Valve's GameNetworkingSockets (GNS, `third-party/GameNetworkingSockets`, built
+  static with the protobuf it needs), as himstan's Jak and Daxter II Multiplayer uses it
+  (`game/multiplayer/platform/transport/session_platform.cpp`, ISC). Each guest holds one
+  encrypted connection to the host's listen socket (open-source GNS: encrypted, not
+  authenticated); GNS does the handshake, reliability, fragmentation, ordering, the rate limit and
+  the timeouts. It is pumped once per frame from GOAL (`pc-mp-update`: its callbacks, then every
+  message waiting). A message is `[u8 type][payload]` (at most 16 KB), sent on one of his five
+  lanes (a lower priority waits for the higher ones; within a priority, bytes are shared by
+  weight):
 
-  Message types: `HELLO` (protocol version, now 10, and the player's secret id, 4.20), `WELCOME` (slot), `REJECT` (reason, then
-  close), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
-  offset][bytes]`, 15000 bytes a message, relayed by the host: the host's world for a guest that
-  joins, 1.7), `PING`, `PONG`. A client sees "Connection refused" when the host's machine answers
-  that nothing listens there (Windows), else "Connection timed out" after 8 s.
+  | Lane | Priority, weight | Messages | Delivery |
+  |---|---|---|---|
+  | 0 control | 0, 1 | `HELLO`, `WELCOME`, `LEAVE` | reliable, in order |
+  | 1 critical | 0, 4 | `STATE` | unreliable |
+  | 2 gameplay | 1, 1 | `EVENT`, `BLOB` | reliable, in order |
+  | 3 normal | 1, 1 | `ACTORS`, the `POSES` batches that carry effects | unreliable |
+  | 4 bulk | 2, 1 | the `POSES` sent between two batches | unreliable |
+
+  Unreliable messages go with `NoDelay`: one the link cannot carry now is dropped (a newer one
+  follows within a frame), never queued; of each lane only a message newer than the last one
+  delivered is handed on. GNS does not estimate the bandwidth (its rate is the clamp of
+  `SendRateMin` and `SendRateMax`): both are 1 MB/s, the most we send a peer each second, and the
+  pressure below thins what we send. A refusal (full, version, kicked, banned, the host stopped)
+  closes the connection with its reason as the closing text, which the guest shows; "Connection
+  refused" or "Connection timed out" (8 s) when nothing answers.
+
+  Message types: `HELLO` (protocol version, now 11, and the player's secret id, 4.20), `WELCOME`
+  (slot), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
+  offset][u32 id][bytes]`, 15000 bytes a message: the host's world for a guest that joins, 1.7,
+  tagged with the guest's request: a guest takes blobs from the host alone, loads only the one of
+  its last request, and the host relays none).
+- **Router port:** a host asks its router to forward its UDP port, through UPnP IGD, else NAT-PMP
+  (`kmultiplayer_nat.cpp`, himstan's `game/multiplayer/platform/nat/port_mapping.cpp` with
+  `third-party/miniupnpc` and `libnatpmp`), on a thread of its own (discovery takes seconds),
+  renews it every hour and removes it when the server stops. Once open, the multiplayer menu's
+  status line shows the internet address to give to the others ("Hosting: 1 player(s), internet
+  address 203.0.113.7:7777", `pc-mp-public-address`). Not in automated tests (`MP_TEST_SCRIPT`):
+  no router is touched.
 - **Player state:** `mp-player-state` (224 bytes: position, orientation, velocity, animation,
   health, flags, character and outfit, body segments, driven vehicle, passenger seat, name, color,
   level, continue point; Dark and Light Jak in `powers`, the lobby's countdown, the time before a
@@ -76,27 +93,34 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   velocity for 150 ms, then holds. A shot gone 250 ms without a state is gone.
 - **Network pressure,** after the cadence scheduler of himstan's mod
   (`game/multiplayer/platform/session/cadence_scheduler.cpp`, `core/network_statistics.h`, ISC):
-  each side counts the unreliable message ids it gets from a peer (the share delivered each
-  second) and tells it in its ping (`PING` carries one more byte; an older build ignores it). The
-  sender classifies its link to that peer with his thresholds: severe when under 50 % of its
-  messages arrive or 500 ms of queueing (round trip above the lowest seen), congested under 75 %
-  or 250 ms, degraded under 90 % or 100 ms, else normal; a higher level applies at once, a lower
-  one after 3 s. As his priorities: bones sent between two 15 Hz batches (bulk, the heavy part) go
-  to that peer every 2, 3 or 5 frames; the player state and the states of our objects between
-  batches every 2 frames from congested on; the batches, which carry effects and sounds, and the
-  reliable messages always go. The host thins what it relays to a guest the same way (a relayed
-  pose message without effects is bulk). `[multiplayer] network to player N: <level>` logs each
-  change.
+  once a second each side reads its connection's status from GNS (round trip, the share of our
+  packets the peer gets, how long our normal lane queues) and classifies its link to that peer with
+  his thresholds: severe when under 50 % of its messages arrive or 500 ms of queueing, congested
+  under 75 % or 250 ms, degraded under 90 % or 100 ms, else normal; a higher level applies at once,
+  a lower one after 3 s. As his priorities: bones sent between two 15 Hz batches (bulk, the heavy
+  part) go to that peer every 2, 3 or 5 frames; the player state and the states of our objects
+  between batches every 2 frames from congested on; the batches, which carry effects and sounds,
+  and the reliable messages always go. The host thins what it relays to a guest the same way (a
+  relayed pose message without effects is bulk). `[multiplayer] network to player N: <level>`
+  logs each change.
 - **Poses:** `[u8 source][u32 source time][u16 count]` then one entry per object:
-  `[u32 id][u16 bones, bit 15 = effects][u8 emitters][u8 sounds]`, each bone 20 bytes (rotation,
-  translation to 1 mm, per-axis scale, relative to the object's frame), each emitter 20 bytes,
-  each sound 40 bytes. Split over several frames of at most 16 KB. Every object of a batch is sent
-  with its effects at 15 Hz; between batches, the player, its props and the NPCs within 40 m of
-  another player are sent every frame, bones only. About 1.3 KB per Jak pose, 0.6 KB per NPC.
+  `[u32 id][u16 bones, bit 15 = effects, bit 14 = scaled][u8 emitters][u8 sounds]`. Each bone is
+  relative to the object's frame: its rotation in 6 bytes (the three smallest components of the
+  unit quaternion, 15 bits each, and which one is left out: it is rebuilt), its translation in 6
+  (1 mm), and its per-axis scale in 6 more only in an entry with a bone not at scale 1 (bit 14):
+  12 bytes a bone for most objects, 20 before. Each emitter 20 bytes, each sound 40. Split over
+  several frames of at most 16 KB. Every object of a batch is sent with its effects at 15 Hz;
+  between batches, the player, its props and the NPCs within 40 m of another player, bones only,
+  60 times a second at most (at 144 or 240 frames a second the bytes sent grew with the frame
+  rate). A receiver keeps 500 ms of an object's poses (as of its states), 64 at most.
 - **Events:** `mp-event` (80 bytes), routed by slot (`to = -1` for everyone). The kinds are
   defined in GOAL (`mp-event-kind`); the C++ side only stamps the sender.
-- **Timeouts:** 15 s of silence drops a peer, 8 s to be welcomed. The pump runs from the per-frame
-  hook even while paused, so a paused player does not time out.
+- **Timeouts:** 15 s of silence drops a peer, 8 s to connect (GNS's `TimeoutConnected` and
+  `TimeoutInitial`). The pump runs from the per-frame hook even while paused, so a paused player
+  does not time out.
+- **Test network:** `MP_TEST_LATENCY` and `MP_TEST_LOSS` (and `net` in a test script) set GNS's
+  simulated network for the process: lag, loss and jitter (averaging half the jitter given, at
+  most all of it) on what arrives.
 - **Config:** `<settings>/multiplayer.cfg` (`%APPDATA%/OpenGOAL/jak3/settings/` on Windows):
   name, address, character, color, enabled, mode (the game mode when hosting: 0 free roam, 1
   co-op, 1.7), skin (the outfit's 16 tints in hex, 4.12), uid (the player's secret id, drawn once:
@@ -365,7 +389,8 @@ the union. Host setting **Share story progress** (on by default).
     shop's upgrades (not its cheats), full ammo and eco. The host answers no world request until
     that is done; a guest loads that world, and keeps `MP_FREE_FEATURES` while the host's world
     flag `free` is set (its loaded save leaves two out; a respawn restores the save's). Nothing
-    is saved (`auto-save-command`, below). Everyone plays the character it picks.
+    is saved (`auto-save-command`, below). Everyone plays the character it picks. Only the
+    activities that pay orbs remain, and each offers itself again once done (4.29).
   - *Co-op (two players):* Jak and Daxter. The server accepts two players
     (`pc-mp-set-max-players`, refusing a third with "The server is full"; the mode list grays
     co-op out while more than one guest is there). It starts in one of three ways, chosen on the
@@ -477,10 +502,12 @@ world and has NPCs react to online players, and to take the best of both. Read i
 | A player's blow on an NPC | Predicted on the attacker (new health broadcast), knockback seeded alike everywhere | Sent to the authority, applied there on the real NPC; the attacker sees the reaction on the copy one round trip later (1.3) | Not yet: prediction would animate a copy without its code; a candidate for later |
 | NPCs hitting players | Checked on the victim's machine | The same (1.3) | Same |
 | Collectibles | One shared counter; the host deduplicates by entity and broadcasts the count; drops seeded by entity and index | Pickups and crates shared by entity (1.2) | **Taken for the economy:** the host alone credits an orb, once per entity (4.20) |
-| Missions | The host owns the task masks; each machine runs its task managers; a dead player watches a teammate, then comes back near it; a mission fails only when every player is dead | Story nodes shared (1.5); waypoints, races and cutscene skips wait for every player (4.13 to 4.15) | **Taken:** a dead player back next to a living teammate, the mission goes on (4.19) |
+| Missions | The host owns the task masks; each machine runs its task managers; every player pulled into each cutscene; doors wait for every player; a dead player watches a teammate, then comes back near it; a mission fails only when every player is dead | Story nodes shared (1.5); waypoints and cutscene skips wait for every player (4.13, 4.14) | **Taken:** a dead player back next to a living teammate (4.19); every player in a mission's introduction (4.24), with a vote of at least half of the players; doors waiting (4.34) |
+| Races | One race on the host: players in racer slots, the host validates laps and decides, "did not finish" rules | One race per machine until 2026-10-28 | **Taken:** one race, the host's, the other player in a racer slot, the host's verdict (4.15) |
+| Transport | GameNetworkingSockets: encrypted, five priority lanes, router port mapping, Steam relay and lobbies | Our own UDP layer until 2026-10-28 | **Taken:** GNS with his lanes, his port mapping (1.1); not taken: Steam (its SDK and an app id) and the LAN browser |
 | Daxter riding Jak | The rider hidden; Jak's own Daxter shown in the rider's skin; jump-on animation; stays there in vehicles | A perched Daxter drawn on the puppet's shoulder | **Taken:** the rider hidden, the Jak's own Daxter in the rider's outfit, the stock climb (4.16) |
 | Cutscene actors | Jak and Daxter wear a player's skin | Stock actors | **Taken,** with the host's Jak (4.17) |
-| Sending under pressure | Cadence lowered when the link is loaded; bit-packed values; relayed only to the peers concerned | Everything every frame, relayed to every guest | **Taken:** his pressure levels, thresholds, dwell and priorities, measured with our own channel (1.1); not taken: bit packing and relaying by interest (a few players, the host relays everything) |
+| Sending under pressure | Cadence lowered when the link is loaded; bit-packed values; relayed only to the peers concerned | Everything every frame, relayed to every guest | **Taken:** his pressure levels, thresholds, dwell and priorities, measured from GNS's connection status (1.1); bones in 12 bytes (1.1); not taken: relaying by interest (a few players, the host relays everything) |
 
 ## 2. Requirements and how they are met
 
@@ -545,12 +572,14 @@ Each is marked `MOD multiplayer`.
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
 | `goal_src/jak3/dgos/wwd.gd`, `voca.gd` | `jak-fldax+0-ag.go` added after `jak-flut+0-ag.go`: Daxter's lizard clips (`daxter-fldax-*`) and the lizard's under him (`flut-saddle-fldax-*`), which only the desert chase loaded (DESLIZ, unchanged). Its lizard clips link to the lizard of the same level, so it is not in GAME (4.22). |
-| `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post reports our place, progress and result and the racers' progress (`mp-racer-progress`, `mp-race-ai-progress`, `mp-race-position`), waits for the other players' result (`mp-race-result-wait?`) and asks it (`mp-race-won?`) (4.15). |
+| `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post gives every racer's progress and bits (`mp-racer-progress`, `mp-racer-bits`, `mp-race-slot`, `mp-race-sync`), the place back to the stock rank, our score saved at our finish, then our result waits for the host's verdict (`mp-race-result-wait?`) and takes it (`mp-race-won?`); `update-lap-distance` starts with `mp-race-mirror!` (a guest's racers but its own follow the host's race) (4.15). |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`), the result waiting for the others (`#x159b`) and the acts of the
 mission pages (`#x159c`-`#x159f`), Daxter's L1 + triangle prompt (`#x15a0`) and a failure's votes (`#x15a1`-`#x15a3`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
-| `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?` (4.15). |
+| `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?`; then `mp-race-bind-players!` (course-race.gc) puts the other player in a racer slot (4.15). |
+| `goal_src/jak3/engine/scene/scene.gc` | The scene player's wait loop also waits on `mp-scene-hold?`: a mission's introduction held until every player is there (4.24). |
+| `goal_src/jak3/levels/desert/wvehicle/wvehicle-race.gc` | The racers' AI reads every other racer's forward direction through `mp-racer-fvec!`: another player's puppet in a racer slot has no rigid body (its `rbody` read crashed every racer, 4.15). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
 | `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`). |
@@ -575,8 +604,8 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `sound-play-by-name`, `sound-play-by-spec`, `sound-stop` | `engine/sound/gsound.gc` | Every sound a process plays or stops. |
 | `game-task-node-info` `open!` | `engine/game/task/task-control.gc` | Every task node closure (story progress). |
 | `sync-linear`, `sync-eased`, `sync-paused` `get-norm!`; `sync-info` `get-current-phase-no-mod`, `get-timeframe-offset!`, `sync-now!` | `engine/util/sync-info.gc` | The phase of every cycle (shifted to the host's on a guest). |
-| `com-airlock` `want-cross-airlock?` | `engine/common-obs/airlock.gc` | Doors open for remote players too. |
-| `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there. |
+| `com-airlock` `want-cross-airlock?` | `engine/common-obs/airlock.gc` | Doors open for remote players too; in co-op an open door waits for a teammate behind it (4.34). |
+| `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there; a mission's introduction asks the others first (4.24). |
 | `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first; the art heap goes with its host level. |
 | `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world or in free roam; the co-op campaign's saves into its file (1.7). |
 | `target-gun-compute-pos` | `engine/target/target-gun.gc` | Where the gun is drawn: in Daxter's hand, opened to the mod, while he holds it (4.8). |
@@ -958,20 +987,40 @@ and the race is won only when they take the first places (multiplayer.gc, "Races
   player drives, "The race starts in 10" counts down (again when a player leaves its vehicle).
   Meanwhile the players may leave their vehicle (a `pilot-exit #t` setting in `engine-hi` over
   the race's). Offline, alone or in free roam, the stock start.
-- **Places.** The manager's `active` post (`race-manager.gc`) calls `mp-race-ai-progress` with
-  each racer's progress and `mp-race-position` with our place among its racers, our progress and
-  our result: laps done and the part of the lap, or once finished 1000 minus the time
-  (`mp-racer-progress`: the earlier the larger), comparable from one machine to another. Ours
-  goes to the others 5 times a second (`race-progress` event), the host's racers' with it (8 at
-  most, floats in the event's text): the racers every player sees and passes are the host's (a
-  guest's own sleep, 1.2), so a guest counts the host's racers ahead of it, the host its own. The
-  HUD's place (`*game-info*` `race-position`, the sprites 1st to 8th) adds the players ahead: with
-  six racers and two players, a player can read 7th.
-- **Result.** At its finish a player is ahead of every racer or not (counted as above, fixed
-  then). One ahead of every racer waits, 60 s at most, until the other players of the race
-  finished ("Waiting for the other players to finish", `#x159b`); the race is won when every one of
-  them finished ahead of every racer (the players took the first places), lost otherwise, on every
-  machine. A time trial (`racer-info-flag rif6`) keeps its stock result, its score.
+- **One race, the host's,** as in himstan's Jak and Daxter II Multiplayer (his
+  `race-mp-sync.gc`: players in racer slots, the host validates). When the start is released
+  (`course-race.gc`, `mp-race-bind-players!`, after `mp-race-hold?`), the other player takes the
+  racer slot before ours on both machines: Kleiver's race and the rally have their player in slot
+  4, so the guest takes slot 3, whose racer is removed (`'go-die`, as `kill-npc-racers` does). The
+  host binds the guest's puppet there (`init-racer!`: a process-focusable, which the stock lap
+  counting follows by its position; its death or its leaving, a puppet dead or gone, puts it out
+  of the race, `rsf2`). A guest binds its own vehicle there, the host's puppet in slot 4, and
+  becomes slot 3 (`i-player`). The `'force-start` the task manager sends skips the racers'
+  `'test-ready` (`rf4`), which a puppet does not answer. The racers' AI steers clear of every
+  other racer from its position, speed and forward direction (`wvehicle-race.gc`): a puppet's
+  forward direction is its orientation's (`mp-racer-fvec!`; read as a rigid body's, it crashed
+  every machine at the start). A race of one racer (the time trial) binds
+  nothing: each player's own, with its stock result.
+- **The host's race counts.** Every frame the manager's `active` post (`race-manager.gc`) gives
+  each racer's progress (laps done and the part of the lap, or 1000 minus its finish order,
+  `mp-racer-progress`) and bits (started, finished, out of the race, `mp-racer-bits`):
+  `mp-race-slot`, `mp-race-sync`. The host sends them (`race-progress`, iarg 1 0: 3 bits a racer
+  in iarg 2, its verdict above bit 24, the progress as 8 floats in the text) 10 times a second and
+  at once when a racer's bits change. A guest's race takes them for every racer but its own
+  (`mp-race-mirror!` at the top of `update-lap-distance`): laps, finishes and leavings, so its
+  places (the stock HUD's 1st to 5th, `race-position = rank` again) are the host's, the players
+  included. Its own racer it counts itself (its HUD, its laps, its turbo pads).
+- **Result: the host decides** (`mp-race-decide`) once both players finished or left the race,
+  or 60 s after the first finish: won when a player finished first (his rule); a race won by score
+  (the rally, `rif6`), when a player's score was good enough: each player's own result, which a
+  guest sends at its finish (`race-progress`, iarg 1 1). Every player's race, finished, waits for
+  that verdict ("Waiting for the other players to finish", `mp-race-result-wait?`, 90 s at most,
+  its own result then), and `mp-race-won?` gives it to the stock `win` or `lose`. The score is
+  saved at our finish (before the wait).
+
+Checked by `race-finish` and `race-finish-win` (Kleiver's race driven to the finish by the racers'
+AI on both machines): one race, the same places on both screens, the host's verdict lost then won,
+applied on both machines.
 
 ### 4.16 Daxter on a Jak's shoulder
 
@@ -1169,9 +1218,33 @@ lizard":
 
 ### 4.24 Co-op: missions started together
 
-A mission runs while its task manager lives: its node's `on-open` script spawns it when the node
-opens and its level is active (`engine/util/script.gc`), or `update-task-masks` does once that
-level loads. In co-op:
+A mission starts when a player talks to whoever gives it: an open story node's `when-open` names
+an NPC and the scene of its introduction (`engine/game/task/game-task.gc`); the NPC
+(`process-taskable`) spawns the scene player, whose commands close the introduction at the scene's
+end, and the mission's task manager starts then. In co-op, as himstan's scene pull-in, every player
+watches that introduction (multiplayer-world.gc "a mission's introduction played by every
+player"):
+
+- **The vote.** Our scene player starting such a scene (`mp-pull-start` from `scene-player-init`,
+  `mp-mission-intro-node`: the scene of an open node that is not a challenge's) holds it in its
+  wait loop (`mp-scene-hold?`, one line in `engine/scene/scene.gc`) and tells the others
+  (`mission-vote`, `mp-pull-msg` propose). The mission goes on with the yes of at least half of the
+  players, the starter's included: with co-op's two players, the starter's own, decided at once,
+  and no question asked. With three players or more, the others answer (D-pad up yes, D-pad down
+  no, 8 s of silence is a yes, `#x15ac`); a vote lost releases the starter's player and drops its
+  scene player: the mission does not start.
+- **Everyone there.** Once it passed, every other player goes next to the starter
+  (`*mp-request-teleport*`, through the starter's continue point when far) and says it is ready
+  once the scene is loaded there (`scene-lookup`) and it stands within 40 m. Meanwhile the
+  starter's screen shows "The mission waits for the other players: 0/1 ready" (`#x15ab`).
+- **Together.** When every player is ready (30 s at most), the starter sends go and its scene
+  plays; each other player starts the same scenes and continue point (sent as for any shared
+  cutscene, 1.6, but held: `mp-apply-scene` does not start them itself), so both watch it and its
+  commands run on both machines. A player not there in time is brought there afterwards, as
+  below.
+
+A mission's task manager starts when its node opens and its level is active
+(`engine/util/script.gc`), or `update-task-masks` does once that level loads. In co-op:
 
 - **Who announces.** `task-manager-init-by-other` (wrapped) sends `mission-start` with the node
   when our own play started the mission: a story step closed here, not from another player's
@@ -1201,8 +1274,11 @@ level loads. In co-op:
   steps the new game closes, which they then skip.
 
 Checked on a real start (`mission-trigger`): the host talks to Kleiver at the arena (the kanga-rat
-hunt's introduction), the intro plays there, the hunt's manager starts; the guest at Spargus's
-doors skips the intro it cannot load, is told, and comes next to the host, its own hunt running.
+hunt's introduction); its intro waits while the guest, at Spargus's doors, is brought next to it;
+the intro then plays on both machines (on the guest, its own Kleiver started it as it arrived: a
+"go" that finds the same scene playing counts as joined), both ask to skip it, and the hunt's
+manager runs on both. `mission-start` (a mission started without a cutscene) still brings the
+guest afterwards.
 Checked in game (`mission-select`): the host, at the jump training, chooses act 2's second mission
 (the Hip Hog); its game starts there, the guest loads it and stands 1.5 m from the host.
 
@@ -1261,6 +1337,11 @@ back to the mission's start, reset by itself after a delay); the minigames offer
   after it grabbed the player, on the real clock: the game's clocks are frozen meanwhile). Every
   player is put back at once: the mission's start (retry) or the fail continue (quit). A guest
   then more than 40 m from the host goes next to it.
+- **The decision reliably.** The votes travel in the players' states, which may be lost: the last
+  voter decides and leaves its failure screen at once, and the other could miss the one or two
+  states that showed its vote and wait forever. The machine that decides sends the decision
+  (`fail-decided`, reliable); another machine whose failure still waits applies it
+  (`mp-apply-fail-decided`).
 
 Checked by `mission-fail` (the jump training's failure, no choice: it stays until both pressed X)
 and `mission-fail-retry` (a failure offering retry or quit, `spawn-fail-or-retry`): the failure on
@@ -1358,11 +1439,25 @@ and in free roam alike (multiplayer.gc "Burning bush challenges, side by side"):
 - **The winner's account.** Those orbs are the game's (`give 'skill`); the shop's money is the
   account the host keeps (4.20), which credits only what it checks: a reward has no orb entity to
   check. Every result goes to every player, so the host keeps them by challenge, playing or not
-  (`mp-econ-challenge-result`, a start empties them); the winner claims its orbs (`econ-pick`
-  with the challenge's node, `mp-econ-challenge-claim`), credited when its player reached the
-  objective with the best score the host saw, once per player and challenge (a start sent again
-  does not clear it), 20 orbs at most (the challenges pay 3 to 18). A `give` without an entity no
-  longer sends an orb claim the host refused.
+  (`mp-econ-challenge-result`) by run: each play of a challenge has its run (the starter's slot
+  and a count, in every challenge message); the winner claims its orbs (`econ-pick` with the
+  challenge's node and run, `mp-econ-challenge-claim`), credited when its player reached the
+  objective with the best score the host saw, once per player and run (a start or a claim sent
+  again pays nothing more; a claim of an unknown run is refused), 20 orbs at most (the challenges
+  pay 3 to 18). A `give` without an entity no longer sends an orb claim the host refused.
+- **Free roam: again and again.** Free roam is the end of the game with no mission left: only the
+  activities that pay orbs remain (Ratchet's two gun courses, which pay none, are closed by
+  `mp-unlock-everything`). Each offers itself again once decided (multiplayer.gc "Free roam: the
+  orb activities, again and again", `mp-free-replay-note` from `mp-on-task-closed`,
+  `mp-free-replay-update`): a challenge whose resolution closed has its introduction reopened
+  (`task-node-open!`, as the bush's own menu does) 5 s later, once its reward is settled and no
+  cutscene plays; a bush offering several challenges (the desert's burning-bush-desc-4: air time,
+  jump distance, rolls) offers the first open one, so its challenges reopen once all are done. A
+  medal of the gun courses, the turret game, the power game or the pre-game (its node closed when
+  won, which pays it) is reopened 10 s later (the first of a chain of medals: the others with
+  it). The scores are forgotten then (`*game-info*` `game-score`): a challenge paid by cups pays
+  the cups reached, not their improvement over the best. Each machine reopens its own (a medal
+  closed by another player's progress too).
 
 Checked by `challenge`: the host starts the city's get-to challenge 26 at Haven's ruins bush, the
 guest accepts and stands 7 m from it; both reach the orb (the host in 6.05 s, the guest in 8.81
@@ -1504,6 +1599,31 @@ following; both minimaps mark the other with its cone in its color. `free-roles`
 guest takes Jak, the host stays Jak. `minimap-cone`: the guest 30 m away shows as its cone alone on
 the host's minimap, as our own marker.
 
+### 4.34 Co-op: doors wait for everyone
+
+A door (`com-airlock`, `engine/common-obs/airlock.gc`, engine code: every door of the game,
+level subtypes included, inherits it) closes when its `want-cross-airlock?` says no (`open` state,
+`:trans`). Closing runs its scripts when our player stands in front of it (`com-airlock-method-26
+'front`): `on-exit`, `on-inside`, `on-deactivate`, which hide or unload the level behind it, and
+for some (the temple's `tpl-door-a`) close a story step, after which the door never opens again
+for anyone (the progress is shared). In co-op, as himstan's airlocks wait for every player
+(`mp-door-hold?` in our `want-cross-airlock?` wrapper, multiplayer-world.gc):
+
+- **The door waits** while it is open, our player stands in front of it (it went through), and a
+  teammate within 100 m of it is still behind it, alive and not hidden (loading, in a cutscene; a
+  Daxter on a shoulder counts). It never opens a closed door, and a door a mission or the game
+  shuts (its close command, the `airlock` setting off) still closes.
+- **Shown:** "The door waits for Guest" (`#x15aa`) while our player is within 30 m of it.
+- **Released** once the teammate went through, died, left or walked off (beyond 100 m): the door
+  closes the stock way.
+- **A fix on the way:** the check that opens a door for a remote player in front of it called
+  `check-crossing-distance` with `#t`, which runs the door's `on-cross` scripts and overwrites its
+  `last-distance` (our side of it): it now reads the side only (`#f`).
+
+Offline, alone or in free roam, the stock doors (opening for a remote player in front of them
+online). Checked by `door-wait`: at Spargus, the host 30 m past the door, the guest 20 m behind
+it: the door stays open; once the guest joined the host it closes.
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1597,7 +1717,8 @@ A script line is `<seconds> <command>`:
 | `log-tasks`, `close-task [n]` | Story progress: closed nodes, nodes closed after another player, the open ones; close the first open node, n times. |
 | `log-sync` | Phase of a 4-second test cycle computed in the manager's context, stamped with the host's clock: a guest's must follow the host's. |
 | `goto-float`, `log-float` | Stand on the nearest floating platform (`rigid-body-platform`, volcano); print the one nearest to player 0 (guest) or to us (host): height, tilt, weight messages sent, states followed, stamped with the host's clock. |
-| `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, and the elevator trips sent and shown. |
+| `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, whether it waits for a teammate (`door hold`, 4.34), and the elevator trips sent and shown. |
+| `goto-door-at <meters>` | Stand that far in front of the nearest door, along its axis (negative: behind it). |
 | `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded (`art-heap #t`: the art heap is in its memory), the art heap and the art groups loaded alone, and the cutscenes sent, shown and playing. |
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load the art of distant players' objects (default 1); 0 for a counter-test. |
@@ -1667,9 +1788,8 @@ A script line is `<seconds> <command>`:
 | `merchant-spot <i>` | Host: Kleiver at spot i, sent to every player with its balances. `log-econ` also prints his spot, whether his icon is out and the frames his name was drawn. |
 | `ride-flut`, `end-flut`, `goto-flut`, `log-fldax`, `log-fluts` | Ride a lizard where we stand, as its offer does; get off; stand 2 m from the nearest lizard waiting, facing it; Daxter on a lizard: riding, rides, his art on the player, drawn as Daxter, the state; the lizards within 40 m (each one's name, state, distance, drawn), whether we ride, the co-op counters (seconds placed, hidden, left) and the stock's count. |
 | `respawn-manager <type>` | That task manager killed, then spawned again by the task masks, as when its mission starts. |
-| `race-extra-ahead <n>` | n more players counted ahead of us in a race (the HUD's place of a session larger than co-op allows). |
 | `race-autopilot`, `race-stop-racers` | Once a race runs (its timer going), the vehicle we drive is driven by the racers' AI to the finish (`'set-control-hook-race-ai`); every vehicle of ours but our player's removed (a race's racers: the race drives them every frame, a speed of 0 does not hold), their places frozen. |
-| `race-sim <progress x 1000> <result> <place>`, `goto-own-vehicle` | Our race reports as a race would (node 999), then our place with the players, and once finished whether our result waits and is won; stand beside the vehicle we drove last. `log-race` prints our place, progress, result, the racers ahead and the host's racers received. |
+| `goto-own-vehicle` | Stand beside the vehicle we drove last. `log-race` prints our place, progress and bits, the race's binding (our slot, the other player's) and verdict, the host's race received, and the five racers' progress. |
 
 Scenarios and what they verified (2026-10-15, Spargus, Haven City and the volcano; `check_results.py`: 253 checks passed, 1 failed, 35 scenarios, no crash, before the last changes; the failure, `v1-city-combat` checking a vehicle's copy dying, no vehicle destroyed in that run, was dropped for that scenario (`v1-city-dark1-host` destroys one for sure) and the run again passed 6 of 6. The last changes (the laser sight sent by its owner and passing through it, each blow's answer logged, `goto-npc` with a distance, `press` with a stick) were checked by `guard-hit`, `shot-path` and `laser`, and the first 7 scenarios of a full run (`smoke` to `npc-handoff`, no crash) stopped there on the user's request; the others were not run again after them):
 
@@ -1840,6 +1960,12 @@ scenarios, 185 checks, 0 failed, no crash. Then `pre-game` (5 checks) and `missi
 from a retail boot too (`--retail`: the title screen, the lobby, no debug segment): every check
 passed, no crash.
 
+Over GameNetworkingSockets (2026-10-28 evening): `coop-roles`, `free-roles`, `minimap-cone`,
+`challenge-free`, `challenge`, `pvp`, `places` (67 checks), then `door-wait`, `mission-trigger`,
+`mission-start`, `race-finish`, `race-finish-win`, `mission-fail`, `mission-fail-retry` (59
+checks): every check passed, no crash; the 5 unit tests pass. Two scenarios run at once on one PC
+(one port) disturb each other: run them one at a time.
+
 | Scenario | Checks | Result |
 |---|---|---|
 | `skin-title`, `lobby-text`, `ui-ingame` | Menus | The Appearance preview at the title screen (Jak, then Daxter, tinted); the lobby's lines and typed names fit, in the game's font; START > Options > Multiplayer in game holds the five customization entries (screenshots). |
@@ -1853,10 +1979,10 @@ passed, no crash.
 | `daxter-flut` | Daxter on a lizard | Daxter gets on the lizard the host left (triangle), drawn as Daxter, fires the scatter gun from it, jumps, rides 22 m, gets off and is Daxter again; the host draws the guest's lizard under him; 8 checks (screenshots). Since 2026-10-20 evening he fires the blaster (yellow 1, a projectile): the host draws its shots. |
 | `daxter-perch-fire` | Firing from a shoulder | Daxter on the host's shoulder fires the blaster, the host sees him there; X puts him down; 6 checks. The host logs him climbing on and its own Daxter standing for him (his puppet hidden), and draws his blaster shots (2026-10-20 evening). |
 | `mission-start` | A mission started by one player | Co-op at the arena training; the guest goes to Spargus's doors; the host's mission manager starts again: the guest is told, taken next to the host, and its own manager runs; 7 checks. |
-| `race-result` | Places and results | The guest, 4th of its racers, reads 5th with the host ahead; the host finished first waits for the guest; both first: won on both; the guest behind a racer: lost on both; 8 checks. |
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
-| `race-finish`, `race-finish-win` | Kleiver's race to the finish | Co-op from the lobby; once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers: lost on both machines; the guest reads 5th (the host's 4 racers and the host ahead). With the host's racers removed (`race-stop-racers`): the host finishes first and waits ("our result waits for the other players"), the guest second, won on both machines; 7 checks each. |
-| `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro plays on the host, the hunt's manager starts; the guest skips the intro (not loaded there), is told and taken next to the host (1.5 m), its own hunt running; the host stays; 8 checks. Before the fixes the guest stayed grabbed by a cutscene it could not load, both players moved toward each other and fell through the world. |
+| `race-finish`, `race-finish-win` | Kleiver's race to the finish, one race | Co-op from the lobby; the guest takes slot 3 on both machines (the host slot 4); once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers (the host 4th, the guest 5th on both screens): the host's verdict lost, on both machines. With the host's racers stopped (`race-stop-racers`): the host finishes first, the guest second, each waits for the verdict ("our result waits for the host's verdict"): won on both machines; 8 checks each. Before the `wvehicle-race.gc` hook both machines crashed at the start (the racers' AI read the puppet's rigid body). |
+| `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro waits ("vote #f": the host is half of two players); the guest is told, taken next to the host, says it is ready; the intro plays on both machines (the guest's Kleiver started it as the guest arrived: "plays here with player 0"), both ask to skip it, the hunt's manager starts on both; 9 checks. A guest ready while its own move was under way (a continue point) was ready too early: it now waits for its move to end. |
+| `door-wait` | Co-op doors wait for everyone | The host and the guest at the door nearest the host (Spargus); the host goes through and on 30 m, the guest stays 20 m behind it: the door, open, waits (`door hold #t`); the guest joins the host: the door no longer waits and closes; 7 checks. |
 | `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
 | `places`, `places-before` | Places at the same coordinates | The host at Haven's stadium gate, the guest in the volcano 23.6 m away: not drawn, not on the minimap, no copy on either side, the guest keeps its own NPCs; before (`places-off`), each drew the other and the guest showed the host's NPCs; 4 checks each. |
@@ -1867,7 +1993,7 @@ passed, no crash.
 | `coop-roles` | Co-op roles swapped in game, the minimap cones | The host takes Daxter: the guest becomes Jak; the guest takes Daxter back: the host is Jak again; each mode follows; each minimap marks the other with a dot and a cone in its color; 5 checks. |
 | `free-roles` | Characters in free roam | The guest takes Jak, the host stays Jak; 3 checks. |
 | `minimap-cone` | The cone on the minimap | In Spargus the guest walks about 30 m away and faces the host: the host's minimap shows its blue cone alone (its dot hidden there), turned toward us (screenshot); 4 checks. |
-| `challenge-free` | A burning bush challenge in free roam | As `challenge`, in free roam, with the winner's account credited; 7 checks. |
+| `challenge-free` | A burning bush challenge in free roam | As `challenge`, in free roam, with the winner's account credited (by run); the challenge, decided, offers itself again on both machines 5 s later; 12 checks. |
 | `daxter-board` | Daxter on the jet-board | The guest (Daxter) takes the board out with R2: board states, the board at 60 % and drawn, X's jump, R2 puts it away (Daxter on foot); the host draws his board; 6 checks. |
 | `soak` | Memory over a long session | 5 minutes in Haven's port, the host away and back twice: the heaps and the processes come back to the same levels; 4 checks. |
 | `mission-fail`, `mission-fail-retry` | A mission failed, for every player | The jump training's failure (no choice) or a retry-or-quit one: shown on host and guest; it does not reset by itself; votes that differ decide nothing; both retry (or go on), then a second failure both quit (or go on): decided on both machines within 0.2 s (host time), both at the same spot; 8 checks each. |
@@ -1878,7 +2004,6 @@ passed, no crash.
 | `mounts-coop` | A lizard for every player | The kanga-rat hunt (as `mounts-dup`): two lizards at the hunt's spot on the host (the stock's count unchanged), the guest gets on one and the host's copy of it hides, the host rides the other, the guest gets off and a lizard waits there on the host; 8 checks (screenshots). |
 | `mounts-dup` | A lizard for each player in a mission | The kanga-rat hunt started by talking to Kleiver (as `mission-trigger`): the host gets on the hunt's lizard, the guest (Daxter) on its own copy of the same lizard and rides it 18 m away; the host draws the guest's lizard; 6 checks (screenshots). |
 | `yellow2-shot` | The beam reflexor's shot | The host fires the yellow 2 mod 14 times at the guest 8 m away: 15 trails drawn on the guest, the beam from the host's gun seen in its screenshots (`--shot-size 2560x1440`); 5 checks. |
-| `race-seventh` | Places beyond a race's own count | Jak 3's races have 5 participants at most (4 racers and the player), so two co-op players reach 6th at most (seen on the guest's HUD in `race-finish`); with two more players counted ahead (`race-extra-ahead 2`, a session of four), the guest's HUD shows the 7th, then the 8th place sprite; 5 checks. |
 | `pre-game` | Spargus's pre-game in co-op | Co-op from the lobby at `wascity-pre-game`: both machines run the bubble game, the guest wins (R1, the game's debug win) and its resolution streams; the host's effects replayed on the guest (7, `trace-fx`). Before the fix the guest stopped as in the user's log of 2026-10-19 (`*mp-stock-launch-spawn*` +#x143, two runs out of two); after it, three runs without a crash; 6 checks. `combat` and `props` pass again (their Daxter check now expects no Daxter of the game on a Jak player). |
 | `dark-blast`, `dark-blast-coop` | The dark blast | Dark Jak's L1 + square (`target-darkjak-bomb1`) 4 m from the other player: before the fix the host's game stopped (access violation in `vector<-cspace!` from `lightning-tracker`); now its bolt to the guest's hurtbox follows its position, the guest is hit (free roam), the guest's blast hits the host, no game stops; in co-op no damage; 7 and 6 checks. |
 | `race-real`, `race-real-daxter` (rewritten) | Kleiver's race | Both races report place and progress (the guest counts the host's 4 racers); Daxter leaving his turtle during the countdown holds the start, gets no shoulder, gets back in his own turtle: the countdown again, then the race; 8 and 10 checks. |
@@ -1969,8 +2094,29 @@ public IP.
 - Effects drawn in an object's local space (`sp-group-flag sp12`) are not replayed on the other
   machines: they need the object's binding (see the change log of 2026-10-20).
 - A guest's parked vehicle is not sent: the other players only see the vehicles one drives.
-- Race places compare progress from machine to machine: a finish is timed from each machine's own
-  start, which the start's wait releases within a frame or two on each.
+- One race, the host's (4.15): the guest's finish is judged on the host from its puppet, drawn
+  about 100 ms plus half the round trip late: in a close finish against a racer the host sees it
+  later than the guest did. The racers' speed follows the host's place in the race. A player who
+  crashes out of a race fails the mission for both (the failure vote, 4.26), as before: no
+  "did not finish" for one player while the other races on. The time trial stays each player's own.
+- A mission's vote (4.24): with co-op's two players, the starter's yes is half of the players, so
+  no question is asked; the question, D-pad up or down, shows with three players or more, which
+  co-op does not accept today (that path is untested in game). Only the scene of an open story
+  node's `when-open` is held: a mission started without a cutscene (reaching a spot) still brings
+  the others afterwards (4.24's teleport).
+- A door waits for a teammate behind it without a time limit (as himstan's): a teammate who stays
+  behind within 100 m keeps it open, and the levels behind it loaded.
+- The medal games' orbs (gun courses, turret, power game, pre-game) are the game's orbs: they do
+  not reach the shop's accounts (4.20), which only credit an orb entity or a challenge's checked
+  reward.
+- The router port opens through UPnP or NAT-PMP only: a router with both off, or a carrier NAT,
+  needs the port forwarded by hand (the menu then shows no internet address). Steam's relay and
+  lobbies (himstan's) are not taken: they need Steam's SDK and an app id. A second server on the
+  same PC and port is not refused (GNS's socket): only the tests run two on one PC, one at a time.
+- Not done from the 2026-10-28 review: relaying by interest (the host relays everything to every
+  guest: with two players, nothing to cut), string and process-tree work in the hot paths, the
+  quadratic matching of copies, synchronous art loads, the test code in GAME (a retail boot runs the
+  test scripts too), and splitting multiplayer.gc.
 
 - Another place's objects (1.6) are drawn within 400 m of our player only, from their art loaded
   alone (32 MB at most, freed with the level whose memory holds it); farther, they are not drawn.
@@ -2051,6 +2197,25 @@ public IP.
   cadence, both within the check). Its levels follow pings, once a second.
 
 ## 7. Change log
+
+- **2026-10-28 (evening):** the user asked for himstan's network layer, his co-op doors and races,
+  every player in a mission's cutscene with the agreement of at least half of the players, free
+  roam at the end of the game with only the orb activities, endlessly, and the review's fixes.
+  Transport: GameNetworkingSockets with his five lanes, his router port mapping, protocol 11
+  (1.1). Co-op: one race, the host's, the other player in a racer slot (4.15); a mission's
+  introduction held until every player is there (4.24); doors wait for a teammate behind them
+  (4.34). Free roam: Ratchet's courses closed, every orb activity offered again once done, a
+  challenge's orbs credited per run (4.29). Fixes from the review: the failure's decision sent
+  reliably (4.26), Daxter's lizard clips copied for every ride (4.25), the economy, campaign and
+  config files written whole or not at all and an unreadable economy kept aside, the world blob
+  from the host alone and for the last request (1.7), the host's teleport only from the host and
+  once the player is free, the elevator and art tables recycled, the art descriptions allowed to
+  give way, the skeleton descriptions assembled per sender, bounded damage and world requests,
+  poses in 12 bytes a bone and 60 a second at most, the level cleanup only once a session ran, a
+  door's crossing check without its scripts (4.34). master-dev: the DECI2, REPL and debugger
+  servers listen on 127.0.0.1 only. Scenario `door-wait`; `mission-trigger`, `race-finish`,
+  `race-finish-win`, `challenge-free` checks changed; `race-result`, `race-seventh` and the
+  commands `race-sim`, `race-extra-ahead` removed with the per-machine race.
 
 - **2026-10-28 (afternoon):** review of the mod and of himstan's Jak 2 mod (his 250 bug fixes
   checked against ours). Daxter's mode forwards to Jak's only the modes missions put on him (a

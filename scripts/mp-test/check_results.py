@@ -781,23 +781,31 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 bool(hits) and hits[-1][0] == 0 and not crashed, f"{hits[-1:]}, {crashed[:2]}")
 
     elif scenario in ("race-finish", "race-finish-win"):
-        hp = grab(host, r"\] race place (\d+) progress (\S+) done (\d+)")
-        gp = grab(client, r"\] race place (\d+) progress (\S+) done (\d+)")
+        RP = r"\] race place (\d+) progress (\S+) bits (\d+)"
+        hp, gp = grab(host, RP), grab(client, RP)
+        hb = grab(host, r"\] race bound (\d+) slot (\d+) partner (\d+) \((\d+)\) verdict (\d+)")
+        gb = grab(client, r"\] race bound (\d+) slot (\d+) partner (\d+) \((\d+)\) verdict (\d+)")
+        c.check(scenario, "one race for both players: the guest takes the racer slot before the host's on both machines",
+                any("one race for both players, ours in slot 4, player 1's in slot 3" in l for l in host)
+                and any("one race for both players, ours in slot 3, player 0's in slot 4" in l for l in client),
+                f"host {hb[-1:]}, guest {gb[-1:]}")
         c.check(scenario, "Kleiver's real race runs to the finish on both machines (the racers' AI drives the players)",
-                any(d != "0" for _, _, d in hp) and any(d != "0" for _, _, d in gp) and float(hp[-1][1]) > 900 and float(gp[-1][1]) > 900,
+                bool(hp) and bool(gp) and int(hp[-1][2]) & 2 and int(gp[-1][2]) & 2 and float(hp[-1][1]) > 900 and float(gp[-1][1]) > 900,
                 f"host {hp[-1:]}, guest {gp[-1:]}")
-        c.check(scenario, "the guest's place counts the host's racers and the host ahead of it",
-                any(int(p) >= 1 for p, prog, d in gp if d == "0" and float(prog) > 0.5), f"{sorted(set(p for p, _, _ in gp))}")
+        c.check(scenario, "the guest's place is the host's race's: behind racers or the host at times",
+                any(int(p) >= 1 for p, prog, b in gp if not int(b) & 2 and float(prog) > 0.5), f"{sorted(set(p for p, _, _ in gp))}")
         hres = grab(host, r"race result: (\S+)")
         gres = grab(client, r"race result: (\S+)")
+        verdict = grab(host, r"race verdict: (\S+)")
         if scenario == "race-finish":
-            c.check(scenario, "both finished behind a racer: lost on both machines",
-                    hres[-1:] == [("lost",)] and gres[-1:] == [("lost",)], f"host {hres}, guest {gres}")
+            c.check(scenario, "no player finished first: the host's verdict, lost on both machines",
+                    verdict[-1:] == [("lost",)] and hres[-1:] == [("lost",)] and gres[-1:] == [("lost",)],
+                    f"verdict {verdict}, host {hres}, guest {gres}")
         else:
-            c.check(scenario, "the racers gone, the first to finish waits for the other, then won on both machines",
-                    any("our result waits for the other players" in l for l in host + client)
-                    and hres[-1:] == [("won",)] and gres[-1:] == [("won",)]
-                    and {hp[-1][0], gp[-1][0]} == {"0", "1"}, f"host {hres} {hp[-1:]}, guest {gres} {gp[-1:]}")
+            c.check(scenario, "the racers stopped, a player finished first: the first to finish waits for the verdict, won on both machines",
+                    any("our result waits for the host's verdict" in l for l in host + client)
+                    and verdict[-1:] == [("won",)] and hres[-1:] == [("won",)] and gres[-1:] == [("won",)],
+                    f"verdict {verdict}, host {hres}, guest {gres}")
 
     elif scenario == "pre-game":
         crashed = [l for l in host + client if "crash:" in l]
@@ -810,6 +818,18 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the host's effects replayed on the guest, none in an object's local space; no game stops (before the fix: access violation in *mp-stock-launch-spawn* +#x143)",
                 bool(replays) and not crashed, f"{crashed[:1]}")
 
+    elif scenario == "door-wait":
+        DH = r"\] door hold (\S+) shown (\S+) our side ([-\d.]+)"
+        hh = grab(host, DH)
+        DS = r"\] door aid \d+ state (\S+) at"
+        hs = grab(host, DS)
+        c.check(scenario, "the host through the door, the guest behind it: the open door waits for the guest",
+                any(h == "#t" and float(side) > 0 for h, _, side in hh) and "open" in [s for (s,) in hs], f"{hh}, states {hs}")
+        c.check(scenario, "the guest through the door too: the door no longer waits",
+                bool(hh) and hh[-1][0] == "#f", f"{hh[-1:]}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "mission-trigger":
         hme = grab(host, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
         gme = grab(client, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
@@ -819,21 +839,20 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any(abs(float(x) - 2359.3) + abs(float(z) + 376.4) > 300 for x, _, z, _ in gme[:1]), f"{gme[:1]}")
         c.check(scenario, "the host talks to Kleiver: no hunt before, its task manager runs after (a real start)",
                 bool(hs) and hs[0][0] == "none" and hs[-1][0] == "active"
-                and any("mission wascity-chase-resolution starts here" in l for l in host), f"{hs}")
-        c.check(scenario, "the guest skips the intro it cannot load (no grab left), is told and taken next to the host",
-                any("cutscene wascity-chase-intro of player 0 is not loaded here: not played" in l for l in client)
-                and any("player 0 starts wascity-chase-resolution: we go there" in l for l in client)
+                and any("mission wascity-chase-resolution starts here" in l for l in host + client), f"{hs}")
+        c.check(scenario, "the host's intro waits for the guest (the starter's yes is half of two players: no vote)",
+                any(re.search(r"its introduction \S+ waits for the other players \(vote #f\)", l) for l in host)
+                and any("we join its introduction" in l for l in client), "")
+        c.check(scenario, "the guest is brought next to the host, ready, and both play the intro together",
+                any("ready for the introduction" in l for l in client)
+                and any(re.search(r"mission introduction \S+ starts \(ready 1 of 1\)", l) for l in host)
+                and any(re.search(r"(starts|plays) here with player 0", l) for l in client)
                 and bool(gme) and bool(hme)
                 and abs(float(gme[-1][0]) - float(hme[-1][0])) + abs(float(gme[-1][2]) - float(hme[-1][2])) < 10
                 and not gme[-1][3].endswith("grab"), f"guest {gme[-1:]}, host {hme[-1:]}")
         c.check(scenario, "the hunt runs on the guest too (its own task manager), the host stays (it started it)",
                 bool(gs) and gs[-1][0] == "active" and not any("player 1 starts wascity-chase-resolution: we go there" in l for l in host),
                 f"{gs[-1:]}")
-
-    elif scenario == "race-seventh":
-        gp = [int(p) for (p,) in grab(client, r"\] race place (\d+) progress \S+ done 0")]
-        c.check(scenario, "with two more players counted ahead, the guest's HUD place reaches 7th and 8th (sprites 7 and 8)",
-                6 in gp and 7 in gp, f"places {sorted(set(gp))}")
 
     elif scenario == "yellow2-shot":
         w = grab(client, r"\] weapons shown red2 \d+ dark2 \d+ arc \d+ blue3 \d+ yellow2 (\d+)")
@@ -1061,6 +1080,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and float(wc[-1][8]) == 3.0 and float(wc[-1][9]) == 3.0
                 and float(lc[-1][8]) == 0.0 and float(lc[-1][9]) == 0.0 and float(lc[-1][7]) == 0.0,
                 f"winner given/skill {wc[-1][8:10] if wc else None}, other given/skill {lc[-1][8:10] if lc else None}")
+        if scenario == "challenge-free":
+            c.check(scenario, "free roam: the challenge decided offers itself again on both machines (its introduction reopened)",
+                    any("free roam: city-bbush-get-to-26-introduction offered again" in l for l in host)
+                    and any("free roam: city-bbush-get-to-26-introduction offered again" in l for l in client), "")
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
@@ -1193,18 +1216,6 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 and not any("player 1 hit" in l for l in host), f"{hs}, {hits[-1:]}")
         c.check(scenario, "the guest keeps seeing the lizard under Jak, before, during and after",
                 len(gc) >= 3 and all(x == ("#f", "#t") for x in gc), f"{gc}")
-
-    elif scenario == "race-result":
-        hs = grab(host, r"\] race sim place (\d+) wait (\S+) won (\S+)")
-        gs = grab(client, r"\] race sim place (\d+) wait (\S+) won (\S+)")
-        c.check(scenario, "the guest, 4th of its racers, is 5th with the host ahead; the host stays 1st",
-                ("4", "#f", "racing") in gs and all(p == "0" for p, _, _ in hs), f"guest {sorted(set(gs))}")
-        c.check(scenario, "the host finished first waits while the guest races",
-                any(w == "#t" for _, w, _ in hs), f"{hs}")
-        c.check(scenario, "both finished ahead of every racer: won on both machines",
-                any(w == "#f" and won == "#t" for _, w, won in hs) and ("1", "#f", "#t") in gs, f"host {hs}, guest {gs}")
-        c.check(scenario, "the guest finished behind a racer: lost on both machines",
-                bool(hs) and hs[-1][2] == "#f" and gs[-1][2] == "#f", f"host {hs[-1:]}, guest {gs[-1:]}")
 
     elif scenario == "mission-start":
         me = grab(client, r"\] me (\S+) (\S+) (\S+) speed")
