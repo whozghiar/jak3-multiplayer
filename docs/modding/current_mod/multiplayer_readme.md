@@ -1359,9 +1359,10 @@ and in free roam alike (multiplayer.gc "Burning bush challenges, side by side"):
   account the host keeps (4.20), which credits only what it checks: a reward has no orb entity to
   check. Every result goes to every player, so the host keeps them by challenge, playing or not
   (`mp-econ-challenge-result`, a start empties them); the winner claims its orbs (`econ-pick`
-  with the challenge's node, `mp-econ-challenge-claim`), credited once when its player reached the
-  objective with the best score the host saw. A `give` without an entity no longer sends an orb
-  claim the host refused.
+  with the challenge's node, `mp-econ-challenge-claim`), credited when its player reached the
+  objective with the best score the host saw, once per player and challenge (a start sent again
+  does not clear it), 20 orbs at most (the challenges pay 3 to 18). A `give` without an entity no
+  longer sends an orb claim the host refused.
 
 Checked by `challenge`: the host starts the city's get-to challenge 26 at Haven's ruins bush, the
 guest accepts and stands 7 m from it; both reach the orb (the host in 6.05 s, the guest in 8.81
@@ -1447,9 +1448,12 @@ What the sweep found, and the changes:
 
 - **Modes only Jak has.** Daxter's handler took only `grab`, `normal`, `falling`, `hang` and
   `tube`: a mission putting the player in a turret, the torpedo or the robot waited for good.
-  `mp-indax-handler` gives any other `'change-mode` to Jak's handler
-  (`target-standard-event-handler`, his mode left on the way); `'pilot` becomes `'pilot-daxter`.
-  His mode comes back once he stands on foot (`mp-update-character`).
+  `mp-indax-handler` gives those modes to Jak's handler (`target-standard-event-handler`, his
+  mode left on the way): `turret`, `pilot`, `pilot-race`, `pilot-daxter`, `grab-ride`, `mech`;
+  `'pilot` becomes `'pilot-daxter`. Only those: the stock asks for others in any mode, `'gun`
+  from the D-pad and `want-to-gun?` (`target-gun.gc`), which his mode must keep ignoring for his
+  own guns (forwarding every mode broke them, 2026-10-28). His mode comes back once he stands on
+  foot (`mp-update-character`).
 - **Crash of the copies' death effect** (the guest, in Haven's KG missions: the hijack, the
   barricade, the HQ). Art without effects has no effect-control: `skel effect` is `#f`, which
   `nonzero?` let through, and `do-effect` on a symbol called address 0 (`mp-replica-update`).
@@ -1489,8 +1493,10 @@ the stance, out of it from his stance).
 - **Co-op:** the duo stays a Jak and a Daxter. A choice in game swaps the roles: the player sends
   the character it takes (`role` event); the other one, playing it too, takes the other one, saved,
   "Co-op: roles swapped, you play Jak" (`mp-apply-role`). A Daxter on a Jak's shoulder who becomes
-  Jak jumps off (`mp-update-perch`). At a game's start a guest with the host's character still gets
-  the other one (`mp-update-coop-roles`).
+  Jak jumps off (`mp-update-perch`). A Daxter player who plays a challenge as Jak stays Jak after
+  it when the other player took Daxter meanwhile (`mp-challenge-reset`). At a game's start a guest
+  with the host's character still gets the other one (`mp-update-coop-roles`).
+- **The minimap:** a Daxter on a Jak's shoulder has no icon of his own: the Jak's stands for both.
 
 Checked by `coop-roles`: in the sewers, the host (Jak) takes Daxter, the guest (Daxter) becomes Jak;
 the guest takes Daxter back, the host is Jak again; always one of each, each player's mode
@@ -2046,6 +2052,12 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-28 (afternoon):** review of the mod and of himstan's Jak 2 mod (his 250 bug fixes
+  checked against ours). Daxter's mode forwards to Jak's only the modes missions put on him (a
+  turret, a vehicle, the torpedo, the robot, the mech): forwarding every mode had broken his guns
+  (`'gun`, as his `c0049af6`); a challenge's orbs credited once per player (a guest's repeated start
+  could earn them again); after a challenge played as Jak the duo stays a Jak and a Daxter; a
+  perched Daxter has no minimap icon (as his `ab82013c`).
 - **2026-10-28:** the user asked for Jak or Daxter in game (co-op: always one of each, so a choice
   swaps the roles; free roam: each its own), the other players on the minimap in their color with
   the cone our player has, and the burning bush challenges in free roam too, the best winning the

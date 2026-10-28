@@ -99,6 +99,7 @@
 ;;   log-copies <slot>                                       every object of a player received here, drawn or not
 ;;   goto-float | log-float                                  floating platforms (volcano)
 ;;   log-play | trace-play                                   our player's state, modes, task managers; each new state
+;;   pickup-turret                                           the idle turret within 20 m takes us (as a mission's arrival)
 ;;   choose-character <0|1> | log-role                       in-game character choice (co-op: swap); roles, minimap icons
 ;; Every command and every `log` line is printed with the prefix "[mp-test]".
 
@@ -3531,6 +3532,21 @@
              )
            )
          (format 0 "~%")
+         )
+        ((string= cmd "pickup-turret")
+         ;; pickup-turret: the idle turret within 20 m takes us, as a mission's arrival does
+         ;; (mp-arrival-update: 'pickup sent as our player), Daxter included
+         (let ((gun (search-process-tree *active-pool* (the-as (function process-tree object) mp-free-turret?))))
+           (format 0 "[mp-test] pickup-turret ~A~%" gun)
+           (when (and gun *target*)
+             (let ((msg (new 'stack-no-clear 'event-message-block)))
+               (set! (-> msg from) (process->ppointer *target*))
+               (set! (-> msg num-params) 0)
+               (set! (-> msg message) 'pickup)
+               (send-event-function (the-as process gun) msg)
+               )
+             )
+           )
          )
         ((string= cmd "trace-play")
          ;; trace-play: log each new state of our player from now on (mp-test-update)

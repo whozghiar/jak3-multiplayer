@@ -1784,6 +1784,10 @@
              (set! shown? #f)
              (mp-puppet-icons-off)
              )
+            ;; a Daxter on a Jak's shoulder is that Jak's icon (himstan's mod hides it too)
+            ((logtest? (-> st flags) (mp-flag perched))
+             (mp-puppet-icons-off)
+             )
             (else
               (mp-puppet-icons-on)
               )
@@ -4087,18 +4091,19 @@
              )
          )
      )
-    ;; a mode only Jak has, put on the player by a mission or its continue point (a turret, the
-    ;; mech, Dark or Light Jak, a vehicle, the gun...): his handler took only grab, normal,
+    ;; a mode only Jak has, put on the player by a mission or its continue point (a turret, a
+    ;; vehicle, the port's torpedo, the bomb robot, the mech): his handler took only grab, normal,
     ;; falling, hang and tube, so the mission waited for good. Jak's takes it (his mode left on the
     ;; way: target-indax-exit), a vehicle driven as Daxter; his mode comes back once he stands on
-    ;; foot again (mp-update-character)
+    ;; foot again (mp-update-character). Only those: the stock asks for others in any mode ('gun
+    ;; on the D-pad, want-to-gun?, target-gun.gc; 'look-around), which his mode must keep ignoring
+    ;; (his own guns, multiplayer-guns.gc)
     ((and (= arg2 'change-mode)
           (mp-online?)
           (= self *target*)
-          (not (let ((m (-> arg3 param 0)))
-                 (or (= m 'grab) (= m 'normal) (= m 'falling) (= m 'hang) (= m 'tube) (= m 'indax))
-                 )
-               )
+          (let ((m (-> arg3 param 0)))
+            (or (= m 'turret) (= m 'pilot) (= m 'pilot-race) (= m 'pilot-daxter) (= m 'grab-ride) (= m 'mech))
+            )
           )
      (case (-> arg3 param 0)
        (('pilot)
@@ -5320,11 +5325,14 @@
 
 (defun mp-challenge-reset ()
   "No challenge any more (our reward, if held, is lost: decided or abandoned); a Daxter player
-   who played it as Jak is Daxter again."
+   who played it as Jak is Daxter again, unless in co-op the other player took Daxter meanwhile
+   (the roles swapped: \"Jak or Daxter in game\"), the duo staying a Jak and a Daxter."
   (let ((c *mp-challenge*))
     (when (-> c was-daxter?)
       (set! (-> c was-daxter?) #f)
-      (set! (-> *mp-config* character) 1)
+      (if (not (and (mp-coop?) (mp-other-plays-daxter?)))
+          (set! (-> *mp-config* character) 1)
+          )
       )
     (set! (-> c phase) 0)
     (set! (-> c node) 0)
@@ -8229,8 +8237,10 @@
 ;; A challenge's reward (precursor orbs given by its task manager, "Burning bush challenges") has no
 ;; entity to check: the winner claims it (econ-pick with iarg 1 = the challenge's node, fvec x the
 ;; orbs). Every result goes to every player, so the host keeps them by challenge (a start empties
-;; its entry) and credits a claim once: its player reached the objective with the best score.
-(defconstant MP_ECON_CHALLENGES 4) ;; challenges whose results the host keeps
+;; its results) and credits a claim once per player and challenge: its player reached the
+;; objective with the best score, for at most MP_ECON_CHALLENGE_MAX orbs.
+(defconstant MP_ECON_CHALLENGES 4)     ;; challenges whose results the host keeps
+(defconstant MP_ECON_CHALLENGE_MAX 20) ;; most orbs a challenge's claim may ask
 
 (deftype mp-econ-challenge (structure)
   ((node     int32)      ;; its resolution node, 0 free
@@ -8272,12 +8282,12 @@
   )
 
 (defun mp-econ-challenge-start ((node int))
-  "Host: challenge `node` starts (again): its results so far are gone."
+  "Host: challenge `node` starts (again): its results so far are gone. Who was credited stays: a
+   challenge pays each player once (a start sent again by a guest would credit it again)."
   (when (= *mp-mode* (mp-mode host))
     (let ((e (mp-econ-challenge-entry node)))
       (set! (-> e at) (mp-now))
       (set! (-> e reached) 0)
-      (set! (-> e credited) 0)
       )
     )
   (none)
@@ -8336,7 +8346,8 @@
           ((logtest? (-> e credited) (ash 1 slot))
            (set! why "already credited")
            )
-          ((or (<= orbs 0) (> orbs 100))
+          ;; the challenges pay 3 to 18 orbs (game-task.gc, user-count; the jet-board's cups)
+          ((or (<= orbs 0) (> orbs MP_ECON_CHALLENGE_MAX))
            (set! why "not a reward")
            )
           )
