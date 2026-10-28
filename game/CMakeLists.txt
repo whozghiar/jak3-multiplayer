@@ -144,6 +144,7 @@ set(RUNTIME_SOURCE
         kernel/jak3/kmachine.cpp
         kernel/jak3/kmachine_extras.cpp
         kernel/jak3/kmultiplayer.cpp
+        kernel/jak3/kmultiplayer_nat.cpp
         kernel/jak3/kmalloc.cpp
         kernel/jak3/kmemcard.cpp
         kernel/jak3/kprint.cpp
@@ -390,9 +391,19 @@ add_subdirectory(sound)
 # we build the runtime as a static library.
 add_library(runtime STATIC ${RUNTIME_SOURCE} "../third-party/glad/src/glad.c")
 
-target_link_libraries(runtime common fmt SDL3::SDL3 imgui discord-rpc sound stb_image libco libcurl)
+target_link_libraries(runtime common fmt SDL3::SDL3 imgui discord-rpc sound stb_image libco libcurl
+        GameNetworkingSockets::static)
+# Jak 3 multiplayer mod: router port opening, as himstan's Jak and Daxter II Multiplayer links it
+# (the libraries' files, so their compile definitions stay theirs).
+set_property(SOURCE kernel/jak3/kmultiplayer_nat.cpp APPEND PROPERTY INCLUDE_DIRECTORIES
+        "${PROJECT_SOURCE_DIR}/third-party/miniupnpc/include"
+        "${PROJECT_SOURCE_DIR}/third-party/libnatpmp")
+set_property(SOURCE kernel/jak3/kmultiplayer_nat.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        MINIUPNP_STATICLIB NATPMP_STATICLIB ENABLE_STRNATPMPERR NATPMP_MAX_RETRIES=3)
+target_link_libraries(runtime "$<TARGET_FILE:libminiupnpc-static>" "$<TARGET_FILE:natpmp>")
+add_dependencies(runtime libminiupnpc-static natpmp)
 if(WIN32)
-    target_link_libraries(runtime mman)
+    target_link_libraries(runtime mman iphlpapi ws2_32)
 else()
     target_link_libraries(runtime pthread dl)
 endif()

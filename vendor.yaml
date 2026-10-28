@@ -56,3 +56,19 @@ third-party/draco:
     - "PR #3723 (https://github.com/open-goal/jak-project/pull/3723)"
 third-party/json.hpp
   git: https://github.com/nlohmann/json/blob/eba0a92bfb1abf242f30e894b96ba11c9f4048c7/single_include/nlohmann/json.hpp
+third-party/GameNetworkingSockets:
+  git: https://github.com/ValveSoftware/GameNetworkingSockets
+  modifications:
+    - "Jak 3 multiplayer mod: copied from himstan/Jak-And-Daxter-2-Multiplayer's third-party, without tests"
+third-party/protobuf:
+  git: https://github.com/protocolbuffers/protobuf/tree/v29.6
+  modifications:
+    - "Jak 3 multiplayer mod: C++ sources, abseil and CMake only (no other languages, conformance, examples)"
+third-party/miniupnpc:
+  git: https://github.com/miniupnp/miniupnp/tree/miniupnpc_2_3_3/miniupnpc
+  modifications:
+    - "Jak 3 multiplayer mod: copied from himstan/Jak-And-Daxter-2-Multiplayer's third-party"
+third-party/libnatpmp:
+  git: https://github.com/miniupnp/libnatpmp
+  modifications:
+    - "Jak 3 multiplayer mod: copied from himstan/Jak-And-Daxter-2-Multiplayer's third-party"

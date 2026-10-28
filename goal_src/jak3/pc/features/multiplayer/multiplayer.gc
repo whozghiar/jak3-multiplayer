@@ -206,6 +206,8 @@
 (define-extern pc-mp-host (function string int symbol))
 (define-extern pc-mp-join (function string symbol))
 (define-extern pc-mp-leave (function none))
+;; host: #t once the router opened our server's port, its internet address ("ip:port") copied
+(define-extern pc-mp-public-address (function string symbol))
 (define-extern pc-mp-update (function mp-player-state int))
 (define-extern pc-mp-get-player (function int mp-player-state symbol))
 (define-extern pc-mp-send-event (function mp-event none))

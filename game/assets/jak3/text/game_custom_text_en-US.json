@@ -410,5 +410,6 @@
   "15a5": "Challenge over: waiting for the other players (~D/~D)",
   "15a6": "~S wins the challenge",
   "15a7": "A tie: each winner gets the reward",
-  "15a8": "Nobody completed the challenge"
+  "15a8": "Nobody completed the challenge",
+  "15a9": "Hosting: ~D player(s), internet address ~S"
 }

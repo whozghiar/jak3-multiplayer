@@ -4,9 +4,9 @@
  * Jak 3 multiplayer mod: the network session and the kernel functions that expose it to GOAL
  * (goal_src/jak3/pc/features/multiplayer/).
  *
- * One player hosts (slot 0) and the others connect to them over UDP (star topology): states,
- * objects and poses go unreliably (a newer one follows within a frame), everything else on a
- * reliable ordered channel. Every player sends its own state every frame; the host relays each
+ * One player hosts (slot 0) and the others connect to them through Valve's GameNetworkingSockets
+ * (star topology, encrypted connections, five priority lanes): states, objects and poses go
+ * unreliably (a newer one follows within a frame), everything else reliably and in order. Every player sends its own state every frame; the host relays each
  * state and each event to the other players. Remote states are buffered and rendered 100 ms in the past, interpolated
  * between the two snapshots around that time, so remote players move smoothly despite jitter.
  *
@@ -28,7 +28,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 10;
+constexpr u32 kProtocolVersion = 11;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -302,6 +302,9 @@ class Session {
   double clock_of(int source, double now_ms) const {
     return source < 0 ? now_ms : drawn_time(source, now_ms);
   }
+  // GNS's news about a connection (SteamNetConnectionStatusChangedCallback_t): true when the
+  // connection is this session's (kmultiplayer.cpp on_connection_status).
+  bool on_status(const void* info);
   Mode mode() const { return m_mode; }
   int local_slot() const { return m_local_slot; }
   const std::string& message() const { return m_message; }
@@ -310,8 +313,8 @@ class Session {
 
  private:
   void handle_frame(Peer& p, u8 type, const u8* data, size_t len);
-  void handle_ping(Peer& p, u8 type, const u8* data, size_t len);
-  // The pressure on the link to `p` from its last ping: see the Peer fields.
+  // The quality of the link to `p` (GNS's status), then its pressure: see the Peer fields.
+  void read_status(Peer& p);
   void note_pressure(Peer& p);
   void route_event(Event ev, int sender_slot);
   // Queue an event for GOAL; see kMaxEvents.
@@ -330,25 +333,13 @@ class Session {
  private:
   void drop(Peer& p, const std::string& reason);
   void refuse(Peer& p, const char* why);
-  void receive_all(double now_ms);
-  void dispatch_datagram(u32 ip, u16 port, const u8* data, size_t len);
-  Peer* peer_for(u32 ip, u16 port, u32 conn, const u8* data, size_t len);
-  void on_datagram(Peer& p, const u8* data, size_t len);
+  void receive_all();
 
   Mode m_mode = Mode::Offline;
   int m_local_slot = -1;
   int m_max_players = kMaxPlayers;
   std::string m_message;
-  u64 m_sock = ~0ull;          // the session's UDP socket
-  // Datagrams received under a test latency, with the time they may be read (address in network
-  // byte order).
-  struct HeldDatagram {
-    double at;
-    u32 ip;
-    u16 port;
-    std::vector<u8> bytes;
-  };
-  std::deque<HeldDatagram> m_held;
+  u32 m_listen = 0;             // host: GNS listen socket (0 = none)
   std::vector<Peer*> m_peers;  // host: clients, client: the server
   u64 m_frame = 0;             // updates since start: which frames a peer under pressure gets
   std::array<Remote, kMaxPlayers> m_remotes;
@@ -388,8 +379,8 @@ struct TestPad {
 };
 extern TestPad g_test_pad;
 
-// Test only: what every session receives is held `latency_ms` (plus up to `jitter_ms`) and
-// `loss_percent` of the datagrams are dropped (MP_TEST_LATENCY and MP_TEST_LOSS set them at boot).
+// Test only: what every session receives is delayed `latency_ms` (plus up to `jitter_ms`) and
+// `loss_percent` of the packets are dropped (MP_TEST_LATENCY and MP_TEST_LOSS set them at boot).
 void set_test_network(double latency_ms, double jitter_ms, double loss_percent);
 
 // Splits "ip:port". Returns false on a malformed address.

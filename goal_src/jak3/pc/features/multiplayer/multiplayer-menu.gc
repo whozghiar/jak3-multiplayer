@@ -62,7 +62,11 @@
   (let ((players (+ 1 (mp-player-count))))
     (case *mp-mode*
       (((mp-mode host))
-       (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-hosting) #f) players)
+       ;; the internet address once the router opened our port (pc-mp-public-address)
+       (if (pc-mp-public-address *mp-status*)
+           (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-internet) #f) players *mp-status*)
+           (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-hosting) #f) players)
+           )
        )
       (((mp-mode client))
        (format (clear *mp-menu-label*) (lookup-text! *common-text* (text-id progress-mp-status-connected) #f) players)

@@ -1762,6 +1762,7 @@
   (progress-mp-challenge-won #x15a6)
   (progress-mp-challenge-tie #x15a7)
   (progress-mp-challenge-none #x15a8)
+  (progress-mp-status-internet #x15a9)
   )
 ;; ---text-id
 

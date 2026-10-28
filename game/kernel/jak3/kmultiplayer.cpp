@@ -1,4 +1,5 @@
-// Winsock must be included before anything that may pull in windows.h.
+// getaddrinfo resolves a host name (GNS takes addresses). Winsock before anything that may pull in
+// windows.h.
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -6,16 +7,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
-#include <cerrno>
-#include <fcntl.h>
 #include <netdb.h>
-#include <unistd.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/select.h>
-#include <sys/socket.h>
 #endif
 
 #include <algorithm>
@@ -25,11 +20,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <condition_variable>
 #include <ctime>
+#include <mutex>
+#include <thread>
 #include <random>
 #include <set>
 
 #include "kmultiplayer.h"
+#include "kmultiplayer_nat.h"
 
 #include "common/log/log.h"
 #include "common/symbols.h"
@@ -44,96 +43,31 @@
 #include "game/runtime.h"
 
 #include "fmt/format.h"
+#include "steam/isteamnetworkingutils.h"
+#include "steam/steamnetworkingsockets.h"
 
 namespace mp {
 
 // ---------------------------------------------------------------------------------------------
-// Sockets: the few calls that differ between Winsock and BSD sockets.
+// Transport: Valve's GameNetworkingSockets (GNS), as himstan's Jak and Daxter II Multiplayer uses
+// it (game/multiplayer/platform/transport/session_platform.cpp, ISC). Each guest holds one
+// encrypted connection to the host's listen socket; GNS does the handshake, reliability,
+// fragmentation, rate limit and timeouts. A message is [u8 type][payload] (Msg below), at most
+// kMaxFrame bytes, sent on one of his five lanes (a lower priority waits for the higher ones;
+// within a priority, bytes are shared by weight):
+//   kLaneControl  0, priority 0            HELLO, WELCOME, LEAVE: reliable
+//   kLaneCritical 1, priority 0, weight 4  STATE: unreliable
+//   kLaneGameplay 2, priority 1            EVENT, BLOB: reliable
+//   kLaneNormal   3, priority 1            ACTORS, the POSES batches that carry effects: unreliable
+//   kLaneBulk     4, priority 2            the POSES sent between two batches: unreliable
+// Unreliable messages go with NoDelay: one the link cannot carry now is dropped (a newer one
+// follows within a frame), never queued. A refusal (full, version, kicked, banned) closes the
+// connection with its reason as the closing text, which the guest shows.
 // ---------------------------------------------------------------------------------------------
-
-#ifdef _WIN32
-using sock_t = SOCKET;
-constexpr sock_t kNoSock = INVALID_SOCKET;
-static int sock_error() {
-  return WSAGetLastError();
-}
-static bool would_block(int e) {
-  return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS || e == WSAEALREADY;
-}
-static void close_sock(sock_t s) {
-  closesocket(s);
-}
-static void set_nonblocking(sock_t s) {
-  u_long on = 1;
-  ioctlsocket(s, FIONBIO, &on);
-}
-// A datagram sent to a closed port comes back as this error on the next receive.
-static bool conn_reset(int e) {
-  return e == WSAECONNRESET;
-}
-static void net_init() {
-  static bool done = false;
-  if (!done) {
-    WSADATA wsa;
-    done = WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
-  }
-}
-#else
-using sock_t = int;
-constexpr sock_t kNoSock = -1;
-static int sock_error() {
-  return errno;
-}
-static bool would_block(int e) {
-  return e == EWOULDBLOCK || e == EAGAIN || e == EINPROGRESS;
-}
-static void close_sock(sock_t s) {
-  close(s);
-}
-static void set_nonblocking(sock_t s) {
-  fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
-}
-static bool conn_reset(int e) {
-  return e == ECONNRESET || e == ECONNREFUSED;
-}
-static void net_init() {}
-#endif
-
-// Large socket buffers: a world save (a burst of fragments) and the poses of a crowd fit in them.
-static void set_buffers(sock_t s) {
-  int size = 4 * 1024 * 1024;
-  setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char*)&size, sizeof(size));
-  setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char*)&size, sizeof(size));
-}
-
-// ---------------------------------------------------------------------------------------------
-// Wire format (UDP). Every datagram starts with [u8 'J'][u8 kind][u32 connection id], the id a
-// client draws when it joins: a datagram of an older connection from the same address is told
-// apart. Kinds:
-//   kUnreliable [u16 message id][u8 fragment][u8 fragments][bytes]: sent once; of the messages
-//               of one peer only a newer one than the last delivered is delivered.
-//   kReliable   [u32 seq][u8 fragment][u8 fragments][bytes]: sent again until acknowledged,
-//               delivered once and in order. Each fragment has its own seq.
-//   kAck        [u32 next seq expected][u32 bits: seq next + 1 + i received]
-//   kBye        [reason text]: the sender closes the connection.
-// A message is [u8 type][payload] (Msg below), at most kMaxFrame bytes, cut into fragments of at
-// most kFragment bytes. States, objects and poses are unreliable (a newer one follows within a
-// frame); everything that happens once (join, events, the world save) is reliable.
-// ---------------------------------------------------------------------------------------------
-
-constexpr u8 kMagic = 'J';
-enum Datagram : u8 { kUnreliable = 1, kReliable = 2, kAck = 3, kBye = 4 };
-constexpr size_t kHeader = 6;
-constexpr size_t kFragment = 1180;       // message bytes per datagram, under a 1280-byte MTU
-constexpr size_t kMaxDatagram = kHeader + 6 + kFragment;
-constexpr u32 kMaxFragments = 16;        // kMaxFrame / kFragment, rounded up
-constexpr size_t kReliableWindow = 256;  // reliable fragments in flight per peer
-constexpr size_t kMaxWaiting = 8192;     // reliable fragments queued: a peer this far behind is dropped
 
 enum Msg : u8 {
   MSG_HELLO = 1,    // client -> host: u32 protocol version, u64 the player's secret id
   MSG_WELCOME = 2,  // host -> client: u8 slot given to the client
-  MSG_REJECT = 3,   // host -> client: reason text (refused, kicked, banned, server closed)
   MSG_STATE = 4,    // both ways: u8 slot + PlayerState
   MSG_LEAVE = 5,    // host -> client: u8 slot of a player who left
   MSG_EVENT = 6,    // both ways: Event (the host fills `from`)
@@ -143,18 +77,26 @@ enum Msg : u8 {
                     // PoseSound...
   MSG_BLOB = 9,     // both ways: u8 from, u8 to, u32 total size, u32 offset, bytes (the host
                     // relays a chunk whose `to` is another guest)
-  MSG_PING = 10,    // both ways, every second: u32 sender time ms
-  MSG_PONG = 11,    // the answer to a ping: its u32 time sent back
 };
 
-constexpr double kPingIntervalMs = 1000.0;
+enum Lane : u16 { kLaneControl, kLaneCritical, kLaneGameplay, kLaneNormal, kLaneBulk, kLaneCount };
+
+// Each connection's quality (round trip, delivery both ways, queueing) is read this often.
+constexpr double kStatusIntervalMs = 1000.0;
 
 constexpr size_t kBlobChunk = 15000;           // bytes of a blob per frame
 constexpr size_t kMaxBlob = 4 * 1024 * 1024;   // larger blobs are refused
 
 constexpr size_t kMaxFrame = 16384;            // larger messages are a protocol violation
-constexpr double kTimeoutMs = 15000.0;         // silence before a peer is considered gone
-constexpr double kConnectTimeoutMs = 8000.0;
+constexpr int kTimeoutMs = 15000;              // silence before a peer is considered gone
+constexpr int kConnectTimeoutMs = 8000;
+// The most we send a peer per second (GNS's token bucket; it does not estimate the bandwidth: its
+// rate is this clamp). Past it, unreliable messages are dropped and the pressure (note_pressure)
+// thins what we send.
+constexpr int kSendRateBytes = 1024 * 1024;
+// GNS closing reasons (k_ESteamNetConnectionEnd_App_Min and above).
+constexpr int kEndRefused = 1001;
+constexpr int kEndLeft = 1002;
 // Events wait here until GOAL takes them, once per unpaused frame: a player in the pause menu or on
 // a failure screen takes none for a while. Past kMaxEvents, the oldest event that only draws
 // something (kIsVisualEvent) goes first, so story progress, results and votes are kept, up to
@@ -168,27 +110,34 @@ static bool kIsVisualEvent(s32 kind) {
 }
 constexpr size_t kMaxPeers = 16;               // host: connections kept, joining ones included
 
-static bool is_reliable(u8 type) {
-  return type != MSG_STATE && type != MSG_ACTORS && type != MSG_POSES && type != MSG_PING &&
-         type != MSG_PONG;
+static bool poses_have_effects(const u8* data, size_t len);
+
+// The lane of a message (see the transport above).
+static Lane lane_of(u8 type, const u8* payload, size_t len) {
+  switch (type) {
+    case MSG_STATE:
+      return kLaneCritical;
+    case MSG_EVENT:
+    case MSG_BLOB:
+      return kLaneGameplay;
+    case MSG_ACTORS:
+      return kLaneNormal;
+    case MSG_POSES:
+      return poses_have_effects(payload, len) ? kLaneNormal : kLaneBulk;
+    default:
+      return kLaneControl;
+  }
 }
 
-static u32 get_u32(const u8* p) {
-  u32 v;
-  memcpy(&v, p, 4);
-  return v;
+static bool is_reliable_lane(Lane lane) {
+  return lane == kLaneControl || lane == kLaneGameplay;
 }
 
-static u16 get_u16(const u8* p) {
-  u16 v;
-  memcpy(&v, p, 2);
-  return v;
-}
-
-// Test only: MP_TEST_LATENCY="<ms>[:<jitter ms>]" holds what arrives that long (plus up to the
-// jitter) before it is read, in order. MP_TEST_LOSS="<percent>" drops that share of the datagrams
-// received. Both stand in for a network between two machines; off when unset. set_test_network
-// overrides them (unit tests).
+// Test only: MP_TEST_LATENCY="<ms>[:<jitter ms>]" delays what arrives that long (plus a random
+// jitter averaging half that much, at most that much, order kept). MP_TEST_LOSS="<percent>" drops
+// that share of the packets received. Both stand in for a network between two machines, through
+// GNS's simulated network (global, every connection of the process); off when unset.
+// set_test_network overrides them (unit tests).
 struct TestNetwork {
   bool init = false;
   double latency = 0, jitter = 0, loss = 0;
@@ -214,191 +163,136 @@ static TestNetwork& test_network() {
   return t;
 }
 
+static void apply_test_network() {
+  const auto& t = test_network();
+  auto* u = SteamNetworkingUtils();
+  u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, (int32)t.latency);
+  u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, (float)t.loss);
+  u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Avg,
+                               (float)(t.jitter / 2));
+  u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, (float)t.jitter);
+  u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct,
+                               t.jitter > 0 ? 100.f : 0.f);
+}
+
+static void gns_debug_output(ESteamNetworkingSocketsDebugOutputType type, const char* message) {
+  if (type <= k_ESteamNetworkingSocketsDebugOutputType_Error) {
+    lg::error("[multiplayer] GNS: {}", message);
+  } else {
+    lg::warn("[multiplayer] GNS: {}", message);
+  }
+}
+
+static void on_connection_status(SteamNetConnectionStatusChangedCallback_t* info);
+
+// GNS, started once for the process (every Session shares it) and kept until the process ends.
+static ISteamNetworkingSockets* gns() {
+  static ISteamNetworkingSockets* sockets = [] {
+    SteamDatagramErrMsg error = {};
+    if (!GameNetworkingSockets_Init(nullptr, error)) {
+      lg::error("[multiplayer] GameNetworkingSockets_Init failed: {}", error);
+      return (ISteamNetworkingSockets*)nullptr;
+    }
+    auto* u = SteamNetworkingUtils();
+    u->SetDebugOutputFunction(k_ESteamNetworkingSocketsDebugOutputType_Warning, gns_debug_output);
+    u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_TimeoutInitial, kConnectTimeoutMs);
+    u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_TimeoutConnected, kTimeoutMs);
+    u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMin, kSendRateBytes);
+    u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMax, kSendRateBytes);
+    u->SetGlobalCallback_SteamNetConnectionStatusChanged(on_connection_status);
+    apply_test_network();
+    return SteamNetworkingSockets();
+  }();
+  return sockets;
+}
+
 void set_test_network(double latency_ms, double jitter_ms, double loss_percent) {
   auto& t = test_network();
   t.latency = latency_ms;
   t.jitter = jitter_ms;
   t.loss = loss_percent;
+  if (gns()) {
+    apply_test_network();
+  }
 }
-
-static bool poses_have_effects(const u8* data, size_t len);
 
 // One remote end of the session: the host's view of a guest, or a guest's view of the host.
 struct Session::Peer {
-  sockaddr_in addr{};
+  HSteamNetConnection conn = k_HSteamNetConnection_Invalid;
   std::string ip;
-  u32 conn = 0;           // connection id drawn by the client (datagram header)
-  int slot = -1;          // host side: -1 until the HELLO is accepted
-  u64 uid = 0;            // host side: the guest's secret id, from its HELLO (economy account)
-  double last_recv = 0;
+  bool connected = false;  // GNS finished the handshake: messages can go
+  int slot = -1;           // host side: -1 until the HELLO is accepted
+  u64 uid = 0;             // host side: the guest's secret id, from its HELLO (economy account)
+  double last_recv = 0;    // time of the last message received (the receive time of states)
   bool dead = false;
   std::string dead_reason;
-  // Refused or kicked: kept a moment, its reason sent again until acknowledged.
-  bool closing = false;
-  double close_at = 0;
-  double rtt_ms = -1;     // round trip measured by pings, smoothed; -1 until the first answer
-  double next_ping = 0;
+  double rtt_ms = -1;      // round trip measured by GNS; -1 until known
+  double next_status = 0;
+  // The newest unreliable message delivered per lane: an older one arriving late is dropped.
+  std::array<s64, kLaneCount> newest{};
 
   // Network pressure, after the cadence scheduler of himstan's Jak and Daxter II Multiplayer
   // (game/multiplayer/platform/session/cadence_scheduler.cpp and core/network_statistics.h, ISC):
-  // how much of what this peer sends us arrives (its message ids delivered over their span, each
-  // second), how much of ours it gets (its own count, in its pings), and the round trip above the
-  // lowest one (queueing). 0 normal, 1 degraded, 2 congested, 3 severe (Session::note_pressure).
-  // Under pressure, as his priorities: the bones sent between two 15 Hz batches (bulk) go to this
-  // peer every 2, 3 or 5 frames; the player state and the states of our objects between batches
-  // (normal) every 2 frames from congested on; the batches, which carry the effects, and the
-  // reliable messages always go.
-  u16 rx_first = 0;
-  u32 rx_count = 0;
+  // how much of what this peer sends us arrives and how much of ours it gets (GNS's connection
+  // qualities), and how long our normal lane queues. 0 normal, 1 degraded, 2 congested, 3 severe
+  // (Session::note_pressure). Under pressure, as his priorities: the bones sent between two 15 Hz
+  // batches (bulk) go to this peer every 2, 3 or 5 frames; the player state and the states of our
+  // objects between batches (normal) every 2 frames from congested on; the batches, which carry
+  // the effects, and the reliable messages always go.
   float rx_quality = 1.f;
   float tx_quality = 1.f;
-  double min_rtt = -1;
+  double queue_ms = 0;
   int pressure = 0;
   double lower_since = -1;  // since when a lower pressure is seen: it drops after 3 s of it
-  u32 sent_bytes = 0;       // bytes sent this second, and the last second
-  u32 sent_rate = 0;
+  u32 sent_rate = 0;        // bytes per second we send it (GNS)
   int bulk_every() const {
     static const int every[] = {1, 2, 3, 5};
     return every[pressure];
   }
   int state_every() const { return pressure >= 2 ? 2 : 1; }
 
-  // Sending: unreliable datagrams of this frame; reliable fragments queued, then in flight until
-  // acknowledged (sent again after a timeout).
-  std::vector<std::vector<u8>> unreliable_out;
-  u16 next_msg = 0;
-  u32 next_seq = 0;
-  std::deque<std::pair<u32, std::vector<u8>>> waiting;
-  struct InFlight {
-    std::vector<u8> dgram;
-    double sent_at;
-  };
-  std::map<u32, InFlight> in_flight;
-
-  // Receiving: reliable fragments past the next expected one, the reliable message being put
-  // together, the unreliable messages being put together, the newest unreliable one delivered.
-  u32 expect = 0;
-  std::map<u32, std::vector<u8>> early;
-  std::vector<u8> assembly;
-  bool ack_due = false;
-  struct Partial {
-    u8 count = 0;
-    u32 got = 0;
-    std::vector<std::vector<u8>> parts;
-  };
-  std::map<u16, Partial> partial;
-  u16 newest_msg = 0;
-  bool any_msg = false;
-
-  void header(std::vector<u8>& d, u8 kind) const {
-    d.push_back(kMagic);
-    d.push_back(kind);
-    d.insert(d.end(), (const u8*)&conn, (const u8*)&conn + 4);
-  }
-
-  // Queue a message [type][a][b], cut into fragments, on the channel of its type.
+  // Send a message [type][a][b] on the lane of its type. Nothing goes before the handshake ends
+  // (the HELLO is sent once it does) or once the peer is dropped.
   void queue(u8 type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0) {
-    std::vector<u8> msg;
-    msg.reserve(1 + na + nb);
-    msg.push_back(type);
-    msg.insert(msg.end(), (const u8*)a, (const u8*)a + na);
+    size_t size = 1 + na + nb;
+    if (!connected || dead || size > kMaxFrame) {
+      return;
+    }
+    auto* msg = SteamNetworkingUtils()->AllocateMessage((int)size);
+    if (!msg) {
+      return;
+    }
+    u8* d = (u8*)msg->m_pData;
+    d[0] = type;
+    memcpy(d + 1, a, na);
     if (b) {
-      msg.insert(msg.end(), (const u8*)b, (const u8*)b + nb);
+      memcpy(d + 1 + na, b, nb);
     }
-    size_t count = (msg.size() + kFragment - 1) / kFragment;
-    if (count > kMaxFragments) {
-      return;  // larger than kMaxFrame: the senders never build one
-    }
-    bool reliable = is_reliable(type);
-    u16 id = next_msg++;
-    for (size_t i = 0; i < count; i++) {
-      std::vector<u8> d;
-      d.reserve(kMaxDatagram);
-      header(d, reliable ? kReliable : kUnreliable);
-      if (reliable) {
-        u32 seq = next_seq + (u32)i;
-        d.insert(d.end(), (const u8*)&seq, (const u8*)&seq + 4);
-      } else {
-        d.insert(d.end(), (const u8*)&id, (const u8*)&id + 2);
-      }
-      d.push_back((u8)i);
-      d.push_back((u8)count);
-      size_t at = i * kFragment;
-      d.insert(d.end(), msg.begin() + at, msg.begin() + std::min(msg.size(), at + kFragment));
-      if (reliable) {
-        waiting.emplace_back(next_seq + (u32)i, std::move(d));
-      } else {
-        unreliable_out.push_back(std::move(d));
-      }
-    }
-    if (reliable) {
-      next_seq += (u32)count;
-    }
+    Lane lane = lane_of(type, d + 1, size - 1);
+    msg->m_conn = conn;
+    msg->m_idxLane = lane;
+    msg->m_nFlags = is_reliable_lane(lane)
+                        ? k_nSteamNetworkingSend_Reliable | k_nSteamNetworkingSend_NoNagle
+                        : k_nSteamNetworkingSend_UnreliableNoNagle | k_nSteamNetworkingSend_NoDelay;
+    gns()->SendMessages(1, &msg, nullptr, true);  // GNS owns the message, sent or not
   }
 
-  void send_datagram(sock_t s, const std::vector<u8>& d) const {
-    // a full send buffer loses the datagram: the reliable channel sends it again
-    sendto(s, (const char*)d.data(), (int)d.size(), 0, (const sockaddr*)&addr, sizeof(addr));
-  }
-
-  // Send this frame's datagrams, the reliable fragments due (new ones within the window, and those
-  // not acknowledged within the retransmit timeout), and the acknowledgement of what came in.
-  void flush(sock_t s, double now) {
-    while (!waiting.empty() && in_flight.size() < kReliableWindow) {
-      in_flight[waiting.front().first] = {std::move(waiting.front().second), -1e12};
-      waiting.pop_front();
-    }
-    double rto = rtt_ms < 0 ? 200.0 : std::clamp(rtt_ms * 1.5 + 30.0, 60.0, 1000.0);
-    for (auto& [seq, f] : in_flight) {
-      if (now - f.sent_at >= rto) {
-        send_datagram(s, f.dgram);
-        sent_bytes += (u32)f.dgram.size();
-        f.sent_at = now;
-      }
-    }
-    for (auto& d : unreliable_out) {
-      send_datagram(s, d);
-      sent_bytes += (u32)d.size();
-    }
-    unreliable_out.clear();
-    if (ack_due) {
-      ack_due = false;
-      u32 bits = 0;
-      for (u32 i = 0; i < 32; i++) {
-        if (early.count(expect + 1 + i)) {
-          bits |= 1u << i;
-        }
-      }
-      std::vector<u8> d;
-      header(d, kAck);
-      d.insert(d.end(), (const u8*)&expect, (const u8*)&expect + 4);
-      d.insert(d.end(), (const u8*)&bits, (const u8*)&bits + 4);
-      send_datagram(s, d);
-    }
-    if (waiting.size() > kMaxWaiting && !dead) {
-      dead = true;
-      dead_reason = "Connection too slow";
-    }
-  }
-
-  // The peer acknowledged every seq before `next`, and those of `bits`.
-  void on_ack(u32 next, u32 bits) {
-    for (auto it = in_flight.begin(); it != in_flight.end();) {
-      u32 d = it->first - next;
-      bool acked = (s32)d < 0 || (d >= 1 && d <= 32 && (bits & (1u << (d - 1))));
-      it = acked ? in_flight.erase(it) : std::next(it);
-    }
-  }
-
-  void bye(sock_t s, const std::string& reason) const {
-    std::vector<u8> d;
-    header(d, kBye);
-    d.insert(d.end(), reason.begin(), reason.begin() + std::min<size_t>(reason.size(), 64));
-    for (int i = 0; i < 3; i++) {  // nothing answers a bye: sent thrice against a loss
-      send_datagram(s, d);
+  // Close the connection, sending `reason` as its closing text (what is queued reliably still
+  // goes first).
+  void close(int code, const std::string& reason) {
+    if (conn != k_HSteamNetConnection_Invalid) {
+      gns()->CloseConnection(conn, code, reason.substr(0, 120).c_str(), true);
+      conn = k_HSteamNetConnection_Invalid;
     }
   }
 };
+
+// GNS lanes: himstan's priorities and weights (session_platform.cpp configure_connection).
+static bool configure_lanes(HSteamNetConnection conn) {
+  const int priorities[kLaneCount] = {0, 0, 1, 1, 2};
+  const u16 weights[kLaneCount] = {1, 4, 1, 1, 1};
+  return gns()->ConfigureConnectionLanes(conn, kLaneCount, priorities, weights) == k_EResultOK;
+}
 
 static void copy_cstr(char* dst, size_t size, const std::string& src) {
   size_t n = std::min(size - 1, src.size());
@@ -681,40 +575,60 @@ bool Remote::sample_at(double t, PlayerState* out) const {
 // Session
 // ---------------------------------------------------------------------------------------------
 
+// The sessions of the process: GNS's status callback finds a connection's session among them (the
+// game has one; the unit tests run a host and a client side by side).
+static std::vector<Session*>& sessions() {
+  static std::vector<Session*> list;
+  return list;
+}
+
+static void on_connection_status(SteamNetConnectionStatusChangedCallback_t* info) {
+  for (auto* s : sessions()) {
+    if (s->on_status(info)) {
+      return;
+    }
+  }
+  // nobody's connection any more (closed meanwhile): release it
+  if (info->m_info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+      info->m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
+    gns()->CloseConnection(info->m_hConn, 0, nullptr, false);
+  }
+}
+
+static std::string remote_ip(const SteamNetConnectionInfo_t& info) {
+  char text[SteamNetworkingIPAddr::k_cchMaxString] = {};
+  info.m_addrRemote.ToString(text, sizeof(text), false);
+  return text;
+}
+
 Session::~Session() {
   leave("");
+  std::erase(sessions(), this);
 }
 
 bool Session::host(const std::string& address, int max_players) {
   leave("");
-  net_init();
   std::string ip;
   int port;
   if (!parse_address(address, &ip, &port)) {
     m_message = "Invalid address, expected ip:port";
     return false;
   }
-  sock_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (s == kNoSock) {
-    m_message = "Cannot create a socket";
+  if (!gns()) {
+    m_message = "Network unavailable";
     return false;
   }
-#ifdef _WIN32
-  int on = 1;
-  setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&on, sizeof(on));
-#endif
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons((u16)port);
-  if (bind(s, (sockaddr*)&addr, sizeof(addr)) != 0) {
-    close_sock(s);
+  SteamNetworkingIPAddr addr;
+  addr.Clear();
+  addr.m_port = (u16)port;
+  m_listen = gns()->CreateListenSocketIP(addr, 0, nullptr);
+  if (m_listen == k_HSteamListenSocket_Invalid) {
     m_message = "Port " + std::to_string(port) + " is already in use";
     return false;
   }
-  set_nonblocking(s);
-  set_buffers(s);
-  m_sock = (u64)s;
+  if (std::find(sessions().begin(), sessions().end(), this) == sessions().end()) {
+    sessions().push_back(this);
+  }
   m_mode = Mode::Host;
   m_local_slot = 0;
   m_max_players = std::clamp(max_players, 2, kMaxPlayers);
@@ -725,48 +639,44 @@ bool Session::host(const std::string& address, int max_players) {
 
 bool Session::join(const std::string& address, double now) {
   leave("");
-  net_init();
   std::string ip;
   int port;
   if (!parse_address(address, &ip, &port) || ip.empty()) {
     m_message = "Invalid address, expected ip:port";
     return false;
   }
-  addrinfo hints{};
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_DGRAM;
-  addrinfo* res = nullptr;
-  if (getaddrinfo(ip.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res) {
-    m_message = "Unknown address " + ip;
+  if (!gns()) {
+    m_message = "Network unavailable";
     return false;
   }
-  sock_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (s == kNoSock) {
+  SteamNetworkingIPAddr addr;
+  addr.Clear();
+  if (!addr.ParseString(ip.c_str())) {
+    // a host name: its first IPv4 address
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* res = nullptr;
+    if (getaddrinfo(ip.c_str(), nullptr, &hints, &res) != 0 || !res) {
+      m_message = "Unknown address " + ip;
+      return false;
+    }
+    addr.SetIPv4(ntohl(((sockaddr_in*)res->ai_addr)->sin_addr.s_addr), 0);
     freeaddrinfo(res);
-    m_message = "Cannot create a socket";
-    return false;
   }
-  // bound now: receiving on an unbound socket fails (Windows)
-  sockaddr_in local{};
-  local.sin_family = AF_INET;
-  local.sin_addr.s_addr = htonl(INADDR_ANY);
-  bind(s, (sockaddr*)&local, sizeof(local));
-  set_nonblocking(s);
-  set_buffers(s);
+  addr.m_port = (u16)port;
+  if (std::find(sessions().begin(), sessions().end(), this) == sessions().end()) {
+    sessions().push_back(this);
+  }
   auto* p = new Peer();
-  memcpy(&p->addr, res->ai_addr, sizeof(p->addr));
-  freeaddrinfo(res);
   p->ip = ip;
   p->last_recv = now;
-  // a new id for every connection: the host tells it from an older one of this address
-  p->conn = (u32)std::chrono::steady_clock::now().time_since_epoch().count() ^ ((u32)std::rand() << 16);
-  u8 hello[12];
-  u64 uid = player_uid();
-  memcpy(hello, &kProtocolVersion, 4);
-  memcpy(hello + 4, &uid, 8);
-  p->queue(MSG_HELLO, hello, 12);
-  m_peers.push_back(p);
-  m_sock = (u64)s;
+  m_peers.push_back(p);  // before the connect: its status callback finds it
+  p->conn = gns()->ConnectByIPAddress(addr, 0, nullptr);
+  if (p->conn == k_HSteamNetConnection_Invalid || !configure_lanes(p->conn)) {
+    leave("Cannot connect to " + address);
+    return false;
+  }
   m_mode = Mode::Connecting;
   m_connect_start = now;
   m_message = "Connecting to " + address;
@@ -774,19 +684,88 @@ bool Session::join(const std::string& address, double now) {
   return true;
 }
 
+// GNS's news about a connection: true when it is one of ours (or a guest knocking on our listen
+// socket). A host accepts a guest here (or refuses it, its reason sent as the closing text); a
+// guest says HELLO once connected. A closed connection drops its peer.
+bool Session::on_status(const void* data) {
+  auto* info = (const SteamNetConnectionStatusChangedCallback_t*)data;
+  auto state = info->m_info.m_eState;
+  Peer* p = nullptr;
+  for (auto* o : m_peers) {
+    if (o->conn == info->m_hConn) {
+      p = o;
+    }
+  }
+  if (!p) {
+    if (m_mode != Mode::Host || info->m_info.m_hListenSocket != m_listen ||
+        m_listen == k_HSteamListenSocket_Invalid) {
+      return false;
+    }
+    if (state != k_ESteamNetworkingConnectionState_Connecting) {
+      return true;
+    }
+    std::string ip = remote_ip(info->m_info);
+    size_t live = std::count_if(m_peers.begin(), m_peers.end(), [](Peer* o) { return !o->dead; });
+    const char* why = m_banned.count(ip) ? "You are banned from this server"
+                      : live >= kMaxPeers ? "The server is full"
+                                          : nullptr;
+    if (why || !configure_lanes(info->m_hConn) ||
+        gns()->AcceptConnection(info->m_hConn) != k_EResultOK) {
+      gns()->CloseConnection(info->m_hConn, kEndRefused, why ? why : "Connection refused", false);
+      return true;
+    }
+    p = new Peer();
+    p->conn = info->m_hConn;
+    p->ip = ip;
+    p->last_recv = m_now;
+    m_peers.push_back(p);
+    return true;
+  }
+  if (state == k_ESteamNetworkingConnectionState_Connected && !p->connected) {
+    p->connected = true;
+    if (m_mode != Mode::Host) {
+      u8 hello[12];
+      u64 uid = player_uid();
+      memcpy(hello, &kProtocolVersion, 4);
+      memcpy(hello + 4, &uid, 8);
+      p->queue(MSG_HELLO, hello, 12);
+    }
+  } else if (state == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+             state == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
+    std::string why = info->m_info.m_szEndDebug;
+    int end = info->m_info.m_eEndReason;
+    if (end >= k_ESteamNetConnectionEnd_App_Min && end <= k_ESteamNetConnectionEnd_App_Max &&
+        !why.empty()) {
+      // our own reasons: refused, kicked, banned, the host stopped
+    } else if (m_mode == Mode::Connecting) {
+      why = state == k_ESteamNetworkingConnectionState_ProblemDetectedLocally &&
+                    (end == k_ESteamNetConnectionEnd_Misc_Timeout ||
+                     end == k_ESteamNetConnectionEnd_Remote_Timeout)
+                ? "Connection timed out: is the server running?"
+                : "Connection refused: is the server running?";
+    } else if (end == k_ESteamNetConnectionEnd_Misc_Timeout ||
+               end == k_ESteamNetConnectionEnd_Remote_Timeout) {
+      why = "Connection timed out";
+    } else {
+      why = "Connection closed";
+    }
+    gns()->CloseConnection(p->conn, 0, nullptr, false);
+    p->conn = k_HSteamNetConnection_Invalid;
+    drop(*p, why);
+  }
+  return true;
+}
+
 void Session::leave(const std::string& reason) {
   for (auto* p : m_peers) {
-    if (m_sock != ~0ull) {
-      p->bye((sock_t)m_sock, m_mode == Mode::Host ? "The host stopped the server" : "");
-    }
+    p->close(kEndLeft, m_mode == Mode::Host ? "The host stopped the server" : "");
     delete p;
   }
   m_peers.clear();
-  if (m_sock != ~0ull) {
-    close_sock((sock_t)m_sock);
-    m_sock = ~0ull;
+  if (m_listen != k_HSteamListenSocket_Invalid) {
+    gns()->CloseListenSocket(m_listen);
+    m_listen = k_HSteamListenSocket_Invalid;
   }
-  m_held.clear();
   for (auto& r : m_remotes) {
     r.clear();
   }
@@ -806,10 +785,9 @@ void Session::leave(const std::string& reason) {
   }
 }
 
+// Refuse or disconnect a peer: the connection closes with `why` as its closing text.
 void Session::refuse(Peer& p, const char* why) {
-  p.queue(MSG_REJECT, why, strlen(why));
-  p.closing = true;  // kept a second, the reason sent again until the client acknowledges it
-  p.close_at = m_now + 1000.0;
+  p.close(kEndRefused, why);
   drop(p, why);
 }
 
@@ -961,12 +939,8 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         route_event(ev, p.slot);
         return;
       }
-      case MSG_PING:
-      case MSG_PONG:
-        handle_ping(p, type, data, len);
-        return;
       default:
-        drop(p, "Protocol error");
+        refuse(p, "Protocol error");
         return;
     }
   }
@@ -980,9 +954,6 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         m_message = "Connected as player " + std::to_string(m_local_slot);
         lg::info("[multiplayer] {}", m_message);
       }
-      return;
-    case MSG_REJECT:
-      drop(p, std::string((const char*)data, std::min<size_t>(len, 64)));
       return;
     case MSG_STATE:
       if (len == 1 + sizeof(PlayerState) && data[0] < kMaxPlayers && data[0] != m_local_slot) {
@@ -1018,34 +989,34 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         store_blob(data, len);
       }
       return;
-    case MSG_PING:
-    case MSG_PONG:
-      handle_ping(p, type, data, len);
-      return;
     default:
-      drop(p, "Protocol error");
+      refuse(p, "Protocol error");
       return;
   }
 }
 
-// A ping is answered with its time; an answer gives the round trip to that peer.
-void Session::handle_ping(Peer& p, u8 type, const u8* data, size_t len) {
-  if (len < 4) {
+// Each second: the round trip, the share of our packets the peer gets and of its packets we get,
+// and how long our normal lane queues, from GNS; then the pressure.
+void Session::read_status(Peer& p) {
+  SteamNetConnectionRealTimeStatus_t st = {};
+  SteamNetConnectionRealTimeLaneStatus_t lanes[kLaneCount] = {};
+  if (!p.connected || p.conn == k_HSteamNetConnection_Invalid ||
+      gns()->GetConnectionRealTimeStatus(p.conn, &st, kLaneCount, lanes) != k_EResultOK) {
     return;
   }
-  if (type == MSG_PING) {
-    p.queue(MSG_PONG, data, 4);
-    if (len >= 5) {
-      p.tx_quality = data[4] / 255.f;  // the share of our messages it got last second
-      note_pressure(p);
-    }
-    return;
+  if (st.m_nPing >= 0) {
+    p.rtt_ms = st.m_nPing;
   }
-  u32 sent;
-  memcpy(&sent, data, 4);
-  double rtt = (double)(u32)((u32)m_now - sent);
-  p.rtt_ms = p.rtt_ms < 0 ? rtt : p.rtt_ms * 0.7 + rtt * 0.3;
-  p.min_rtt = p.min_rtt < 0 ? rtt : std::min(p.min_rtt, rtt);
+  // negative while unknown
+  if (st.m_flConnectionQualityRemote >= 0) {
+    p.tx_quality = st.m_flConnectionQualityRemote;
+  }
+  if (st.m_flConnectionQualityLocal >= 0) {
+    p.rx_quality = st.m_flConnectionQualityLocal;
+  }
+  p.queue_ms = lanes[kLaneNormal].m_usecQueueTime / 1000.0;
+  p.sent_rate = (u32)std::max(0.f, st.m_flOutBytesPerSec);
+  note_pressure(p);
 }
 
 // himstan's classification (network_statistics.h): severe below 50 % of our messages arriving or
@@ -1055,7 +1026,7 @@ void Session::note_pressure(Peer& p) {
   if (test_network().fixed_cadence) {
     return;
   }
-  double queue = p.rtt_ms >= 0 && p.min_rtt >= 0 ? p.rtt_ms - p.min_rtt : 0;
+  double queue = p.queue_ms;
   float q = p.tx_quality;
   int seen = (q < 0.5f || queue >= 500) ? 3 : (q < 0.75f || queue >= 250) ? 2 : (q < 0.9f || queue >= 100) ? 1 : 0;
   if (seen < p.pressure) {
@@ -1083,7 +1054,7 @@ void Session::log_net() const {
   for (auto* p : m_peers) {
     lg::info("[multiplayer] net player {} pressure {} tx {:.2f} rx {:.2f} queue {:.0f} sent {} B/s",
              m_mode == Mode::Host ? p->slot : 0, names[p->pressure], p->tx_quality, p->rx_quality,
-             p->rtt_ms >= 0 && p->min_rtt >= 0 ? p->rtt_ms - p->min_rtt : 0.0, p->sent_rate);
+             p->queue_ms, p->sent_rate);
   }
 }
 
@@ -1175,188 +1146,33 @@ size_t Session::take_blob(u8* out, size_t max) {
   return n;
 }
 
-// One datagram from `p`: an acknowledgement, a goodbye, or a fragment of a message, delivered to
-// handle_frame once complete (reliable ones in order).
-void Session::on_datagram(Peer& p, const u8* d, size_t n) {
-  u8 kind = d[1];
-  d += kHeader;
-  n -= kHeader;
-  if (kind == kAck) {
-    if (n >= 8) {
-      p.on_ack(get_u32(d), get_u32(d + 4));
-    }
-    return;
-  }
-  if (kind == kBye) {
-    drop(p, n ? std::string((const char*)d, std::min<size_t>(n, 64)) : "Connection closed");
-    return;
-  }
-  if (p.dead) {
-    return;  // refused or leaving: only acknowledgements still count
-  }
-  if (kind == kReliable && n >= 6) {
-    u32 seq = get_u32(d);
-    p.ack_due = true;
-    u32 ahead = seq - p.expect;
-    if ((s32)ahead < 0 || ahead >= 4 * kMaxWaiting) {
-      return;  // already delivered (its acknowledgement was lost), or nonsense
-    }
-    p.early.emplace(seq, std::vector<u8>(d + 4, d + n));
-    for (auto it = p.early.find(p.expect); it != p.early.end() && !p.dead;
-         it = p.early.find(p.expect)) {
-      std::vector<u8> frag = std::move(it->second);
-      p.early.erase(it);
-      p.expect++;
-      if (frag[0] == 0) {
-        p.assembly.clear();
-      }
-      p.assembly.insert(p.assembly.end(), frag.begin() + 2, frag.end());
-      if (frag[0] + 1 == frag[1]) {
-        if (!p.assembly.empty() && p.assembly.size() <= kMaxFrame) {
-          std::vector<u8> msg = std::move(p.assembly);
-          handle_frame(p, msg[0], msg.data() + 1, msg.size() - 1);
+// Every message waiting on our connections: handed to handle_frame, an unreliable one only when
+// newer than the last one of its lane (a late one arrives after a newer state).
+void Session::receive_all() {
+  gns()->RunCallbacks();
+  for (size_t i = 0; i < m_peers.size(); i++) {
+    Peer* p = m_peers[i];
+    ISteamNetworkingMessage* msgs[64];
+    int n;
+    while (!p->dead && p->conn != k_HSteamNetConnection_Invalid &&
+           (n = gns()->ReceiveMessagesOnConnection(p->conn, msgs, 64)) > 0) {
+      for (int k = 0; k < n; k++) {
+        auto* m = msgs[k];
+        const u8* d = (const u8*)m->m_pData;
+        size_t len = (size_t)m->m_cbSize;
+        u16 lane = m->m_idxLane;
+        bool fresh = lane >= kLaneCount || is_reliable_lane((Lane)lane) ||
+                     m->m_nMessageNumber > p->newest[lane];
+        if (lane < kLaneCount && !is_reliable_lane((Lane)lane) && fresh) {
+          p->newest[lane] = m->m_nMessageNumber;
         }
-        p.assembly.clear();
-      }
-    }
-    return;
-  }
-  if (kind == kUnreliable && n >= 4) {
-    u16 id = get_u16(d);
-    u8 index = d[2], count = d[3];
-    if (count == 0 || index >= count || count > kMaxFragments ||
-        (p.any_msg && (s16)(id - p.newest_msg) <= 0)) {
-      return;  // an older message than the last one delivered: a newer state is already here
-    }
-    std::vector<u8> msg;
-    if (count == 1) {
-      msg.assign(d + 4, d + n);
-    } else {
-      auto& part = p.partial[id];
-      if (part.parts.empty()) {
-        part.count = count;
-        part.parts.resize(count);
-      }
-      if (part.count != count) {
-        return;
-      }
-      part.parts[index].assign(d + 4, d + n);
-      part.got |= 1u << index;
-      if (part.got != (1u << count) - 1) {
-        while (p.partial.size() > 8) {
-          p.partial.erase(p.partial.begin());
+        if (fresh && len >= 1 && len <= kMaxFrame && !p->dead) {
+          p->last_recv = m_now;
+          handle_frame(*p, d[0], d + 1, len - 1);
         }
-        return;
-      }
-      for (auto& piece : part.parts) {
-        msg.insert(msg.end(), piece.begin(), piece.end());
+        m->Release();
       }
     }
-    p.newest_msg = id;
-    p.any_msg = true;
-    if (p.rx_count++ == 0) {
-      p.rx_first = id;
-    }
-    for (auto it = p.partial.begin(); it != p.partial.end();) {
-      it = (s16)(it->first - id) <= 0 ? p.partial.erase(it) : std::next(it);
-    }
-    if (!msg.empty() && msg.size() <= kMaxFrame) {
-      handle_frame(p, msg[0], msg.data() + 1, msg.size() - 1);
-    }
-  }
-}
-
-// The peer a datagram from `from` with connection id `conn` belongs to. The host makes one for a
-// client's first datagram (its HELLO, reliable seq 0), and a new one when a client of the same
-// address joins again (another id).
-Session::Peer* Session::peer_for(u32 ip, u16 port, u32 conn, const u8* d, size_t n) {
-  if (m_mode != Mode::Host) {
-    // a guest's only peer is the host, whose datagrams carry our connection id (a host with
-    // several addresses may answer from another one)
-    return !m_peers.empty() && m_peers[0]->conn == conn ? m_peers[0] : nullptr;
-  }
-  for (auto* p : m_peers) {
-    if (p->addr.sin_addr.s_addr == ip && p->addr.sin_port == port) {
-      if (p->conn == conn) {
-        return p;
-      }
-      drop(*p, "Connection closed");  // the same client joined again
-    }
-  }
-  bool hello = n >= kHeader + 6 && d[1] == kReliable && get_u32(d + kHeader) == 0;
-  size_t live = std::count_if(m_peers.begin(), m_peers.end(), [](Peer* p) { return !p->dead; });
-  if (!hello || live >= kMaxPeers) {
-    return nullptr;
-  }
-  auto* p = new Peer();
-  p->addr.sin_family = AF_INET;
-  p->addr.sin_addr.s_addr = ip;
-  p->addr.sin_port = port;
-  char text[INET_ADDRSTRLEN] = {};
-  inet_ntop(AF_INET, &p->addr.sin_addr, text, sizeof(text));
-  p->ip = text;
-  p->conn = conn;
-  p->last_recv = m_now;
-  m_peers.push_back(p);
-  if (m_banned.count(p->ip)) {
-    refuse(*p, "You are banned from this server");
-  }
-  return p;
-}
-
-// Read every datagram waiting on the socket (held a while under a test latency) and dispatch it.
-void Session::receive_all(double now) {
-  const auto& net = test_network();
-  double latency = net.latency, jitter = net.jitter, loss = net.loss;
-  u8 buf[2048];
-  while (m_sock != ~0ull) {
-    sockaddr_in from{};
-#ifdef _WIN32
-    int from_len = sizeof(from);
-#else
-    socklen_t from_len = sizeof(from);
-#endif
-    int n = recvfrom((sock_t)m_sock, (char*)buf, sizeof(buf), 0, (sockaddr*)&from, &from_len);
-    if (n < 0) {
-      int e = sock_error();
-      if (would_block(e)) {
-        break;
-      }
-      if (!conn_reset(e)) {
-        break;
-      }
-      // an earlier datagram went to a closed port
-      if (m_mode == Mode::Connecting) {
-        m_peers[0]->dead = true;
-        m_peers[0]->dead_reason = "Connection refused: is the server running?";
-      }
-      continue;
-    }
-    if (n < (int)kHeader || buf[0] != kMagic ||
-        (loss > 0 && std::rand() < loss / 100.0 * RAND_MAX)) {
-      continue;
-    }
-    if (latency > 0) {
-      double at = now + latency + jitter * (std::rand() / (double)RAND_MAX);
-      if (!m_held.empty()) {
-        at = std::max(at, m_held.back().at);  // in order
-      }
-      m_held.push_back({at, from.sin_addr.s_addr, from.sin_port, std::vector<u8>(buf, buf + n)});
-    } else {
-      dispatch_datagram(from.sin_addr.s_addr, from.sin_port, buf, n);
-    }
-  }
-  while (!m_held.empty() && m_held.front().at <= now) {
-    auto h = std::move(m_held.front());
-    m_held.pop_front();
-    dispatch_datagram(h.ip, h.port, h.bytes.data(), h.bytes.size());
-  }
-}
-
-void Session::dispatch_datagram(u32 ip, u16 port, const u8* d, size_t n) {
-  if (Peer* p = peer_for(ip, port, get_u32(d + 2), d, n)) {
-    p->last_recv = m_now;
-    on_datagram(*p, d, n);
   }
 }
 
@@ -1367,39 +1183,13 @@ void Session::update(PlayerState local, double now) {
   }
   m_frame++;
 
-  receive_all(now);
+  receive_all();
 
-  // Client: the host must welcome us in time.
-  if (m_mode == Mode::Connecting && m_local_slot < 0 && now - m_connect_start > kConnectTimeoutMs &&
-      !m_peers.empty() && !m_peers[0]->dead) {
-    m_peers[0]->dead = true;
-    m_peers[0]->dead_reason = "Connection timed out: is the server running?";
-  }
-
+  // Each peer's quality once a second (the host its guests, a guest the host).
   for (auto* p : m_peers) {
-    if (now - p->last_recv > kTimeoutMs) {
-      drop(*p, "Connection timed out");
-    }
-  }
-
-  // Ping every peer once a second (the host its guests, a guest the host).
-  for (auto* p : m_peers) {
-    if (!p->dead && ((m_mode == Mode::Host && p->slot >= 0) || m_mode == Mode::Client) &&
-        now >= p->next_ping) {
-      p->next_ping = now + kPingIntervalMs;
-      // this second: the share of its messages delivered, and the bytes we sent it
-      if (p->rx_count > 0) {
-        u32 span = (u32)(u16)(p->newest_msg - p->rx_first) + 1;
-        p->rx_quality = std::min(1.f, (float)p->rx_count / (float)span);
-      }
-      p->rx_count = 0;
-      p->sent_rate = p->sent_bytes;
-      p->sent_bytes = 0;
-      u8 ping[5];
-      u32 t = (u32)now;
-      memcpy(ping, &t, 4);
-      ping[4] = (u8)std::lround(p->rx_quality * 255.f);
-      p->queue(MSG_PING, ping, 5);
+    if (!p->dead && now >= p->next_status) {
+      p->next_status = now + kStatusIntervalMs;
+      read_status(*p);
     }
   }
 
@@ -1415,10 +1205,6 @@ void Session::update(PlayerState local, double now) {
         p->queue(MSG_STATE, &s, 1, &local, sizeof(local));
       }
     }
-  }
-
-  for (auto* p : m_peers) {
-    p->flush((sock_t)m_sock, now);
   }
 
   // Remove dead connections.
@@ -1437,17 +1223,14 @@ void Session::update(PlayerState local, double now) {
       lg::info("[multiplayer] player {} left: {}", p->slot, p->dead_reason);
       m_remotes[p->slot].clear();
       u8 s = (u8)p->slot;
-      p->slot = -1;  // free the slot now, even if the socket lingers
+      p->slot = -1;
       for (auto* o : m_peers) {
         if (o != p && o->slot >= 0) {
           o->queue(MSG_LEAVE, &s, 1);
         }
       }
     }
-    if (p->closing && now < p->close_at && !p->in_flight.empty()) {
-      i++;
-      continue;
-    }
+    p->close(kEndRefused, p->dead_reason);
     delete p;
     m_peers.erase(m_peers.begin() + i);
   }
@@ -1914,6 +1697,79 @@ Session& session() {
   return s;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Router port opening (himstan's PortMappingCoordinator, game/multiplayer/platform/nat/, ISC): a
+// host asks its router to forward its UDP port, through UPnP, else NAT-PMP (kmultiplayer_nat.cpp),
+// on a thread of its own (discovery takes seconds), renews it every hour and removes it once the
+// server stops. The thread is detached: stopping never waits for a discovery under way, which
+// removes its mapping when it ends. Off in automated tests (MP_TEST_SCRIPT): no router touched.
+// ---------------------------------------------------------------------------------------------
+
+struct PortMapping {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool stop = false;
+  std::string address;  // "ip:port" seen from the internet, once the router opened it
+};
+
+static std::shared_ptr<PortMapping>& port_mapping() {
+  static std::shared_ptr<PortMapping> current;
+  return current;
+}
+
+static void stop_port_mapping() {
+  if (auto m = std::exchange(port_mapping(), nullptr)) {
+    std::lock_guard lock(m->mutex);
+    m->stop = true;
+    m->cv.notify_all();
+  }
+}
+
+static void start_port_mapping(u16 port) {
+  stop_port_mapping();
+  if (std::getenv("MP_TEST_SCRIPT")) {
+    return;
+  }
+  auto m = std::make_shared<PortMapping>();
+  port_mapping() = m;
+  std::thread([m, port] {
+    auto mapping = open_port_mapping(port, port);
+    bool usable =
+        mapping.success && !mapping.external_ip.empty() && !is_private_ipv4(mapping.external_ip);
+    if (!usable) {
+      lg::warn("[multiplayer] router port {} not opened: {}", port,
+               mapping.error.empty() ? "the router answered with a private address" : mapping.error);
+      if (mapping.success) {
+        close_udp_port_mapping(mapping, port);
+      }
+      return;
+    }
+    std::unique_lock lock(m->mutex);
+    m->address = fmt::format("{}:{}", mapping.external_ip, mapping.external_port);
+    lg::info("[multiplayer] router port opened: other players join {}", m->address);
+    while (!m->cv.wait_for(lock, std::chrono::hours(1), [&] { return m->stop; })) {
+      lock.unlock();
+      auto error = refresh_udp_port_mapping(mapping, port);
+      if (!error.empty()) {
+        lg::warn("[multiplayer] router port {} not renewed: {}", port, error);
+      }
+      lock.lock();
+    }
+    lock.unlock();
+    close_udp_port_mapping(mapping, port);
+  }).detach();
+}
+
+// The address the router opened for our server ("ip:port"), empty while none.
+static std::string public_address() {
+  auto m = port_mapping();
+  if (!m) {
+    return {};
+  }
+  std::lock_guard lock(m->mutex);
+  return m->address;
+}
+
 u64 Session::slot_uid(int slot) const {
   if (slot == m_local_slot) {
     return player_uid();
@@ -2189,7 +2045,14 @@ fs::path config_path() {
 
 // (pc-mp-host address max-players) -> #t when the server is listening.
 u64 pc_mp_host(u32 address, u32 max_players) {
-  return to_symbol(mp::session().host(goal_string(address), (int)max_players));
+  std::string text = goal_string(address);
+  bool ok = mp::session().host(text, (int)max_players);
+  std::string ip;
+  int port;
+  if (ok && mp::parse_address(text, &ip, &port)) {
+    mp::start_port_mapping((u16)port);
+  }
+  return to_symbol(ok);
 }
 
 // (pc-mp-join address) -> #t when the connection attempt started.
@@ -2199,7 +2062,22 @@ u64 pc_mp_join(u32 address) {
 
 // (pc-mp-leave) closes the session.
 void pc_mp_leave() {
+  mp::stop_port_mapping();
   mp::session().leave("Disconnected");
+}
+
+// (pc-mp-public-address dest) -> #t when the router opened our server's port: its internet
+// address ("ip:port") copied into dest.
+u64 pc_mp_public_address(u32 dest) {
+  std::string address = mp::public_address();
+  if (address.empty() || !dest) {
+    return to_symbol(false);
+  }
+  auto* str = Ptr<String>(dest).c();
+  size_t n = std::min<size_t>(address.size(), str->len > 0 ? str->len - 1 : 0);
+  memcpy(str->data(), address.data(), n);
+  str->data()[n] = 0;
+  return to_symbol(true);
 }
 
 // (pc-mp-update local-state) pumps the network once and returns the mode (mp-mode).
@@ -2943,6 +2821,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-host", (void*)pc_mp_host);
   make_function_symbol_from_c("pc-mp-join", (void*)pc_mp_join);
   make_function_symbol_from_c("pc-mp-leave", (void*)pc_mp_leave);
+  make_function_symbol_from_c("pc-mp-public-address", (void*)pc_mp_public_address);
   make_function_symbol_from_c("pc-mp-update", (void*)pc_mp_update);
   make_function_symbol_from_c("pc-mp-get-player", (void*)pc_mp_get_player);
   make_function_symbol_from_c("pc-mp-send-event", (void*)pc_mp_send_event);
