@@ -493,10 +493,14 @@ void extract(const Input& in,
   [[maybe_unused]] int mesh_count = 0;
   [[maybe_unused]] int prim_count = 0;
   int suspicious_faces = 0;
+  // the faces of the meshes whose extras say double_sided: they collide from both sides
+  std::vector<bool> two_sided;
 
   for (const auto& n : all_nodes) {
     const auto& node = model.nodes[n.node_idx];
     PatResult mesh_default_collide = custom_props_to_pat(node.extras, node.name);
+    const bool mesh_two_sided =
+        node.extras.Has("double_sided") && node.extras.Get("double_sided").Get<int>();
     if (node.mesh >= 0) {
       const auto& mesh = model.meshes[node.mesh];
       mesh_count++;
@@ -562,26 +566,30 @@ void extract(const Input& in,
           }
           face.pat = pat.pat;
           out.faces.push_back(face);
+          two_sided.push_back(mesh_two_sided);
         }
       }
     }
   }
 
   std::vector<jak1::CollideFace> fixed_faces;
+  std::vector<bool> fixed_two_sided;
   int fix_count = 0;
-  for (auto& face : out.faces) {
-    auto try_fix = subdivide_face_if_needed(face);
+  for (size_t i = 0; i < out.faces.size(); i++) {
+    auto try_fix = subdivide_face_if_needed(out.faces[i]);
     if (try_fix) {
       fix_count++;
       fixed_faces.insert(fixed_faces.end(), try_fix->begin(), try_fix->end());
+      fixed_two_sided.insert(fixed_two_sided.end(), try_fix->size(), two_sided[i]);
     } else {
-      fixed_faces.push_back(face);
+      fixed_faces.push_back(out.faces[i]);
+      fixed_two_sided.push_back(two_sided[i]);
     }
   }
 
-  if (in.double_sided_collide) {
-    size_t os = fixed_faces.size();
-    for (size_t i = 0; i < os; i++) {
+  size_t os = fixed_faces.size();
+  for (size_t i = 0; i < os; i++) {
+    if (in.double_sided_collide || fixed_two_sided[i]) {
       auto f0 = fixed_faces.at(i);
       std::swap(f0.v[0], f0.v[1]);
       fixed_faces.push_back(f0);

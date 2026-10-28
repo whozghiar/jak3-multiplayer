@@ -737,6 +737,25 @@ void setup_alpha_from_material(const tinygltf::Material& material, DrawMode* mod
     mode->enable_ab();
     mode->set_alpha_blend(DrawMode::AlphaBlend::SRC_DST_SRC_DST);
     mode->set_depth_write_enable(false);
+    // extras.og_blend (Jak Level Editor): the PS2 blend of the surface (glows and light
+    // shafts add to what is behind them), and its texels under alphaCutoff dropped, as the PS2
+    // draws them
+    if (material.extras.Has("og_blend") && material.extras.Get("og_blend").IsString()) {
+      const auto& blend = material.extras.Get("og_blend").Get<std::string>();
+      if (blend == "add") {
+        mode->set_alpha_blend(DrawMode::AlphaBlend::SRC_0_FIX_DST);
+      } else if (blend == "add_alpha") {
+        mode->set_alpha_blend(DrawMode::AlphaBlend::SRC_0_SRC_DST);
+      } else if (blend == "subtract") {
+        mode->set_alpha_blend(DrawMode::AlphaBlend::ZERO_SRC_SRC_DST);
+      } else if (blend == "half") {
+        mode->set_alpha_blend(DrawMode::AlphaBlend::SRC_DST_FIX_DST);
+      }
+      mode->enable_at();
+      mode->set_alpha_test(DrawMode::AlphaTest::GEQUAL);
+      mode->set_alpha_fail(GsTest::AlphaFail::KEEP);
+      mode->set_aref(material.alphaCutoff * 127);
+    }
   } else {
     lg::die("Unknown GLTF alphaMode {}", material.alphaMode);
   }

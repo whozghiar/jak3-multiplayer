@@ -419321,24 +419321,24 @@
       "type": "external"
     },
     {
-      "id": "d_developpement_opengoal_dev_jak_project_custom_assets_blender_plugins_init_py",
-      "label": "d_developpement_opengoal_dev_jak_project_custom_assets_blender_plugins_init_py",
+      "id": "custom_assets_blender_plugins_init_py",
+      "label": "custom_assets_blender_plugins_init_py",
       "community": 402,
       "community_name": "custom_assets/blender_plugins: gltf2_blender_extract.py",
       "external": true,
       "file_type": "concept",
-      "norm_label": "d_developpement_opengoal_dev_jak_project_custom_assets_blender_plugins_init_py",
+      "norm_label": "custom_assets_blender_plugins_init_py",
       "source_file": "",
       "type": "external"
     },
     {
-      "id": "d_developpement_opengoal_dev_jak_project_io_com_gltf2_io_debug_py",
-      "label": "d_developpement_opengoal_dev_jak_project_io_com_gltf2_io_debug_py",
+      "id": "io_com_gltf2_io_debug_py",
+      "label": "io_com_gltf2_io_debug_py",
       "community": 402,
       "community_name": "custom_assets/blender_plugins: gltf2_blender_extract.py",
       "external": true,
       "file_type": "concept",
-      "norm_label": "d_developpement_opengoal_dev_jak_project_io_com_gltf2_io_debug_py",
+      "norm_label": "io_com_gltf2_io_debug_py",
       "source_file": "",
       "type": "external"
     },
@@ -759029,7 +759029,7 @@
     },
     {
       "source": "custom_assets_blender_plugins_gltf2_blender_extract",
-      "target": "d_developpement_opengoal_dev_jak_project_custom_assets_blender_plugins_init_py",
+      "target": "custom_assets_blender_plugins_init_py",
       "relation": "imports_from",
       "_origin": "ast",
       "confidence": "EXTRACTED",
@@ -759041,7 +759041,7 @@
     },
     {
       "source": "custom_assets_blender_plugins_gltf2_blender_extract",
-      "target": "d_developpement_opengoal_dev_jak_project_io_com_gltf2_io_debug_py",
+      "target": "io_com_gltf2_io_debug_py",
       "relation": "imports_from",
       "_origin": "ast",
       "confidence": "EXTRACTED",

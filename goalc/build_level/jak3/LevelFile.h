@@ -14,6 +14,8 @@
 #include "goalc/build_level/jak3/FileInfo.h"
 #include "goalc/build_level/jak3/Region.h"
 
+#include "third-party/json.hpp"
+
 namespace jak3 {
 struct VisibilityString {
   std::vector<u8> bytes;
@@ -130,7 +132,9 @@ struct LevelFile {
   //  (light-hash             light-hash                       :offset-assert 176)
   LightHash light_hash;
   //  (nav-meshes             (array entity-nav-mesh)          :offset-assert 180)
-  std::vector<EntityNavMesh> entity_nav_meshes;
+  // the level's nav meshes, as a relocatable blob of entity-nav-mesh objects (the "nav_data" of
+  // the level: words, pointers, types, symbols, empty_lists, roots "nav-mesh-<n>"); null for none
+  nlohmann::json nav_data;
   //  (actor-groups           (array actor-group)              :offset-assert 184)
   std::vector<ActorGroup> actor_groups;
   //  (region-trees           (array drawable-tree-region-prim) :offset-assert 188)

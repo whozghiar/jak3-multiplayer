@@ -1,5 +1,9 @@
 #include "LevelFile.h"
 
+#include <algorithm>
+#include <map>
+#include <set>
+
 #include "goalc/data_compiler/DataObjectGenerator.h"
 
 namespace jak3 {
@@ -57,6 +61,60 @@ size_t DrawableTreeArray::add_to_object_file(DataObjectGenerator& gen) const {
   return result;
 }
 
+// The nav meshes of the level: entity-nav-mesh objects (their res tags, nav-mesh, route table,
+// polygon grid and polygons) laid out as a relocatable blob, as the decompiler writes the game's
+// and level editors make them. The blob is copied word by word (its type tags, symbols and empty
+// lists linked, its pointers moved by where it lands), then the array of its roots.
+size_t generate_nav_mesh_array(DataObjectGenerator& gen, const nlohmann::json& blob) {
+  std::map<int, std::string> types, symbols;
+  std::set<int> empty_lists;
+  for (const auto& t : blob.value("types", nlohmann::json::array())) {
+    types[t.at(0).get<int>()] = t.at(1).get<std::string>();
+  }
+  for (const auto& s : blob.value("symbols", nlohmann::json::array())) {
+    symbols[s.at(0).get<int>()] = s.at(1).get<std::string>();
+  }
+  for (const auto& l : blob.value("empty_lists", nlohmann::json::array())) {
+    empty_lists.insert(l.is_array() ? l.at(0).get<int>() : l.get<int>());
+  }
+  const auto& words = blob.at("words");
+  gen.align(4);
+  const int base_word = gen.words();
+  const int base_byte = base_word * 4;
+  for (int i = 0; i < (int)words.size(); i++) {
+    if (types.count(i)) {
+      gen.add_type_tag(types.at(i));
+    } else if (symbols.count(i)) {
+      gen.add_symbol_link(symbols.at(i));
+    } else if (empty_lists.count(i)) {
+      gen.add_empty_list();
+    } else {
+      gen.add_word(words.at(i).get<u32>());
+    }
+  }
+  for (const auto& p : blob.value("pointers", nlohmann::json::array())) {
+    gen.link_word_to_byte(base_word + p.at(0).get<int>(), base_byte + p.at(1).get<int>());
+  }
+  // the roots in their order: nav-mesh-0, nav-mesh-1...
+  std::vector<std::pair<int, int>> roots;
+  for (const auto& [name, at] : blob.at("roots").items()) {
+    if (name.rfind("nav-mesh-", 0) == 0) {
+      roots.push_back({std::stoi(name.substr(9)), at.get<int>()});
+    }
+  }
+  std::sort(roots.begin(), roots.end());
+  gen.align_to_basic();
+  gen.add_type_tag("array");
+  size_t result = gen.current_offset_bytes();
+  gen.add_word(roots.size());
+  gen.add_word(roots.size());
+  gen.add_type_tag("entity-nav-mesh");
+  for (const auto& [index, at] : roots) {
+    gen.link_word_to_byte(gen.add_word(0), base_byte + at);
+  }
+  return result;
+}
+
 size_t generate_u32_array(const std::vector<u32>& array, DataObjectGenerator& gen) {
   gen.align(4);
   size_t result = gen.current_offset_bytes();
@@ -82,6 +140,19 @@ std::vector<u8> LevelFile::save_object_file() {
   //(bsphere                vector :inline                   :offset-assert  16)
   //(all-visible-list       (pointer uint8)                  :offset-assert  32)
   //(visible-list-length    int32                            :offset-assert  36)
+  // a custom level has no visibility data: the game copies this list in the level's vis-bits (2048
+  // bytes), so everything is listed visible. Without it, with the PC setting "PS2 actor vis", no
+  // actor of the level is ever born (entity.gc asks is-object-visible?).
+  {
+    constexpr int kVisBytes = 2048;
+    gen.align(4);  // copied by quadwords
+    const size_t list = gen.current_offset_bytes();
+    for (int i = 0; i < kVisBytes / 4; i++) {
+      gen.add_word(0xffffffff);
+    }
+    gen.link_word_to_byte(32 / 4, list);
+    gen.set_word(36 / 4, kVisBytes);
+  }
   //(drawable-trees         drawable-tree-array              :offset-assert  40)
   gen.link_word_to_byte(40 / 4, drawable_trees.add_to_object_file(gen));
   //(pat                    pointer                          :offset-assert  44)
@@ -113,6 +184,9 @@ std::vector<u8> LevelFile::save_object_file() {
   gen.link_word_to_byte(172 / 4, generate_u32_array(actor_birth_order, gen));
   //(light-hash             light-hash                       :offset-assert 176)
   //(nav-meshes             (array entity-nav-mesh)          :offset-assert 180)
+  if (!nav_data.is_null()) {
+    gen.link_word_to_byte(180 / 4, generate_nav_mesh_array(gen, nav_data));
+  }
   //(actor-groups           (array actor-group)              :offset-assert 184)
   gen.link_word_to_byte(184 / 4, generate_actor_group_array(gen, actor_groups));
   //(region-trees           (array drawable-tree-region-prim) :offset-assert 188)

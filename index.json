@@ -1,11 +1,11 @@
 {
   "schemaVersion": "1.0.0",
   "sourceName": "Jak 3 Multiplayer Source",
-  "lastUpdated": "2026-10-16T14:28:03Z",
+  "lastUpdated": "2026-10-28T17:07:04Z",
   "mods": {
     "multiplayer": {
       "displayName": "Jak 3 Multiplayer",
-      "description": "A different way to play multiplayer (See FUNKY_DELIRE one)",
+      "description": "Jak 3 online: host or join a game from the title screen, meet in a lobby, and play together as Jak or Daxter: free roam at the end of the game with everything unlocked, or the story as a Jak and Daxter co-op duo with its own multiplayer save.",
       "authors": [
         "whozghiar"
       ],

@@ -65,12 +65,20 @@ bool run_build_level(const std::string& input_file,
   }
   // cameras
   // nodes
-  // regions
+  // regions. The region array is written even without regions, and reads the actors and actor
+  // groups then too: set them always (else it reads a pointer never set)
+  file.region_array.entities = &file.actors;
+  file.region_array.actor_groups = &file.actor_groups;
   if (level_json.contains("region_trees") && !level_json.at("region_trees").empty()) {
-    file.region_array.entities = &file.actors;
-    file.region_array.actor_groups = &file.actor_groups;
     fill_region_trees(file.region_trees, file.regions, file.region_array,
                       level_json.at("region_trees"), level_json.value("base_region_id", 0));
+  }
+  // nav meshes: a blob of entity-nav-mesh objects (see LevelFile.h)
+  if (level_json.contains("nav_data")) {
+    const auto nav_path = level_json.at("nav_data").get<std::string>();
+    file.nav_data = parse_commented_json(
+        file_util::read_text_file(file_util::get_file_path({nav_path})), nav_path);
+    lg::info("Nav meshes: {} from {}", file.nav_data.at("roots").size(), nav_path);
   }
   // subdivs
   // actor birth
@@ -83,6 +91,12 @@ bool run_build_level(const std::string& input_file,
 
   // TFRAG
   file.drawable_trees.tfrags.emplace_back("drawable-tree-tfrag", "drawable-inline-array-tfrag");
+  // the translucent surfaces (glass, water, glows) are in a tree of their own, which the game only
+  // draws when the level has one (drawable-tree-tfrag-trans: it draws the PC level's TRANS trees)
+  if (!mesh_extract_out.tfrag.trans_strip_draws.empty()) {
+    file.drawable_trees.tfrags.emplace_back("drawable-tree-tfrag-trans",
+                                            "drawable-inline-array-tfrag-trans");
+  }
   tfrag_from_gltf(mesh_extract_out.tfrag, pc_level.tfrag_trees[0]);
 
   // TIE

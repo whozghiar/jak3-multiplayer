@@ -66,7 +66,8 @@ bool triangle_bounding_box(const BoundingBox& bbox_w,
   // first, translate everything so the center of the bounding box is at the origin
   const math::Vector3f box_center = (bbox_w.max + bbox_w.min) / 2.f;
 
-  const math::Vector3f half_side_length = bbox_w.max - box_center;
+  // a little larger: a triangle on a side of the box still meets it, whatever the rounding
+  const math::Vector3f half_side_length = bbox_w.max - box_center + math::Vector3f(1.f, 1.f, 1.f);
   const math::Vector3f a = a_w - box_center;
   const math::Vector3f b = b_w - box_center;
   const math::Vector3f c = c_w - box_center;
@@ -547,9 +548,10 @@ CollideHash build_grid_for_main_hash(std::vector<CollideFragment>&& frags) {
   // for the cell size.
   constexpr float kTargetCellSize = 30000;
 
-  int grid_dimension[3] = {(int)(box_size[0] / kTargetCellSize),
-                           (int)(box_size[1] / kTargetCellSize),
-                           (int)(box_size[2] / kTargetCellSize)};
+  // (one cell at least: a level flatter than a cell along an axis would get none)
+  int grid_dimension[3] = {std::max(1, (int)(box_size[0] / kTargetCellSize)),
+                           std::max(1, (int)(box_size[1] / kTargetCellSize)),
+                           std::max(1, (int)(box_size[2] / kTargetCellSize))};
   for (auto& x : grid_dimension) {
     if (x >= UINT8_MAX) {
       x = UINT8_MAX;
@@ -666,6 +668,14 @@ jak3::CollideFragment build_grid_for_frag(const std::vector<jak3::CollideFace>& 
   BBoxBuilder bbox;
   for (auto i : frag.tri_indices) {
     bbox.add_tri(tris[i]);
+  }
+  // A fragment of flat triangles (a floor) has a box without thickness: its cells would have none,
+  // its axis scale would be infinite, and the triangle-box test would leave some of its triangles
+  // in no cell (lost for the game: Jak falls through the floor). Give the box some thickness.
+  constexpr float kBoxMargin = 64.f;  // game units: 1/64 m on every side
+  for (int i = 0; i < 3; i++) {
+    bbox.box.min[i] -= kBoxMargin;
+    bbox.box.max[i] += kBoxMargin;
   }
 
   // build vertex, poly, pat tables:

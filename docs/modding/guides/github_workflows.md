@@ -13,9 +13,10 @@ day-to-day workflow around them is in [`repository_workflow.md`](repository_work
 4. [Source lint (`lint.yml`)](#4-source-lint-lintyml)
 5. [Build check (`build.yml`)](#5-build-check-buildyml)
 6. [Release (`release.yml`)](#6-release-releaseyml)
-7. [Mod suggestion triage (`mod-suggestion-triage.yml`)](#7-mod-suggestion-triage-mod-suggestion-triageyml)
-8. [Global catalog (`sync-global-catalog.yml`)](#8-global-catalog-sync-global-catalogyml)
-9. [Quick reference](#9-quick-reference)
+7. [Tooling release (`release-tooling.yml`)](#7-tooling-release-release-toolingyml)
+8. [Mod suggestion triage (`mod-suggestion-triage.yml`)](#8-mod-suggestion-triage-mod-suggestion-triageyml)
+9. [Global catalog (`sync-global-catalog.yml`)](#9-global-catalog-sync-global-catalogyml)
+10. [Quick reference](#10-quick-reference)
 
 ---
 
@@ -29,6 +30,7 @@ day-to-day workflow around them is in [`repository_workflow.md`](repository_work
         |  merged by sync-upstream.yaml
         v
 [<owner>/jak-project] master-dev    modding base: engine patches, tooling, Mods menu
+        |  by hand: release-tooling.yml --> vX.Y.Z tooling release (launcher, other tools)
         |
         +--> mod repositories, <owner>/<game>-mod-<slug>  (task modding-new-mod)
                 on demand: task modding-sync-all, or task modding-sync-branch -- --push
@@ -47,7 +49,8 @@ picks up `master-dev` only when someone syncs it. The old mod branches are archi
 Workflows that push, publish or spend real CI time start with an explicit actor check (an
 `authorize` job, or an early step) instead of relying only on GitHub's write-access rule:
 
-- **Repository owner only:** `sync-upstream.yaml`, `build.yml`, `release.yml`.
+- **Repository owner only:** `sync-upstream.yaml`, `build.yml`, `release.yml`,
+  `release-tooling.yml`.
 - **Owner, or GitHub's own automation** (`github-actions[bot]`): `sync-global-catalog.yml`.
 
 An unauthorized run fails at once with an `::error::` naming who triggered it.
@@ -61,7 +64,8 @@ Open by design:
   (`contents: read`).
 
 **Mother repository guard.** The workflows that only make sense in the mother repository —
-`sync-upstream.yaml`, `sync-global-catalog.yml` and `mod-suggestion-triage.yml` — carry
+`sync-upstream.yaml`, `release-tooling.yml`, `sync-global-catalog.yml` and
+`mod-suggestion-triage.yml` — carry
 `if: endsWith(github.repository, '/jak-project')`: they run in the mother repository and in any
 fork of it that keeps the name, never in a mod repository. A mod repository also drops those
 files when it syncs, and keeps only `release.yml`, `lint.yml` and `build.yml`
@@ -74,7 +78,9 @@ files when it syncs, and keeps only `release.yml`, `lint.yml` and `build.yml`
   `master-dev`. In a fork made without `master`, it starts from upstream directly.
 - **Keeps the fork's own CI:** upstream's workflows and issue templates are pruned during the
   merge. Only the workflows in its `allowed_workflows` list and the `mod-bug-report.yml`,
-  `mod-suggestion.yml` and `config.yml` issue templates stay.
+  `mod-suggestion.yml` and `config.yml` issue templates stay. Upstream's `AI_POLICY.md`,
+  `.github/CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE/` are pruned too.
+- **New workflow:** add it to `allowed_workflows`, or the next sync deletes it.
 - **Stops on a real code conflict:** the merge is aborted with a warning; `master-dev` is left
   untouched until someone merges by hand.
 - Pushing upstream workflow updates to `master` needs a `GH_PAT` secret with `repo` and
@@ -113,10 +119,32 @@ files when it syncs, and keeps only `release.yml`, `lint.yml` and `build.yml`
   - tags the release `<slug>-vX.Y.Z`. In a mod repository, the slug and game come from its
     `index.json` (else from its `<game>-mod-<slug>` name), so the launcher keeps the same
     catalog key.
-- **Catalog:** the global catalog lists the release at its next daily run (section 8).
+- **Catalog:** the global catalog lists the release at its next daily run (section 9).
 - **Permissions:** `contents: read` by default; only the `publish` job gets `contents: write`.
 
-## 7. Mod suggestion triage (`mod-suggestion-triage.yml`)
+## 7. Tooling release (`release-tooling.yml`)
+
+- **Runs:** by hand only, owner only, mother repository only, usually from `master-dev`, with
+  the inputs `version` (e.g. `0.3.9`, no leading `v`) and `prerelease`. It refuses a version
+  whose tag `vX.Y.Z` already exists.
+- **Does:** builds `gk`, `goalc`, `extractor` and `lsp` for Windows (Clang-CL, static) and
+  Linux (Clang, static), packages them with `.github/scripts/releases/extract_build_*.sh`, and
+  publishes the release `vX.Y.Z`. The tag is created only once both builds succeed, and each
+  build tags its own checkout first, so the binaries report `vX.Y.Z` as their version.
+- **Assets:** the names and archive layout of `open-goal/jak-project` releases, so the OpenGOAL
+  Launcher and other tools can point at this repository instead of upstream:
+
+  | Asset | Content |
+  | :--- | :--- |
+  | `opengoal-windows-vX.Y.Z.zip` | `gk.exe`, `goalc.exe`, `extractor.exe`, `data/` |
+  | `opengoal-linux-vX.Y.Z.tar.gz` | `gk`, `goalc`, `extractor`, `data/` |
+  | `opengoal-lsp-windows-vX.Y.Z.exe` | OpenGOAL language server |
+  | `opengoal-lsp-linux-vX.Y.Z.bin` | OpenGOAL language server |
+
+- **Not built:** macOS. Upstream also runs the unit tests; this workflow only builds.
+- **Catalog:** never listed, since the global catalog ignores the mother repository's releases.
+
+## 8. Mod suggestion triage (`mod-suggestion-triage.yml`)
 
 - **Runs:** when an issue made with the "Mod Suggestion" form (`mod-suggestion.yml`) is opened
   or edited. Mother repository only: suggestions for new mods are filed here.
@@ -127,7 +155,7 @@ files when it syncs, and keeps only `release.yml`, `lint.yml` and `build.yml`
 Bug reports go to each mod's own repository, through the generic `mod-bug-report.yml` form it
 inherits.
 
-## 8. Global catalog (`sync-global-catalog.yml`)
+## 9. Global catalog (`sync-global-catalog.yml`)
 
 - **Runs:** daily at 10:30 UTC, or by hand from the Actions tab to list a new release at once.
   Owner or GitHub's automation only.
@@ -150,7 +178,7 @@ inherits.
   `https://raw.githubusercontent.com/<owner>/jak-project/master-dev/index.json`, and get every
   published mod and texture pack.
 
-## 9. Quick reference
+## 10. Quick reference
 
 | Workflow | Trigger | Who | Runs in mod repositories | Outcome |
 | :--- | :--- | :--- | :--- | :--- |
@@ -158,5 +186,6 @@ inherits.
 | `lint.yml` | Push, dispatch | Write access | Yes | Fast source checks |
 | `build.yml` | Dispatch | Owner | Yes | Windows and Linux compile check, 3-day artifacts |
 | `release.yml` | Dispatch | Owner | Yes | Builds, packages and publishes a release, updates the mod's `index.json` |
+| `release-tooling.yml` | Dispatch | Owner | No | Builds and publishes the tooling release `vX.Y.Z` in upstream's format |
 | `mod-suggestion-triage.yml` | Issues opened or edited | Anyone | No | Labels mod suggestions |
 | `sync-global-catalog.yml` | Daily 10:30 UTC, dispatch | Owner or automation | No | Rebuilds the global `index.json` on `master-dev` from each mod repository's latest release |
