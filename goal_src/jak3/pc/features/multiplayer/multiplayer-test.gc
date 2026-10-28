@@ -18,6 +18,7 @@
 ;;   wait-pause <0|1> | wait-resume                          the script waits: the game paused by the host (or not); its resume countdown
 ;;   wait-driving <slot>                                     the script waits: that player drives a vehicle (for 2 s)
 ;;   wait-scene | log-skip                                   the script waits: a cutscene plays here; the vote to skip it
+;;   wait-vote                                               the script waits: our answer to another player's mission is wanted
 ;;   beam-at-host <dx> <dz> | goto-beam | log-beams          a test waypoint near the host; stand at it; waypoints held
 ;;   race-gate | log-race                                    a race start of a test (waits for every player aboard); races
 ;;   continue <continue-point>                               go to a continue point
@@ -2808,6 +2809,11 @@
                    )
            )
          )
+        ((string= cmd "wait-vote")
+         ;; the script waits until another player's mission asks our answer (D-pad up / down)
+         (set! (-> *mp-test-wait* kind) 'vote)
+         (pc-mp-test-pause #t)
+         )
         ((string= cmd "wait-scene")
          ;; the script waits until a cutscene that can be skipped plays here
          (set! (-> *mp-test-wait* kind) 'scene)
@@ -3853,6 +3859,9 @@
        )
       (('scene)
        (if (mp-skippable-scene) #t #f)
+       )
+      (('vote)
+       (and (= (-> *mp-pull* role) 2) (-> *mp-pull* vote?))
        )
       (('driving)
        (let ((st (mp-remote-state (-> w slot))))

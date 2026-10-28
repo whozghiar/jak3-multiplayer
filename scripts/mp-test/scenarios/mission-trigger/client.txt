@@ -1,6 +1,6 @@
 # A mission started by talking to whoever gives it, guest side: joins the host at Kleiver, goes to
-# Spargus's doors; the host's talk holds the intro: the guest is brought next to the host, both
-# watch it (both ask to skip it), and its own hunt's task manager runs.
+# Spargus's doors; the host's talk holds the intro and asks the guest, which accepts (D-pad up): it
+# is brought next to the host, both watch it (both ask to skip it), and its own hunt runs.
 1 enable
 1 name Guest
 1 color 2
@@ -21,7 +21,10 @@
 68 continue wasdoors-city
 73 log-me
 74 log-state task-manager-kanga-lizard
-76 wait-scene
+75 wait-vote
+76.5 screenshot vote
+77 press up 100
+78 wait-scene
 82 screenshot intro-guest
 84 press triangle 100
 85 log-skip

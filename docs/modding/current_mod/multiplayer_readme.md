@@ -1227,12 +1227,16 @@ player"):
 
 - **The vote.** Our scene player starting such a scene (`mp-pull-start` from `scene-player-init`,
   `mp-mission-intro-node`: the scene of an open node that is not a challenge's) holds it in its
-  wait loop (`mp-scene-hold?`, one line in `engine/scene/scene.gc`) and tells the others
-  (`mission-vote`, `mp-pull-msg` propose). The mission goes on with the yes of at least half of the
-  players, the starter's included: with co-op's two players, the starter's own, decided at once,
-  and no question asked. With three players or more, the others answer (D-pad up yes, D-pad down
-  no, 8 s of silence is a yes, `#x15ac`); a vote lost releases the starter's player and drops its
-  scene player: the mission does not start.
+  wait loop (`mp-scene-hold?`, one line in `engine/scene/scene.gc`) and asks the others
+  (`mission-vote`, `mp-pull-msg` propose): "Host starts a mission: D-pad up to join, D-pad down to
+  decline (15)" (`#x15ac`; D-pad up and down are taken from the pad before the game reads them,
+  `mp-pull-input`). The mission goes on when at least half of the other players accept: with
+  co-op's two players, the other one, so both players accept it. A no, or no answer within 15 s,
+  counts against it. Meanwhile the starter reads "Waiting for the other players to accept the
+  mission: 0/1 (12)" (`#x15ad`). Declined, the starter's player is released
+  (`process-release?`) and its scene player dropped (`deactivate`, not `'abort`, which would run
+  the scene's last commands and close the introduction): the mission does not start ("The mission
+  was declined"), and its giver can be talked to again.
 - **Everyone there.** Once it passed, every other player goes next to the starter
   (`*mp-request-teleport*`, through the starter's continue point when far) and says it is ready
   once the scene is loaded there (`scene-lookup`) and it stands within 40 m. Meanwhile the
@@ -1719,6 +1723,7 @@ A script line is `<seconds> <command>`:
 | `goto-float`, `log-float` | Stand on the nearest floating platform (`rigid-body-platform`, volcano); print the one nearest to player 0 (guest) or to us (host): height, tilt, weight messages sent, states followed, stamped with the host's clock. |
 | `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, whether it waits for a teammate (`door hold`, 4.34), and the elevator trips sent and shown. |
 | `goto-door-at <meters>` | Stand that far in front of the nearest door, along its axis (negative: behind it). |
+| `wait-vote` | The script waits until another player's mission asks our answer (then `press up` or `press down`). |
 | `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded (`art-heap #t`: the art heap is in its memory), the art heap and the art groups loaded alone, and the cutscenes sent, shown and playing. |
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load the art of distant players' objects (default 1); 0 for a counter-test. |
@@ -1981,7 +1986,8 @@ checks): every check passed, no crash; the 5 unit tests pass. Two scenarios run 
 | `mission-start` | A mission started by one player | Co-op at the arena training; the guest goes to Spargus's doors; the host's mission manager starts again: the guest is told, taken next to the host, and its own manager runs; 7 checks. |
 | `race-board` (rewritten) | Own vehicles | The guest on foot gets a turtle; L1 + triangle at the host's turtle does not ride along, the start waits (1/2) until the guest drives again; Daxter's triangle at the driving host gives no shoulder; he gets a turtle of his own and drives it; 10 checks. |
 | `race-finish`, `race-finish-win` | Kleiver's race to the finish, one race | Co-op from the lobby; the guest takes slot 3 on both machines (the host slot 4); once the race runs, the racers' AI drives each player's turtle (`race-autopilot`) for the 3 laps. Both finish behind racers (the host 4th, the guest 5th on both screens): the host's verdict lost, on both machines. With the host's racers stopped (`race-stop-racers`): the host finishes first, the guest second, each waits for the verdict ("our result waits for the host's verdict"): won on both machines; 8 checks each. Before the `wvehicle-race.gc` hook both machines crashed at the start (the racers' AI read the puppet's rigid body). |
-| `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro waits ("vote #f": the host is half of two players); the guest is told, taken next to the host, says it is ready; the intro plays on both machines (the guest's Kleiver started it as the guest arrived: "plays here with player 0"), both ask to skip it, the hunt's manager starts on both; 9 checks. A guest ready while its own move was under way (a continue point) was ready too early: it now waits for its move to end. |
+| `mission-decline` | A mission declined | As `mission-trigger`; asked, the guest declines (D-pad down): the vote is lost on both machines, the host's intro is dropped and its player released (not grabbed), the hunt does not start, the guest stays at Spargus's doors; 7 checks. |
+| `mission-trigger` | A mission started by talking to its giver | Co-op from the lobby at the kanga-rat hunt's introduction (`coop-mission-intro`, next to Kleiver at the arena); the guest goes to Spargus's doors; the host stands at Kleiver (`goto-type kleever-npc`) and presses triangle: the intro waits for the guest's answer; asked, the guest accepts (`wait-vote`, D-pad up), is taken next to the host, says it is ready; the intro plays on both machines (the guest's Kleiver started it as the guest arrived: "plays here with player 0"), both ask to skip it, the hunt's manager starts on both; 9 checks. A guest ready while its own move was under way (a continue point) was ready too early: it now waits for its move to end. |
 | `door-wait` | Co-op doors wait for everyone | The host and the guest at the door nearest the host (Spargus); the host goes through and on 30 m, the guest stays 20 m behind it: the door, open, waits (`door hold #t`); the guest joins the host: the door no longer waits and closes; 7 checks. |
 | `eyes-before` | The eye bug, shown again | As `eyes`, with `eye-fix-off` (the fix undone): the host's Jak, seen by the Daxter player, has the small dark eyes our hidden model writes (slot written by our target); `eyes` on the same code: Jak's blue eyes, slot written by the puppet (close-ups at 2560x1440); 5 checks. |
 | `lizard-attack` | The user's report: Daxter attacks Jak's mount | Co-op: the host rides a lizard of Spargus; the guest (Daxter), 1.5 m from it, punches it three times and fires the scatter gun at it: the host stays on it, unhurt, and the guest sees the lizard under Jak before, during and after (screenshot); 6 checks. |
@@ -2099,11 +2105,9 @@ public IP.
   later than the guest did. The racers' speed follows the host's place in the race. A player who
   crashes out of a race fails the mission for both (the failure vote, 4.26), as before: no
   "did not finish" for one player while the other races on. The time trial stays each player's own.
-- A mission's vote (4.24): with co-op's two players, the starter's yes is half of the players, so
-  no question is asked; the question, D-pad up or down, shows with three players or more, which
-  co-op does not accept today (that path is untested in game). Only the scene of an open story
-  node's `when-open` is held: a mission started without a cutscene (reaching a spot) still brings
-  the others afterwards (4.24's teleport).
+- A mission's vote (4.24): only the scene of an open story node's `when-open` is held and asked:
+  a mission started without a cutscene (reaching a spot) is not asked, and brings the others
+  afterwards (4.24's teleport). A player away from the pad for 15 s declines.
 - A door waits for a teammate behind it without a time limit (as himstan's): a teammate who stays
   behind within 100 m keeps it open, and the levels behind it loaded.
 - The medal games' orbs (gun courses, turret, power game, pre-game) are the game's orbs: they do
@@ -2198,6 +2202,11 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-28 (night):** the user asked that both players accept a mission: the others are always
+  asked (D-pad up to join, D-pad down to decline, 15 s), the mission goes on when at least half of
+  them accept (with two players, the other one); declined, the starter's intro is dropped and its
+  player released (4.24). Scenario `mission-decline`; `mission-trigger` accepts with D-pad up;
+  command `wait-vote`.
 - **2026-10-28 (evening):** the user asked for himstan's network layer, his co-op doors and races,
   every player in a mission's cutscene with the agreement of at least half of the players, free
   roam at the end of the game with only the orb activities, endlessly, and the review's fixes.

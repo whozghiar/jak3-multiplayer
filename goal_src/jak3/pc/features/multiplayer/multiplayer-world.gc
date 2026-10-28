@@ -5537,7 +5537,7 @@
   (go 4)      ;; starter to everyone: the cutscene starts
   )
 
-(defconstant MP_PULL_ANSWER_TIME (seconds 8))
+(defconstant MP_PULL_ANSWER_TIME (seconds 15))
 (defconstant MP_PULL_READY_TIME (seconds 30))
 
 (deftype mp-pull-state (structure)
@@ -5711,13 +5711,13 @@
 ;; The cutscene that introduces a mission (the scene an open story node's when-open plays: an NPC
 ;; talked to) is held by the player who started it (the scene player's wait loop,
 ;; engine/scene/scene.gc) until the others are there, so everyone watches it together, as himstan's
-;; scene pull-in. The mission goes on with the yes of at least half of the players, its starter's
-;; included (with co-op's two players, the starter's own: decided at once); then every player is
+;; scene pull-in. The other players are asked first (D-pad up to join, D-pad down to decline, 15 s):
+;; the mission goes on when at least half of them accept (with co-op's two players, the other one:
+;; both players accept the mission); a no or no answer counts against it. Accepted, every player is
 ;; brought next to the starter (*mp-request-teleport*) and says it is ready once that cutscene is
 ;; loaded there and it stands within 40 m. The starter's cutscene starts when all are ready (30 s at
-;; most), and theirs with it (mission-vote go). With three players or more, the others answer
-;; first: D-pad up yes, D-pad down no, 8 s without an answer is a yes; a vote lost releases the
-;; starter's player and drops the cutscene: the mission does not start.
+;; most), and theirs with it (mission-vote go). Declined, the starter's player is released and its
+;; cutscene dropped: the mission does not start, its giver can be talked to again.
 
 (defun mp-mission-intro-node ((name string))
   "The open story node (not a challenge's) whose opening event plays scene `name`: a mission's
@@ -5786,17 +5786,10 @@
   )
 
 (defun mp-pull-passes? ()
-  "Starter: the yes (ours, the others', and the silence of those past the answer time) reach half
-   of the players."
-  (let* ((p *mp-pull*)
-         (silent (if (mp-elapsed? (-> p since) MP_PULL_ANSWER_TIME)
-                     (logand (-> p asked) (lognot (-> p answered)))
-                     0
-                     )
-                 )
-         (yes (logior (-> p yes) silent))
-         )
-    (>= (* 2 (+ 1 (mp-bit-count yes))) (+ 1 (mp-bit-count (-> p asked))))
+  "Starter: at least half of the other players accepted (with co-op's two players, the other one:
+   both players accept the mission)."
+  (let ((p *mp-pull*))
+    (>= (* 2 (mp-bit-count (-> p yes))) (max 1 (mp-bit-count (-> p asked))))
     )
   )
 
@@ -5837,12 +5830,10 @@
           (set! (-> p ready) 0)
           (set! (-> p handle) (process->handle self))
           (copy-string<-string (-> p scene) name)
-          (let ((vote? (not (mp-pull-passes?))))
-            (format 0 "[multiplayer] mission ~S: its introduction ~S waits for the other players (vote ~A)~%"
-                    (-> *game-info* sub-task-list node name) name vote?
-                    )
-            (mp-pull-send (mp-pull-msg propose) -1 node (if vote? 1 0))
-            )
+          (format 0 "[multiplayer] mission ~S: its introduction ~S waits for the other players to accept~%"
+                  (-> *game-info* sub-task-list node name) name
+                  )
+          (mp-pull-send (mp-pull-msg propose) -1 node 1)
           )
         )
       )
@@ -5945,6 +5936,7 @@
             )
            (else
              (format 0 "[multiplayer] mission vote ~D lost: the mission does not start~%" (-> p id))
+             (mp-show-message "The mission was declined")
              (set! (-> p role) 0)
              )
            )
@@ -6019,6 +6011,7 @@
              (+! (-> p lost) 1)
              (mp-pull-send (mp-pull-msg result) -1 0 0)
              (format 0 "[multiplayer] mission vote ~D lost: the mission does not start~%" (-> p id))
+             (mp-show-message "The mission was declined")
              (set! (-> p role) 0)
              (if *target*
                  (process-release? *target*)
@@ -6049,9 +6042,10 @@
               )
           (set! (-> p role) 0)
           )
+         ;; no answer in time: a no
          ((and (zero? (-> p phase)) (mp-elapsed? (-> p since) MP_PULL_ANSWER_TIME))
-          (mp-pull-answer #t)
-          (set! (-> p phase) 1)
+          (mp-pull-answer #f)
+          (set! (-> p phase) 3)
           )
          ((and (= (-> p phase) 1) *target*)
           (cond
@@ -6096,9 +6090,16 @@
   (let ((p *mp-pull*))
     (case (-> p role)
       ((1)
-       (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-mission-wait) #f)
-               (mp-bit-count (-> p ready)) (mp-bit-count (mp-pull-awaited))
-               )
+       (if (zero? (-> p decided))
+           ;; the others' answers, then their arrival
+           (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-mission-ask) #f)
+                   (mp-bit-count (-> p yes)) (mp-bit-count (-> p asked))
+                   (max 0 (/ (- MP_PULL_ANSWER_TIME (- (mp-now) (-> p since))) (seconds 1)))
+                   )
+           (format (clear *mp-challenge-line*) (lookup-text! *common-text* (text-id progress-mp-mission-wait) #f)
+                   (mp-bit-count (-> p ready)) (mp-bit-count (mp-pull-awaited))
+                   )
+           )
        (mp-draw-challenge-line *mp-challenge-line*)
        )
       ((2)

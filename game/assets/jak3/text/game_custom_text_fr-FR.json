@@ -414,5 +414,6 @@
   "15a9": "Hébergement : ~D joueur(s), adresse internet ~S",
   "15aa": "La porte attend ~S",
   "15ab": "La mission attend les autres joueurs : ~D/~D prêts",
-  "15ac": "~S lance une mission : croix haut oui, croix bas non (~D)"
+  "15ac": "~S lance une mission : croix haut pour rejoindre, croix bas pour refuser (~D)",
+  "15ad": "En attente de l'accord des autres joueurs pour la mission : ~D/~D (~D)"
 }

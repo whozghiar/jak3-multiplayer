@@ -414,5 +414,6 @@
   "15a9": "Hosting: ~D player(s), internet address ~S",
   "15aa": "The door waits for ~S",
   "15ab": "The mission waits for the other players: ~D/~D ready",
-  "15ac": "~S starts a mission: D-pad up yes, D-pad down no (~D)"
+  "15ac": "~S starts a mission: D-pad up to join, D-pad down to decline (~D)",
+  "15ad": "Waiting for the other players to accept the mission: ~D/~D (~D)"
 }

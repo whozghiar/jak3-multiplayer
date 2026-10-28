@@ -1,0 +1,29 @@
+# A mission declined, guest side: at Spargus's doors when the host talks to Kleiver; asked, it
+# declines (D-pad down) and stays where it is.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+66 log-state task-manager-arena-training
+68 continue wasdoors-city
+73 log-me
+74 log-state task-manager-kanga-lizard
+75 wait-vote
+76.5 screenshot vote
+77 press down 100
+78 log-me
+86 log-me
+90 log-state task-manager-kanga-lizard
+96 log

@@ -6032,11 +6032,18 @@
   )
 
 (defun mp-draw-challenge-line ((text string))
-  "One line of the challenge's, centered above the prompts."
-  (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 280 0.0 (font-color default) (font-flags shadow kerning middle large))))
+  "One line of the challenge's (or a mission's question), centered above the prompts and the
+   minimap: shrunk to 360 wide at most, it stays on one line clear of the minimap (right, from y
+   283), as the race lines (mp-draw-race-wait)."
+  (let ((ctx (new 'stack 'font-context *font-default-matrix* 0 262 0.0 (font-color default) (font-flags shadow kerning middle large))))
     (set-width! ctx 512)
     (set-height! ctx 40)
     (set! (-> ctx scale) 0.5)
+    (let ((w (-> (get-string-length text ctx) length)))
+      (if (< 360.0 w)
+          (set! (-> ctx scale) (/ (* 0.5 360.0) w))
+          )
+      )
     (print-game-text text ctx #f 44 (bucket-id hud-draw-hud-alpha))
     )
   (none)

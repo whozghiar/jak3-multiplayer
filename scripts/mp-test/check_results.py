@@ -830,6 +830,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
         c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
 
+    elif scenario == "mission-decline":
+        hme = grab(host, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
+        gme = grab(client, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
+        hs = grab(host, r"\] state task-manager-kanga-lizard (\S+)")
+        c.check(scenario, "asked, the guest declines (D-pad down): the vote is lost on both machines",
+                any("we answer #f" in l for l in client)
+                and any("mission vote 1 lost: the mission does not start" in l for l in host)
+                and any("mission vote 1 lost: the mission does not start" in l for l in client), "")
+        c.check(scenario, "the host's intro dropped, its player released; the hunt does not start",
+                bool(hme) and not hme[-1][3].endswith("grab") and bool(hs) and hs[-1][0] == "none"
+                and not any("mission wascity-chase-resolution starts here" in l for l in host + client),
+                f"host {hme[-1:]}, hunt {hs}")
+        c.check(scenario, "the guest stays where it was (Spargus's doors), not brought to the host",
+                bool(gme) and abs(float(gme[-1][0]) - 2359.3) + abs(float(gme[-1][2]) + 376.4) > 300, f"{gme[-1:]}")
+        stopped = [l for l in host + client if "Assertion failed" in l or "crash:" in l]
+        c.check(scenario, "no game stops", not stopped, f"{stopped[:1]}")
+
     elif scenario == "mission-trigger":
         hme = grab(host, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
         gme = grab(client, r"\] me (\S+) (\S+) (\S+) speed \S+ state (\S+)")
@@ -840,9 +857,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the host talks to Kleiver: no hunt before, its task manager runs after (a real start)",
                 bool(hs) and hs[0][0] == "none" and hs[-1][0] == "active"
                 and any("mission wascity-chase-resolution starts here" in l for l in host + client), f"{hs}")
-        c.check(scenario, "the host's intro waits for the guest (the starter's yes is half of two players: no vote)",
-                any(re.search(r"its introduction \S+ waits for the other players \(vote #f\)", l) for l in host)
-                and any("we join its introduction" in l for l in client), "")
+        c.check(scenario, "the host's intro waits for the guest's answer: asked, it accepts (D-pad up), the vote passes",
+                any(re.search(r"its introduction \S+ waits for the other players to accept", l) for l in host)
+                and any("we answer #t" in l for l in client)
+                and any("mission vote 1 passed" in l for l in host), "")
         c.check(scenario, "the guest is brought next to the host, ready, and both play the intro together",
                 any("ready for the introduction" in l for l in client)
                 and any(re.search(r"mission introduction \S+ starts \(ready 1 of 1\)", l) for l in host)

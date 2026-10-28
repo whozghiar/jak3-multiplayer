@@ -45,10 +45,10 @@ Daxter co-op duo with its own multiplayer save.
     wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
     on foot while the other one is alive nearby watches them for 5 seconds ("Spectating"), their
     body on the ground, then comes back next to them, and the mission goes on. When one player
-    starts a mission by talking to someone, its cutscene waits ("The mission waits for the other
-    players") while the other player is brought there, then both watch it together and the
-    mission starts for both (it needs the yes of at least half of the players: with two, the one
-    who starts it). A door that unloads the place behind it waits, open, for the other player
+    starts a mission by talking to someone, the other player is asked (D-pad up to join, D-pad
+    down to decline, 15 seconds): both players must accept. Accepted, the cutscene waits while the
+    other player is brought there, then both watch it together and the mission starts for both;
+    declined, the mission does not start, and you can talk to its giver again. A door that unloads the place behind it waits, open, for the other player
     still behind it ("The door waits for ..."). When a mission fails, the failure shows for both players at once and
     waits for both: when both chose to retry (or to quit), both are put back together, at the
     mission's start or at the respawn point. When one player starts a burning bush challenge,
@@ -163,6 +163,7 @@ Daxter co-op duo with its own multiplayer save.
 | Host: pause / resume for everyone | SELECT |
 | Co-op: ask to skip a cutscene | Triangle |
 | Join a challenge another player started | D-pad up (30 s) |
+| Co-op: accept / decline a mission the other player starts | D-pad up / D-pad down (15 s) |
 | Steal a player's vehicle | Triangle next to it |
 | Ride as passenger | L1 + Triangle next to it |
 | Get off as passenger | Triangle |

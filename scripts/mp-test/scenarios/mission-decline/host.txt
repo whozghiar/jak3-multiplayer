@@ -1,0 +1,29 @@
+# A mission declined, host side: as mission-trigger, but the guest at Spargus's doors declines
+# (D-pad down): the host's intro is dropped, its player released, the hunt does not start; talking
+# to Kleiver again asks again.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission-intro
+31.2 coop-mission wascity-chase
+63 press x 100
+70 wait-player 1
+72 log-state task-manager-kanga-lizard
+74 log-me
+86 goto-type kleever-npc
+86.5 screenshot kleiver
+87 goto-type kleever-npc
+88 press triangle 100
+92 log-me
+96 screenshot declined
+100 log-state task-manager-kanga-lizard
+101 log-me
+104 log-tasks
+110 log

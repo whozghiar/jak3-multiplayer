@@ -1,7 +1,7 @@
 # A mission started by talking to whoever gives it, host side: co-op from the lobby at the kanga-rat
 # hunt's introduction (next to Kleiver at the arena); once the guest went to Spargus's doors, the
-# host talks to Kleiver (triangle): the intro waits while the guest is brought there, then both
-# watch it (both ask to skip it), and the hunt's task manager starts on both machines.
+# host talks to Kleiver (triangle): the intro waits for the guest's answer (it accepts) and while it
+# is brought there, then both watch it (both ask to skip it), and the hunt starts on both machines.
 1 enable
 1 name Host
 1 color 1
