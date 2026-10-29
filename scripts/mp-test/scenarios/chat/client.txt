@@ -22,4 +22,10 @@
 86 screenshot chat-guest
 92 log-chat
 93 log-me
+94 os-key t
+94.4 os-type guest via windows
+94.8 log-chat
+95 os-key enter
+95.5 log-chat
+99 log-chat
 100 log-chat

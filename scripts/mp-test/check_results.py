@@ -827,7 +827,8 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
             c.check(scenario, "the race won ends the mission: the campaign saves itself, the save icon on both machines",
                     len(saves) >= 2 and saves[-1][1] != saves[0][1]
                     and sum(1 for l in host if "the save icon shows" in l) >= 2
-                    and any("the save icon shows" in l for l in client), f"{saves}")
+                    and any("the save icon shows" in l for l in client)
+                    and any("save icon screenshot guest-mission-end-icon" in l for l in client), f"{saves}")
 
     elif scenario == "pre-game":
         crashed = [l for l in host + client if "crash:" in l]
@@ -1554,6 +1555,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "accents lose theirs, '~' (the font's escape) becomes '-'",
                 any(x == "Guest: Ca va tres bien, merci -" for _, _, _, x in hl), "")
         tin = grab(host, r"\] chat sdl-text-input (\S+)")
+        focus = [f for _, f in grab(host + client, r"\] chat sdl-text-input (\S+) focus (\S+)")]
+        c.check(scenario, "keys pressed as Windows messages on the window that has the focus: T, the text (Windows makes each character) and Enter send the line",
+                any(x in ("Host: host via windows", "Guest: guest via windows") for _, _, _, x in hl + gl) and "#t" in focus,
+                f"focus {sorted(set(focus))}")
         c.check(scenario, "T turns SDL's text input on for the game's window, the line sent turns it off",
                 ("#t",) in tin and tin[-1] == ("#f",), f"{tin}")
         c.check(scenario, "while typing the line shows (Backspace erases), Escape drops it unsent",
@@ -1577,8 +1582,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any("campaign saved (1," in l for l in host) and any("multiplayer-campaign.bin" in l for l in host), "")
         c.check(scenario, "a story step closed: the host saves once no cutscene plays, its save icon shows",
                 any("campaign saved (2," in l for l in host) and any(n == "2" and i == "#t" for n, _, i, _ in hs), f"{hs}")
-        c.check(scenario, "the guest sees the save icon when the host saves, and writes no campaign",
-                any(i == "#t" for _, _, i, _ in gs) and all(n == "0" for n, _, _, _ in gs), f"{len(gs)} logs")
+        c.check(scenario, "the guest sees the save icon when the host saves (screenshot guest-save-icon), and writes no campaign",
+                any(i == "#t" for _, _, i, _ in gs) and all(n == "0" for n, _, _, _ in gs)
+                and any("save icon screenshot guest-save-icon" in l for l in client), f"{len(gs)} logs")
         c.check(scenario, "the START ring: the host's Save Game saves at once, Load Game is refused online; the guest's Save Game says the host saves",
                 any("START ring save: text #x15bd" in l for l in host) and any("campaign saved (3," in l for l in host)
                 and any("START ring load: text #x15bf" in l for l in host) and any("START ring save: text #x15be" in l for l in client), "")

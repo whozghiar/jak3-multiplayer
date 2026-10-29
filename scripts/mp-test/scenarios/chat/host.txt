@@ -34,6 +34,11 @@
 86.8 log-chat
 87 sdl-key enter
 87.5 log-chat
+90 os-key t
+90.4 os-type host via windows
+90.8 log-chat
+91 os-key enter
+91.5 log-chat
 100 log-chat
 101 log-me
 104 chat-say /kick gue

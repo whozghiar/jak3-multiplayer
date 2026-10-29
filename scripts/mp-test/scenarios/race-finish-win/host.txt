@@ -16,6 +16,7 @@
 64 log-lobby
 95 race-autopilot
 97 log-race
+98 shot-save-icon host-mission-end-icon
 100 race-autopilot
 105 race-autopilot
 105 race-stop-racers

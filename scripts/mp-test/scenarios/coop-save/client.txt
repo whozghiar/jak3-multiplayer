@@ -21,6 +21,7 @@
 58 log-lobby
 58.5 screenshot lobby-guest
 62 wait-joined
+95 shot-save-icon guest-save-icon
 96 log-save
 97 log-save
 98 log-save

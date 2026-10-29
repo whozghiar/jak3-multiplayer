@@ -69,6 +69,8 @@
 ;;   chat-key <t|enter|escape|backspace> | chat-text <text>  a key or text, as the keyboard gives them to the chat
 ;;   chat-say <text> | log-chat                              T, the text, Enter; the line typed and the last lines
 ;;   sdl-key <key> | sdl-text <text>                         the same through SDL's event queue (the renderer's way)
+;;   os-key <key> | os-type <text>                           the same posted to the game's window (Windows messages)
+;;   shot-save-icon <name>                                   screenshot the next co-op save's icon when it shows
 ;;   log-guns | log-save | ring-save <save|load>             free roam's gun mods; co-op saves and their icon; the
 ;;                                                           START ring's Save Game or Load Game online
 ;;   merchant-spot <i>                                       host: the merchant at spot i, sent to everyone
@@ -115,6 +117,12 @@
 (define-extern pc-mp-chat-test-text (function string none))
 (define-extern pc-mp-test-sdl-key (function int none))
 (define-extern pc-mp-chat-text-input? (function symbol))
+(define-extern pc-mp-chat-focus? (function symbol))
+(define-extern pc-mp-test-os-key (function int none))
+
+;; shot-save-icon <name>: the next co-op save's icon shown here is screenshot under that name
+(define *mp-test-save-shot* (new 'global 'string 64 (the-as string #f)))
+(define *mp-test-save-shot?* #f)
 (define-extern pc-mp-test-sdl-text (function string none))
 (define-extern pc-mp-test-pad (function int int int int int none))
 (define-extern pc-mp-test-pause (function symbol none))
@@ -2046,6 +2054,45 @@
                                )
            )
          )
+        ((string= cmd "os-key")
+         ;; os-key <t|enter|escape|backspace>: that key pressed and released, posted to the game's
+         ;; window as Windows messages (virtual-key codes; Windows makes the character)
+         (mp-test-word)
+         (let ((w (-> *mp-test* word)))
+           (cond
+             ((string= w "t") (pc-mp-test-os-key #x54))
+             ((string= w "enter") (pc-mp-test-os-key #x0d))
+             ((string= w "escape") (pc-mp-test-os-key #x1b))
+             ((string= w "backspace") (pc-mp-test-os-key #x08))
+             )
+           )
+         )
+        ((string= cmd "os-type")
+         ;; os-type <text>: the rest of the line, each character's key pressed on the game's window
+         ;; (its virtual key: the letter's capital, a space or a digit as is; others skipped)
+         (let ((s (-> *mp-test* line)))
+           (dotimes (i (length s))
+             (let* ((ch (the int (-> s data i)))
+                    (vk (cond
+                          ((and (>= ch 97) (<= ch 122)) (+ ch -32))
+                          ((or (= ch 32) (and (>= ch 48) (<= ch 57)) (and (>= ch 65) (<= ch 90))) ch)
+                          (else 0)
+                          )
+                        )
+                    )
+               (if (nonzero? vk)
+                   (pc-mp-test-os-key vk)
+                   )
+               )
+             )
+           )
+         )
+        ((string= cmd "shot-save-icon")
+         ;; shot-save-icon <name>: the next co-op save's icon is screenshot when it shows here
+         (mp-test-word)
+         (copy-string<-string *mp-test-save-shot* (-> *mp-test* word))
+         (set! *mp-test-save-shot?* #t)
+         )
         ((string= cmd "sdl-text")
          ;; sdl-text <text>: the rest of the line typed through SDL's queue
          (pc-mp-test-sdl-text (-> *mp-test* line))
@@ -2064,7 +2111,7 @@
          ;; log-chat: whether a line is typed (and what), the last 8 lines (slot, ms since, text)
          (let ((typing? (pc-mp-chat-draft *mp-chat-draft*)))
            (format 0 "[mp-test] chat typing ~A draft ~S~%" typing? (if typing? *mp-chat-draft* ""))
-           (format 0 "[mp-test] chat sdl-text-input ~A~%" (pc-mp-chat-text-input?))
+           (format 0 "[mp-test] chat sdl-text-input ~A focus ~A~%" (pc-mp-chat-text-input?) (pc-mp-chat-focus?))
            )
          (dotimes (i 8)
            (let ((age (pc-mp-chat-line i *mp-chat-out*)))
@@ -4038,6 +4085,17 @@
   "Release forced input when its time is over, end a wait when it is over, then run the due script
    commands."
   (mp-test-walk-stick)
+  ;; shot-save-icon: once the icon has shown a quarter of a second (it blinks: on most frames)
+  (when (and *mp-test-save-shot?*
+             (nonzero? *mp-save-icon-at*)
+             (< (seconds 0.25) (- (mp-now) *mp-save-icon-at*))
+             (< (- (mp-now) *mp-save-icon-at*) (seconds 2))
+             (< (mod (-> *display* real-clock frame-counter) 300) 260)
+             )
+    (set! *mp-test-save-shot?* #f)
+    (format 0 "[mp-test] save icon screenshot ~S~%" *mp-test-save-shot*)
+    (pc-mp-test-screenshot *mp-test-save-shot*)
+    )
   (when (and (nonzero? (-> *mp-test* pad-until)) (>= (mp-now) (-> *mp-test* pad-until)))
     (pc-mp-test-pad 0 128 128 128 128)
     (set! (-> *mp-test* pad-until) 0)

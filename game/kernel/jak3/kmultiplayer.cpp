@@ -2750,6 +2750,36 @@ u64 pc_mp_chat_text_input() {
   return to_symbol(mp::g_chat.text_active);
 }
 
+// (pc-mp-chat-focus?) -> #t while the game's window has the keyboard (SDL's focus: Windows gives
+// typed characters to that window alone) (test log).
+u64 pc_mp_chat_focus() {
+  std::lock_guard<std::mutex> lock(mp::g_chat.m);
+  return to_symbol(mp::g_chat.window && SDL_GetKeyboardFocus() == mp::g_chat.window);
+}
+
+// Test scripts, Windows: (pc-mp-test-os-key vk) posts a key press to the game's own window as a
+// keyboard does: WM_KEYDOWN then WM_KEYUP. SDL's message pump turns the press into its character
+// (TranslateMessage: WM_CHAR) and both into SDL events, as for a key pressed (the character
+// reaches the text input only while the window has the focus).
+void pc_mp_test_os_key(u32 vk) {
+#ifdef _WIN32
+  SDL_Window* window;
+  {
+    std::lock_guard<std::mutex> lock(mp::g_chat.m);
+    window = mp::g_chat.window;
+  }
+  HWND hwnd = window ? (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                                                    SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr)
+                     : nullptr;
+  if (!hwnd) {
+    return;
+  }
+  LPARAM down = 1 | ((LPARAM)MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) << 16);
+  PostMessageW(hwnd, WM_KEYDOWN, vk, down);
+  PostMessageW(hwnd, WM_KEYUP, vk, down | (1 << 30) | (1u << 31));
+#endif
+}
+
 // (pc-mp-chat-take dest) -> #t when a line was sent with Enter (the oldest not taken, into dest).
 u64 pc_mp_chat_take(u32 dest) {
   std::lock_guard<std::mutex> lock(mp::g_chat.m);
@@ -3502,6 +3532,8 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-chat-arg", (void*)pc_mp_chat_arg);
   make_function_symbol_from_c("pc-mp-find-player", (void*)pc_mp_find_player);
   make_function_symbol_from_c("pc-mp-chat-text-input?", (void*)pc_mp_chat_text_input);
+  make_function_symbol_from_c("pc-mp-chat-focus?", (void*)pc_mp_chat_focus);
+  make_function_symbol_from_c("pc-mp-test-os-key", (void*)pc_mp_test_os_key);
   make_function_symbol_from_c("pc-mp-chat-test-key", (void*)pc_mp_chat_test_key);
   make_function_symbol_from_c("pc-mp-chat-test-text", (void*)pc_mp_chat_test_text);
   make_function_symbol_from_c("pc-mp-test-sdl-key", (void*)pc_mp_test_sdl_key);

@@ -19,6 +19,7 @@
 63 character 0
 75 race-autopilot
 77 log-race
+78 shot-save-icon guest-mission-end-icon
 80 race-autopilot
 85 race-autopilot
 90 race-autopilot
