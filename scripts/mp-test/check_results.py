@@ -1556,9 +1556,10 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any(x == "Guest: Ca va tres bien, merci -" for _, _, _, x in hl), "")
         tin = grab(host, r"\] chat sdl-text-input (\S+)")
         focus = [f for _, f in grab(host + client, r"\] chat sdl-text-input (\S+) focus (\S+)")]
-        c.check(scenario, "keys pressed as Windows messages on the window that has the focus: T, the text (Windows makes each character) and Enter send the line",
-                any(x in ("Host: host via windows", "Guest: guest via windows") for _, _, _, x in hl + gl) and "#t" in focus,
-                f"focus {sorted(set(focus))}")
+        c.check(scenario, "keys pressed as Windows messages on the host's focused window: T, the text (Windows makes each character) and Enter send the line",
+                any(x == "Host: host via windows" for _, _, _, x in gl), f"focus {sorted(set(focus))}")
+        c.check(scenario, "the guest's window brought to the front, its keys type and send its line too",
+                any(x == "Guest: guest via windows" for _, _, _, x in hl), "")
         c.check(scenario, "T turns SDL's text input on for the game's window, the line sent turns it off",
                 ("#t",) in tin and tin[-1] == ("#f",), f"{tin}")
         c.check(scenario, "while typing the line shows (Backspace erases), Escape drops it unsent",

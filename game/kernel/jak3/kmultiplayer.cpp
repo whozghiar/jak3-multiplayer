@@ -2761,6 +2761,29 @@ u64 pc_mp_chat_focus() {
 // keyboard does: WM_KEYDOWN then WM_KEYUP. SDL's message pump turns the press into its character
 // (TranslateMessage: WM_CHAR) and both into SDL events, as for a key pressed (the character
 // reaches the text input only while the window has the focus).
+// Test scripts, Windows: (pc-mp-test-os-focus take?) with #f lets any process bring its window to
+// the foreground (this one must have it); with #t brings the game's window there, so that keys
+// typed on it give text (another test instance allowed it first).
+void pc_mp_test_os_focus(u32 take) {
+#ifdef _WIN32
+  if (take == s7.offset) {
+    AllowSetForegroundWindow(ASFW_ANY);
+    return;
+  }
+  SDL_Window* window;
+  {
+    std::lock_guard<std::mutex> lock(mp::g_chat.m);
+    window = mp::g_chat.window;
+  }
+  HWND hwnd = window ? (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                                                    SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr)
+                     : nullptr;
+  if (hwnd) {
+    SetForegroundWindow(hwnd);
+  }
+#endif
+}
+
 void pc_mp_test_os_key(u32 vk) {
 #ifdef _WIN32
   SDL_Window* window;
@@ -3534,6 +3557,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-chat-text-input?", (void*)pc_mp_chat_text_input);
   make_function_symbol_from_c("pc-mp-chat-focus?", (void*)pc_mp_chat_focus);
   make_function_symbol_from_c("pc-mp-test-os-key", (void*)pc_mp_test_os_key);
+  make_function_symbol_from_c("pc-mp-test-os-focus", (void*)pc_mp_test_os_focus);
   make_function_symbol_from_c("pc-mp-chat-test-key", (void*)pc_mp_chat_test_key);
   make_function_symbol_from_c("pc-mp-chat-test-text", (void*)pc_mp_chat_test_text);
   make_function_symbol_from_c("pc-mp-test-sdl-key", (void*)pc_mp_test_sdl_key);

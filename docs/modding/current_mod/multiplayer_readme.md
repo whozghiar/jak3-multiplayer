@@ -1805,6 +1805,7 @@ A script line is `<seconds> <command>`:
 | `chat-key <t\|enter\|escape\|backspace>`, `chat-text <text>`, `chat-say <text>` | A key or text as the keyboard gives them to the chat; T, the text, Enter. |
 | `sdl-key <key>`, `sdl-text <text>` | The same through SDL's event queue, the renderer's way. |
 | `os-key <key>`, `os-type <text>` | Keys pressed and released on the game's window as Windows messages (`WM_KEYDOWN`, `WM_KEYUP`): Windows makes each character, as for a keyboard; the text reaches only the window that has the focus. |
+| `os-focus <allow\|take>` | Windows: the window in front lets another instance bring its own there; bring ours to the front. |
 | `shot-save-icon <name>` | The next co-op save's icon is screenshot when it shows on this machine. |
 | `log-chat` | Whether a line is typed (and what), whether SDL's text input is on for the window and the window has the focus, the last 8 lines (slot, ms since, text). |
 | `log-guns`, `log-save`, `ring-save <save\|load>` | Free roam's higher gun mods (bits: red 2 and 3, yellow 2 and 3...), the mod chosen, the items owned; co-op saves written, one due, the icon shown; the START ring's Save Game or Load Game picked online. |
@@ -2024,7 +2025,7 @@ turtle rolls down the start's slope (6); it now moves there 1 s before: 8 of 8 i
 | `player-list` (extended) | A long name | A 15-character guest name fits before its health bar, nothing overlaps (screenshot); the LAN playout delay logged (76 ms). |
 | `economy` | Orbs, the shop, saves | The host and the guest each take an orb: credited after the host checked the entity (and saw the guest at it); a claim of an entity that is no orb, and the guest's claim of an orb 80 m away, refused; a purchase without the orbs refused, then the gold outfit bought (5 orbs paid, item owned); at Kleiver's spot his line, triangle opens the shop page, X wears the outfit; the server's database keeps the accounts and the 2 orbs credited, the closing is recorded, and hosting again loads "2 account(s) and 2 orb(s) taken"; triangle leaves the shop; 9 checks (screenshots). |
 | `free-shop` | Free roam's gun mods | Free roam starts both players at each color's first mod; the host credits itself 100 orbs, asks the red third mod first (refused: its second first), buys the second then the third (55 orbs left, its gun has them); the host's chat `/give Guest 40` credits the guest, which at Kleiver's opens his shop, goes down to the yellow second mod and buys it with X ("Bought!", 25 left, its gun has it); the database keeps both accounts under their account ids, never the players' secret ids; Kleiver's shop scrolled to its last items; 9 checks. |
-| `chat` | The text chat | Lines both ways with the sender's name; accents lose theirs, `~` becomes `-`; a line typed shows, Backspace erases, Escape drops it unsent; T, text and Enter through SDL's event queue, T turning SDL's text input on for the game's window and the line sent turning it off; keys pressed as Windows messages on the window that has the focus (T, the text, Enter: Windows makes each character) send the line; a guest's command refused; the host's `/tp` brings the guest, `/players`, `/help` and an unknown command answer the host alone; `/kick gue` kicks the guest; 12 checks (screenshots). |
+| `chat` | The text chat | Lines both ways with the sender's name; accents lose theirs, `~` becomes `-`; a line typed shows, Backspace erases, Escape drops it unsent; T, text and Enter through SDL's event queue, T turning SDL's text input on for the game's window and the line sent turning it off; keys pressed as Windows messages (T, the text, Enter: Windows makes each character) send the line from the host's window, then from the guest's once brought to the front; a guest's command refused; the host's `/tp` brings the guest, `/players`, `/help` and an unknown command answer the host alone; `/kick gue` kicks the guest; 13 checks (screenshots). |
 | `coop-save` | Co-op saves itself | The arena's jump training in co-op: saved at the mission's start into `multiplayer-campaign.bin`; a story step closed: saved again, the icon on the host's screen and the guest's (screenshots `save-icon`, `guest-save-icon`), the guest writing nothing; the START ring: the host's Save Game saves, Load Game refused, the guest's Save Game says the host saves; 8 checks. |
 | `economy-trophy` | Metal Head trophies | A Metal Head killed by the host's blow: a trophy for the host; one killed by the guest's puppet's blow: a trophy for the guest, sent to it; 6 checks. |
 | `coop-respawn` | Back next to a teammate | The guest killed comes back next to the host (`target-stance`, health 8, no continue point), then the host next to the guest; 6 checks. |
@@ -2304,13 +2305,13 @@ public IP.
   co-op saves after each story step, the icon on every screen, the START ring's Save and Load
   Game online (1.7); the chat and its commands (4.35); protocol 12. Fixed on the way: a pickup
   with no parent any more crashed `mp-challenge-take` on every orb taken outside a challenge
-  (`economy`). Scenarios `free-shop` 9/9 (the purchase from the shop page), `chat` 12/12 (SDL's text input on the window; keys pressed as Windows messages), `coop-save` 8/8; `coop-campaign` now
+  (`economy`). Scenarios `free-shop` 9/9 (the purchase from the shop page), `chat` 13/13 (SDL's text input on the window; keys pressed as Windows messages on both players' windows), `coop-save` 8/8; `coop-campaign` now
   continues the progress saved after each step (11/11); `economy` 9/9, `economy-persist` 6/6,
   `economy-reload` 7/7, `economy-trophy` 6/6, `merchant` 11/11, `challenge-free` 12/12,
   `mission-trigger` 9/9, `smoke` 9/9; `race-finish-win` 9/9: Kleiver's race won ends the mission,
   the campaign saves itself and the save icon shows on both machines (screenshots); unit tests 6/6.
-  The chat was driven by keys pressed as Windows messages on the focused window; a person's own
-  keyboard is the user's play test.
+  The chat was typed by keys pressed as Windows messages on each player's window in front; a
+  person's own keyboard is the user's play test.
 
 - **2026-10-28 (night):** the user asked that both players accept a mission: the others are always
   asked (D-pad up to join, D-pad down to decline, 15 s), the mission goes on when at least half of
