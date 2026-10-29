@@ -1,0 +1,90 @@
+# Co-op saves itself, guest side: sees the save icon each time the host saves; its START ring's Save
+# Game says the host saves the co-op progress on its own; it writes no campaign.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+41 log-lobby
+43 press r1 100
+56 log-lobby
+57 press x 100
+58 log-lobby
+58.5 screenshot lobby-guest
+62 wait-joined
+96 log-save
+97 log-save
+98 log-save
+99 log-save
+100 log-save
+101 log-save
+102 log-save
+103 log-save
+104 log-save
+105 log-save
+106 log-save
+107 log-save
+108 log-save
+109 log-save
+110 log-save
+111 log-save
+112 log-save
+113 log-save
+114 log-save
+115 log-save
+116 log-save
+117 log-save
+118 log-save
+119 log-save
+120 log-save
+120.5 ring-save save
+121 log-save
+122 log-save
+123 log-save
+124 log-save
+125 log-save
+126 log-save
+127 log-save
+128 log-save
+129 log-save
+130 log-save
+131 log-save
+132 log-save
+133 log-save
+134 log-save
+135 log-save
+136 log-save
+137 log-save
+138 log-save
+139 log-save
+140 log-save
+141 log-save
+142 log-save
+143 log-save
+144 log-save
+145 log-save
+146 log-save
+147 log-save
+148 log-save
+149 log-save
+150 log-save
+151 log-save
+152 log-save
+153 log-save
+154 log-save
+155 log-save
+156 log-save
+157 log-save
+158 log-save
+159 log-save
+160 log-save
+162 log

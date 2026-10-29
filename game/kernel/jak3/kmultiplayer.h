@@ -24,11 +24,14 @@
 
 #include "common/common_types.h"
 
+union SDL_Event;
+struct SDL_Window;
+
 namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 11;
+constexpr u32 kProtocolVersion = 12;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -299,9 +302,20 @@ class Session {
   void set_max_players(int max_players);
   // Round trip to the host of player `slot` in ms (0 for the host), -1 while unknown.
   int player_ping(int slot) const;
-  // The secret id of player `slot` (ours for the local slot, the one its HELLO carried for a
-  // guest, host side), 0 unknown. It names the player's account in the economy.
-  u64 slot_uid(int slot) const;
+  // The account id of player `slot` on this server (account_id of its secret id and the server's
+  // id: ours computed, a guest's from its IDENTITY, host side), 0 unknown. It names the player's
+  // account in the economy.
+  u64 slot_account(int slot) const;
+  // Text chat: send a line to every other player (the host relays a guest's); ours is listed at
+  // once. Lines are kept, newest last (chat_line).
+  void send_chat(const std::string& text);
+  // A line for this player alone (a command's answer): slot -1.
+  void add_chat_line(int slot, const std::string& name, const std::string& text);
+  // The `i`-th newest line (0 the newest): false past the last. `age_ms` since it came.
+  bool chat_line(int i, int* slot, std::string* name, std::string* text, double* age_ms) const;
+  // The slot of the player named `name` (case ignored; a unique beginning of a name will do), -1
+  // when none or several.
+  int find_player(const std::string& name) const;
 
   // Time `source`'s objects are drawn at now, in its clock (ms); the local clock for -1.
   double clock_of(int source, double now_ms) const {
@@ -361,6 +375,15 @@ class Session {
   size_t m_blob_got = 0;
   u32 m_blob_id = 0;
   std::set<std::string> m_banned;
+  u64 m_server_id = 0;       // client: the server's id, from its WELCOME (our account there)
+  std::string m_local_name;  // our name, from the last local state (our chat lines)
+  struct ChatLine {
+    int slot;
+    std::string name;
+    std::string text;
+    double at;
+  };
+  std::deque<ChatLine> m_chat;
   double m_connect_start = 0;
   double m_last_state_sent = -1e9;
   double m_last_bulk_poses = -1e9;  // the last poses sent between two batches
@@ -370,9 +393,30 @@ class Session {
 // Session used by the kernel functions below.
 Session& session();
 
-// This player's secret id (multiplayer.cfg uid=): its economy account on any host.
+// This player's secret id (multiplayer.cfg uid=): never sent. A server knows the player by
+// account_id(uid, its server id), which tells nothing of the uid nor of the player's id on
+// another server.
 u64 player_uid();
 void set_player_uid(u64 uid);
+// This machine's server id (multiplayer.cfg server=), drawn once: the server its economy is.
+u64 server_id();
+void set_server_id(u64 id);
+// A player's account id on a server: the first 8 bytes of HMAC-SHA256(key: the player's secret
+// id, data: a label and the server id), never 0.
+u64 account_id(u64 uid, u64 server);
+
+// Text chat input, keyboard only (kmultiplayer.cpp "Chat"). The renderer's thread asks every
+// frame whether the chat holds the keyboard (the game's keys are then released and ignored), and
+// hands it each SDL event first: true when the chat took it.
+bool chat_wants_keyboard();
+bool chat_sdl_event(const SDL_Event& event, SDL_Window* window);
+// The same keys and text as SDL's, for the test scripts (any thread).
+void chat_key(int sdl_keycode);
+void chat_text(const char* utf8);
+// A line as the chat keeps it: printable ASCII ('~', the font's escape, becomes '-'), at most
+// kChatMax characters, spaces trimmed.
+constexpr size_t kChatMax = 96;
+std::string chat_clean(const std::string& text);
 
 // Automated tests (MP_TEST_SCRIPT, see scripts/mp-test/): buttons and sticks forced on pad 0
 // while active, read by scePadRead (game/sce/libpad.cpp).

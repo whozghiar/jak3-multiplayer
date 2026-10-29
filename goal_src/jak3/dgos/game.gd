@@ -502,5 +502,6 @@
   "multiplayer-world.o" ;; MOD multiplayer -- shared NPCs (host authority, replicas on guests)
   "multiplayer-guns.o" ;; MOD multiplayer -- every weapon, Daxter's guns
   "multiplayer-menu.o" ;; MOD multiplayer -- start menu pages and Mods menu entries
+  "multiplayer-chat.o" ;; MOD multiplayer -- the text chat (keyboard) and the host's commands
   "multiplayer-test.o" ;; MOD multiplayer -- automated test commands (inert without MP_TEST_SCRIPT)
  ))

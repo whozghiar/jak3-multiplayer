@@ -1,0 +1,244 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; name: multiplayer-chat.gc
+;; dgos: GAME
+;;
+;; Jak 3 multiplayer mod -- the text chat and the host's commands.
+;;   - The keyboard alone: T opens a line (kmultiplayer.cpp "Chat" holds the keyboard meanwhile, the
+;;     game's keys released), Enter sends it, Escape drops it, Backspace erases. Online only.
+;;   - The last lines show at the left, above the eco meter, each for 12 s (fading its last 2 s);
+;;     while a line is typed, the last 8 and the line itself under them, after a "> " and a blinking
+;;     cursor. Our lines are light blue, the answers to the host's commands yellow.
+;;   - A line starting with '/' is a command, the host's alone (the server's administrator): /help,
+;;     /players, /kick <name>, /ban <name>, /tp <name>, /tpall, /give <name> <orbs>,
+;;     /trophies <name> <count>. A name may be the beginning of one, case ignored. The answer is
+;;     the host's alone (a chat line of slot -1).
+
+(define-extern pc-mp-chat-enable (function symbol none))
+(define-extern pc-mp-chat-draft (function string symbol))
+(define-extern pc-mp-chat-take (function string symbol))
+(define-extern pc-mp-chat-send (function string none))
+(define-extern pc-mp-chat-local (function string none))
+(define-extern pc-mp-chat-line (function int string int))
+(define-extern pc-mp-chat-line-slot (function int int))
+(define-extern pc-mp-chat-arg (function string int string symbol))
+(define-extern pc-mp-find-player (function string int))
+
+(defconstant MP_CHAT_SHOWN_MS 12000) ;; a line shows this long once it came
+(defconstant MP_CHAT_FADE_MS 2000)   ;; its last part fading
+(defconstant MP_CHAT_ROWS 8)         ;; lines shown at most
+
+(define *mp-chat-line* (new 'global 'string 128 (the-as string #f)))  ;; a line sent with Enter
+(define *mp-chat-draft* (new 'global 'string 128 (the-as string #f))) ;; the line typed
+(define *mp-chat-word* (new 'global 'string 32 (the-as string #f)))   ;; a command's words
+(define *mp-chat-arg* (new 'global 'string 128 (the-as string #f)))
+(define *mp-chat-out* (new 'global 'string 256 (the-as string #f)))   ;; a line drawn or answered
+(define *mp-chat-online?* #f) ;; online last frame (the hint comes once per session)
+
+(defun mp-chat-text ((id text-id))
+  "Text `id` in the game's language."
+  (lookup-text! *common-text* id #f)
+  )
+
+(defun mp-chat-answer ((id text-id))
+  "A command's answer (text `id`), for us alone."
+  (pc-mp-chat-local (mp-chat-text id))
+  (none)
+  )
+
+(defun mp-chat-find ((line string))
+  "The slot of the player the command `line` names (its second word); -1, answered, when none or
+   several are."
+  (clear *mp-chat-arg*)
+  (let ((slot (if (pc-mp-chat-arg line 1 *mp-chat-arg*) (pc-mp-find-player *mp-chat-arg*) -1)))
+    (when (< slot 0)
+      (format (clear *mp-chat-out*) (mp-chat-text (text-id progress-mp-chat-no-player)) *mp-chat-arg*)
+      (pc-mp-chat-local *mp-chat-out*)
+      )
+    slot
+    )
+  )
+
+(defun mp-chat-command ((line string))
+  "Host: run the command `line` (\"/name words\"), its answer for us alone."
+  (clear *mp-chat-word*)
+  (pc-mp-chat-arg line 0 *mp-chat-word*)
+  (let ((cmd *mp-chat-word*))
+    (cond
+      ((string= cmd "/help")
+       (mp-chat-answer (text-id progress-mp-chat-help))
+       )
+      ((string= cmd "/players")
+       (dotimes (i MP_MAX_PLAYERS)
+         (when (or (= i *mp-local-slot*) (mp-remote-state i))
+           (format (clear *mp-chat-out*) (mp-chat-text (text-id progress-mp-chat-player)) i (mp-econ-player-name i)
+                   (pc-mp-player-ping i)
+                   )
+           (pc-mp-chat-local *mp-chat-out*)
+           )
+         )
+       )
+      ((or (string= cmd "/kick") (string= cmd "/ban"))
+       (let ((slot (mp-chat-find line))
+             (ban? (string= cmd "/ban"))
+             )
+         (cond
+           ((< slot 0)
+            )
+           ((= slot *mp-local-slot*)
+            (mp-chat-answer (text-id progress-mp-chat-not-self))
+            )
+           (else
+             (format (clear *mp-chat-out*)
+                     (mp-chat-text (if ban? (text-id progress-mp-chat-banned) (text-id progress-mp-chat-kicked)))
+                     (mp-econ-player-name slot)
+                     )
+             (pc-mp-kick slot ban?)
+             (pc-mp-chat-local *mp-chat-out*)
+             )
+           )
+         )
+       )
+      ((string= cmd "/tp")
+       (let ((slot (mp-chat-find line)))
+         (cond
+           ((< slot 0)
+            )
+           ((= slot *mp-local-slot*)
+            (mp-chat-answer (text-id progress-mp-chat-not-self))
+            )
+           (else
+             ;; as the administration page's teleport: that player comes next to us
+             (mp-send-event (mp-event-kind teleport) slot *mp-local-slot* 0.0)
+             (format (clear *mp-chat-out*) (mp-chat-text (text-id progress-mp-chat-brought)) (mp-econ-player-name slot))
+             (pc-mp-chat-local *mp-chat-out*)
+             )
+           )
+         )
+       )
+      ((string= cmd "/tpall")
+       (mp-send-event (mp-event-kind teleport) -1 *mp-local-slot* 0.0)
+       (mp-chat-answer (text-id progress-mp-chat-brought-all))
+       )
+      ((or (string= cmd "/give") (string= cmd "/trophies"))
+       (let ((slot (mp-chat-find line))
+             (kind (if (string= cmd "/trophies") 1 0))
+             )
+         (cond
+           ((< slot 0)
+            )
+           ((not (-> *mp-econ* open?))
+            (mp-chat-answer (text-id progress-mp-chat-no-economy))
+            )
+           (else
+             (clear *mp-chat-arg*)
+             (pc-mp-chat-arg line 2 *mp-chat-arg*)
+             (let ((amount (the int (string->float *mp-chat-arg*))))
+               (if (zero? amount)
+                   (mp-chat-answer (text-id progress-mp-chat-help))
+                   (let ((total (pc-mp-econ-credit slot kind amount (mp-econ-player-name slot))))
+                     (format 0 "[multiplayer] chat: the host gives player ~D ~D of kind ~D (~D now)~%" slot amount kind total)
+                     (mp-econ-send slot 0)
+                     (format (clear *mp-chat-out*)
+                             (mp-chat-text (if (zero? kind) (text-id progress-mp-chat-given) (text-id progress-mp-chat-given-trophies)))
+                             (mp-econ-player-name slot)
+                             amount
+                             total
+                             )
+                     (pc-mp-chat-local *mp-chat-out*)
+                     )
+                   )
+               )
+             )
+           )
+         )
+       )
+      (else
+        (format (clear *mp-chat-out*) (mp-chat-text (text-id progress-mp-chat-unknown)) cmd)
+        (pc-mp-chat-local *mp-chat-out*)
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-chat-submit ((line string))
+  "A line sent with Enter: a command (the host's alone) or a line for every player."
+  (cond
+    ;; 47: '/'
+    ((= (-> line data 0) 47)
+     (if (= *mp-mode* (mp-mode host))
+         (mp-chat-command line)
+         (mp-chat-answer (text-id progress-mp-chat-host-only))
+         )
+     )
+    (else
+      (pc-mp-chat-send line)
+      )
+    )
+  (none)
+  )
+
+(defun mp-chat-draw ()
+  "The last lines at the left above the eco meter, newest lowest; while typing, the line typed under
+   them."
+  (let* ((typing? (pc-mp-chat-draft *mp-chat-draft*))
+         (ctx (new 'stack 'font-context *font-default-matrix* 16 0 0.0 (font-color default) (font-flags shadow kerning)))
+         (bottom 280.0)
+         (row-h 18.0)
+         )
+    (set-width! ctx 470)
+    (set-height! ctx 20)
+    (set-scale! ctx 0.7)
+    (when typing?
+      ;; the cursor blinks twice a second
+      (format (clear *mp-chat-out*) "> ~S~S" *mp-chat-draft* (if (< (mod (-> *display* real-clock frame-counter) 150) 75) "_" ""))
+      (set! (-> ctx origin y) bottom)
+      (set! (-> ctx color) (font-color font-color-32))
+      (print-game-text *mp-chat-out* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+      )
+    (dotimes (i MP_CHAT_ROWS)
+      (let ((age (pc-mp-chat-line i *mp-chat-out*)))
+        (when (and (>= age 0) (or typing? (< age MP_CHAT_SHOWN_MS)))
+          (let ((slot (pc-mp-chat-line-slot i)))
+            (set! (-> ctx alpha)
+                  (if typing?
+                      1.0
+                      (fmin 1.0 (/ (the float (- MP_CHAT_SHOWN_MS age)) (the float MP_CHAT_FADE_MS)))
+                      )
+                  )
+            (set! (-> ctx color) (cond
+                                   ((< slot 0) (font-color yellow))
+                                   ((= slot *mp-local-slot*) (font-color font-color-33))
+                                   (else (font-color default))
+                                   )
+                  )
+            (set! (-> ctx origin y) (- bottom (* row-h (the float (+ i 1)))))
+            (print-game-text *mp-chat-out* ctx #f 44 (bucket-id hud-draw-hud-alpha))
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-chat-update ()
+  "Every frame from the hook: T may open a line while online (the hint once per session); the lines
+   sent are taken (sent, or run as commands); the lines drawn."
+  (let ((online? (mp-online?)))
+    (pc-mp-chat-enable online?)
+    (if (and online? (not *mp-chat-online?*))
+        (mp-chat-answer (text-id progress-mp-chat-hint))
+        )
+    (set! *mp-chat-online?* online?)
+    (while (pc-mp-chat-take *mp-chat-line*)
+      (mp-chat-submit *mp-chat-line*)
+      )
+    (if online?
+        (mp-chat-draw)
+        )
+    )
+  (none)
+  )

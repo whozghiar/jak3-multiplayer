@@ -28,8 +28,9 @@ Daxter co-op duo with its own multiplayer save.
 - **Game modes, chosen by the host in the lobby:** Parkour, Egg hunt, PvP, Battlefront, Hide and
   seek and Races are listed for later (grayed out, coming soon); two can be played now:
   - **Free roam:** the end of the game. Every story mission is done and everything is unlocked
-    for every player: all the guns and their upgrades, Dark and Light Jak's powers, the
-    hoverboard, the vehicles. Everyone plays Jak or Daxter and goes where they want. What is left
+    for every player: the gun's four colors with their ammo upgrades, Dark and Light Jak's powers,
+    the hoverboard, the vehicles. Each color starts at its first mod: the second and third are
+    bought with precursor orbs at Kleiver's shop (the third once you own the second). Everyone plays Jak or Daxter and goes where they want. What is left
     to play are the activities that pay precursor orbs (the burning bush challenges, the gun
     courses, the turret game, the power game), again and again: each one offers itself again
     once done, and pays again. When a player starts a challenge, the others may join it or not.
@@ -37,9 +38,9 @@ Daxter co-op duo with its own multiplayer save.
   - **Co-op (2 players):** the story as Jak and Daxter. The host starts a new campaign, continues
     it, or picks any mission of the story, act by act (everything before it done). In game, the
     host can start another mission for both players (START > Options > Multiplayer > Choose a
-    mission). The campaign is saved on
-    the host's computer as a multiplayer save of its own, apart from the memory card's save
-    slots. A guest who picks the host's character is offered the other one, and in game either
+    mission). The campaign saves itself on the host's computer as a multiplayer save of its own,
+    apart from the single-player save slots: after each step of the story (a mission's start or
+    end) and wherever the game saves, the save icon showing on both screens. A guest who picks the host's character is offered the other one, and in game either
     player can swap the roles (START > Options > Multiplayer > Character): there is always one
     Jak and one Daxter. In cutscenes, Jak
     wears the host's outfit and Daxter the outfit of the player who plays him. A player who dies
@@ -124,13 +125,20 @@ Daxter co-op duo with its own multiplayer save.
   host ended the session".
 - **Adapts to a weak connection:** when a player's connection loses messages, the game sends
   them less of what can wait, as himstan's mod does, and goes back to full rate once it recovers.
-- **Precursor orbs and Metal Head trophies:** every precursor orb you take and every Metal Head
-  you kill counts for you. The host's game keeps every player's count, saves it every minute
-  and when the session ends, and gives it back when it hosts that session again; each orb counts
-  once. In free roam, spend your orbs at **Kleiver's shop** in Spargus: he stands there in person (he turns to face you), at one of four places, the
-  same for every player and drawn at random for each session, marked by his icon on the minimap
-  and by "Merchant" in yellow over his spot. Stand there and press triangle to buy and wear new
-  outfits. The host's Mods menu can give the host 100 orbs or 100 trophies.
+- **Precursor orbs and Metal Head trophies (free roam):** every precursor orb you take and every
+  Metal Head you kill counts for you. The host's computer is the server: it keeps every player's
+  account and what they bought in its own database, saved at once, and finds them again each
+  time it hosts; each orb counts once. Your account on a server is yours whatever your name: it
+  rests on a secret id your game keeps and never sends. Spend your orbs at **Kleiver's shop** in
+  Spargus: he stands there in person (he turns to face you), at one of four places, the same for
+  every player and drawn at random for each session, marked by his icon on the minimap and by
+  "Merchant" in yellow over his spot. Stand there and press triangle to buy outfits and the gun's
+  higher mods. The host's Mods menu can give the host 100 orbs or 100 trophies. Co-op has no
+  accounts and no shop.
+- **Text chat (keyboard):** press T to write to the other players, Enter to send, Escape to cancel.
+  The last lines show at the left of the screen. The host administers the server from it: `/help`,
+  `/players`, `/kick name`, `/ban name`, `/tp name`, `/tpall`, `/give name orbs`,
+  `/trophies name count` (the beginning of a name is enough).
 
 ## How to Play
 1. Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable
@@ -172,6 +180,7 @@ Daxter co-op duo with its own multiplayer save.
 | Daxter: jump on Jak's shoulder (at any time) | L1 + triangle next to him (triangle alone next to a crouching Jak) |
 | Daxter: choose a gun | D-pad (it shows in his hand), then R1 to fire |
 | Kleiver's shop: open / buy or wear / leave | Triangle next to him / X / Triangle |
+| Chat: open / send / cancel / erase (keyboard only) | T / Enter / Escape / Backspace |
 
 > [!NOTE]
 > **Playing over the Internet:** the game asks the host's router to open its UDP port (7777, or
@@ -183,8 +192,9 @@ Daxter co-op duo with its own multiplayer save.
 
 A player who joins plays in the host's world: its progress, items and place. Their own save stays
 as it was: it is not loaded, and nothing is saved while they play in the host's world (load your
-own save, or go back to the title screen, to save again). In co-op, the host's saves (the pause
-menu's and the checkpoints') go into its multiplayer campaign, never into a memory card slot.
+own save, or go back to the title screen, to save again). In co-op, the host's game saves itself
+into its multiplayer campaign, never into a single-player slot: the pause menu's Save Game saves it
+at once, and its Load Game waits for the session's end.
 Story progress is shared: missions completed by anyone are completed for all.
 
 ## Download & Play via OpenGOAL Launcher (Players)

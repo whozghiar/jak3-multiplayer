@@ -308,3 +308,61 @@ TEST(Multiplayer, ReliableChannelUnderLoss) {
   EXPECT_EQ(client.mode(), mp::Mode::Offline);
   EXPECT_EQ(client.message(), "The host stopped the server");
 }
+
+// A player's account id is its own on each server and tells nothing of its secret; the guest
+// sends it after the server's WELCOME. Chat lines go through the host with the sender's name as
+// the host knows it, cleaned of the font's escape and of accents.
+TEST(Multiplayer, AccountIdsAndChat) {
+  EXPECT_EQ(mp::account_id(1234, 99), mp::account_id(1234, 99));
+  EXPECT_NE(mp::account_id(1234, 99), mp::account_id(1234, 98));
+  EXPECT_NE(mp::account_id(1234, 99), mp::account_id(1235, 99));
+  EXPECT_NE(mp::account_id(1234, 99), 1234u);
+
+  EXPECT_EQ(mp::chat_clean("  h\xc3\xa9llo ~0K  "), "hello -0K");
+  EXPECT_EQ(mp::chat_clean(std::string(200, 'a')).size(), mp::kChatMax);
+  EXPECT_EQ(mp::chat_clean("   "), "");
+
+  using namespace std::chrono;
+  auto start = steady_clock::now();
+  auto now = [&] { return duration<double, std::milli>(steady_clock::now() - start).count(); };
+  mp::Session host, client;
+  ASSERT_TRUE(host.host("0.0.0.0:47780", 4));
+  ASSERT_TRUE(client.join("127.0.0.1:47780", now()));
+  mp::PlayerState hs{}, cs{};
+  strcpy(hs.name, "Host");
+  strcpy(cs.name, "Guest");
+  auto pump = [&](int frames) {
+    for (int i = 0; i < frames; i++) {
+      host.update(hs, now());
+      client.update(cs, now());
+      std::this_thread::sleep_for(milliseconds(10));
+    }
+  };
+  pump(50);
+  ASSERT_EQ(client.mode(), mp::Mode::Client);
+  // both sessions run in this process: the guest's secret and the server's id are the same globals
+  EXPECT_EQ(host.slot_account(1), mp::account_id(mp::player_uid(), mp::server_id()));
+  EXPECT_EQ(client.slot_account(1), host.slot_account(1));
+
+  client.send_chat("Hi ~there");
+  host.send_chat("Welcome");
+  pump(10);
+  int slot;
+  std::string name, text;
+  double age;
+  // the host lists its own line at once, the guest's when it comes: the newest
+  ASSERT_TRUE(host.chat_line(0, &slot, &name, &text, &age));
+  EXPECT_EQ(slot, 1);
+  EXPECT_EQ(name, "Guest");
+  EXPECT_EQ(text, "Hi -there");
+  ASSERT_TRUE(client.chat_line(0, &slot, &name, &text, &age));
+  EXPECT_EQ(slot, 0);
+  EXPECT_EQ(name, "Host");
+  EXPECT_EQ(text, "Welcome");
+
+  EXPECT_EQ(host.find_player("guest"), 1);
+  EXPECT_EQ(host.find_player("Ho"), 0);
+  EXPECT_EQ(host.find_player("nobody"), -1);
+  host.leave("");
+  pump(5);
+}

@@ -66,6 +66,11 @@
 ;;   log-end                                                 a session ended without us: the note, where we are
 ;;   log-scene-skins                                         the cutscene's Jak and Daxter actors and their outfit tints
 ;;   log-econ | goto-merchant | goto-orb                     balances; stand at Kleiver's shop; take the nearest orb
+;;   chat-key <t|enter|escape|backspace> | chat-text <text>  a key or text, as the keyboard gives them to the chat
+;;   chat-say <text> | log-chat                              T, the text, Enter; the line typed and the last lines
+;;   sdl-key <key> | sdl-text <text>                         the same through SDL's event queue (the renderer's way)
+;;   log-guns | log-save | ring-save <save|load>             free roam's gun mods; co-op saves and their icon; the
+;;                                                           START ring's Save Game or Load Game online
 ;;   merchant-spot <i>                                       host: the merchant at spot i, sent to everyone
 ;;   econ-claim <aid> | shop-buy <item>                      claim an orb not taken (0: the nearest; refused); buy a shop item
 ;;   econ-grant <slot> <orbs>                                the host credits a player (test of the server's accounts)
@@ -106,6 +111,10 @@
 (define-extern pc-mp-test-active? (function symbol))
 (define-extern pc-mp-test-poll (function string symbol))
 (define-extern pc-mp-test-screenshot (function string none))
+(define-extern pc-mp-chat-test-key (function int none))
+(define-extern pc-mp-chat-test-text (function string none))
+(define-extern pc-mp-test-sdl-key (function int none))
+(define-extern pc-mp-test-sdl-text (function string none))
 (define-extern pc-mp-test-pad (function int int int int int none))
 (define-extern pc-mp-test-pause (function symbol none))
 (define-extern pc-mp-outlines-drawn (function int))
@@ -2005,6 +2014,83 @@
         ((string= cmd "shop-buy")
          ;; shop-buy <item>: buy shop item n, as the shop page's X does
          (mp-econ-request-buy (mp-test-int))
+         )
+        ((string= cmd "chat-key")
+         ;; chat-key <t|enter|escape|backspace>: that key, as the keyboard gives it to the chat (SDL
+         ;; keycodes)
+         (mp-test-word)
+         (let ((w (-> *mp-test* word)))
+           (pc-mp-chat-test-key (cond
+                                  ((string= w "t") 116)
+                                  ((string= w "enter") 13)
+                                  ((string= w "escape") 27)
+                                  ((string= w "backspace") 8)
+                                  (else 0)
+                                  )
+                                )
+           )
+         )
+        ((string= cmd "sdl-key")
+         ;; sdl-key <t|enter|escape|backspace>: that key pressed through SDL's queue (the renderer
+         ;; hands it to the chat as a keyboard's)
+         (mp-test-word)
+         (let ((w (-> *mp-test* word)))
+           (pc-mp-test-sdl-key (cond
+                                 ((string= w "t") 116)
+                                 ((string= w "enter") 13)
+                                 ((string= w "escape") 27)
+                                 ((string= w "backspace") 8)
+                                 (else 0)
+                                 )
+                               )
+           )
+         )
+        ((string= cmd "sdl-text")
+         ;; sdl-text <text>: the rest of the line typed through SDL's queue
+         (pc-mp-test-sdl-text (-> *mp-test* line))
+         )
+        ((string= cmd "chat-text")
+         ;; chat-text <text>: the rest of the line typed, as the keyboard gives it to the chat
+         (pc-mp-chat-test-text (-> *mp-test* line))
+         )
+        ((string= cmd "chat-say")
+         ;; chat-say <text>: T, the rest of the line, Enter
+         (pc-mp-chat-test-key 116)
+         (pc-mp-chat-test-text (-> *mp-test* line))
+         (pc-mp-chat-test-key 13)
+         )
+        ((string= cmd "log-chat")
+         ;; log-chat: whether a line is typed (and what), the last 8 lines (slot, ms since, text)
+         (let ((typing? (pc-mp-chat-draft *mp-chat-draft*)))
+           (format 0 "[mp-test] chat typing ~A draft ~S~%" typing? (if typing? *mp-chat-draft* ""))
+           )
+         (dotimes (i 8)
+           (let ((age (pc-mp-chat-line i *mp-chat-out*)))
+             (if (>= age 0)
+                 (format 0 "[mp-test] chat line ~D slot ~D age ~D: ~S~%" i (pc-mp-chat-line-slot i) age *mp-chat-out*)
+                 )
+             )
+           )
+         )
+        ((string= cmd "log-guns")
+         ;; log-guns: free roam's higher gun mods we have (bits: red 2, red 3, yellow 2 ...), the mod
+         ;; chosen, the shop's items we own
+         (format 0 "[mp-test] guns mods #x~X type ~D items #x~X free ~A~%"
+                 (shr (logand (-> *game-info* features) MP_GUN_HIGHER_MODS) 6) (-> *game-info* gun-type) (-> *mp-econ* items)
+                 (mp-free-roam?)
+                 )
+         )
+        ((string= cmd "ring-save")
+         ;; ring-save <save|load>: the START ring's Save Game or Load Game picked online
+         (mp-test-word)
+         (mp-ring-save-load (string= (-> *mp-test* word) "load"))
+         )
+        ((string= cmd "log-save")
+         ;; log-save: co-op saves written, one due, the save icon shown, the session's kind
+         (format 0 "[mp-test] save campaign saves ~D due ~A icon ~A kind ~A~%" (-> *mp-session* saves) *mp-coop-save-due?*
+                 (and (nonzero? *mp-save-icon-at*) (< (- (mp-now) *mp-save-icon-at*) (seconds 3)))
+                 (-> *mp-session* kind)
+                 )
          )
         ((string= cmd "log-scene-skins")
          ;; log-scene-skins: each Jak or Daxter actor of the cutscene playing here, and the shirt and fur

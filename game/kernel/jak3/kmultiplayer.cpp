@@ -14,19 +14,19 @@
 #endif
 
 #include <algorithm>
-#include <map>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <condition_variable>
 #include <ctime>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <mutex>
-#include <thread>
-#include <random>
 #include <set>
+#include <thread>
 
 #include "kmultiplayer.h"
 #include "kmultiplayer_nat.h"
@@ -42,10 +42,22 @@
 #include "game/kernel/common/kscheme.h"
 #include "game/kernel/jak3/kscheme.h"
 #include "game/runtime.h"
-
-#include "fmt/format.h"
 #include "steam/isteamnetworkingutils.h"
 #include "steam/steamnetworkingsockets.h"
+
+#include "fmt/format.h"
+#include "third-party/SDL/include/SDL3/SDL.h"
+#include "third-party/sqlite3/sqlite3.h"
+
+// GameNetworkingSockets' random source and HMAC-SHA256 (src/common/crypto.h, built in its library).
+namespace CCrypto {
+void GenerateRandomBlock(void* dest, int size);
+void GenerateHMAC256(const unsigned char* data,
+                     unsigned int data_size,
+                     const unsigned char* key,
+                     unsigned int key_size,
+                     unsigned char (*digest)[32]);
+}  // namespace CCrypto
 
 namespace mp {
 
@@ -67,8 +79,8 @@ namespace mp {
 // ---------------------------------------------------------------------------------------------
 
 enum Msg : u8 {
-  MSG_HELLO = 1,    // client -> host: u32 protocol version, u64 the player's secret id
-  MSG_WELCOME = 2,  // host -> client: u8 slot given to the client
+  MSG_HELLO = 1,    // client -> host: u32 protocol version
+  MSG_WELCOME = 2,  // host -> client: u8 slot given to the client, u64 the server's id
   MSG_STATE = 4,    // both ways: u8 slot + PlayerState
   MSG_LEAVE = 5,    // host -> client: u8 slot of a player who left
   MSG_EVENT = 6,    // both ways: Event (the host fills `from`)
@@ -77,6 +89,8 @@ enum Msg : u8 {
                     // u32 id, u16 joints, u8 emitters, u8 sounds, PoseJoint..., PoseEmitter...,
                     // PoseSound...
   MSG_BLOB = 9,     // both ways: u8 from, u8 to, u32 total size, u32 offset, u32 id, bytes
+  MSG_IDENTITY = 10,  // client -> host: u64 the player's account id on this server (account_id)
+  MSG_CHAT = 11,      // client -> host: the text; host -> client: u8 slot, char name[16], the text
 };
 
 enum Lane : u16 { kLaneControl, kLaneCritical, kLaneGameplay, kLaneNormal, kLaneBulk, kLaneCount };
@@ -120,6 +134,7 @@ static Lane lane_of(u8 type, const u8* payload, size_t len) {
       return kLaneCritical;
     case MSG_EVENT:
     case MSG_BLOB:
+    case MSG_CHAT:
       return kLaneGameplay;
     case MSG_ACTORS:
       return kLaneNormal;
@@ -223,7 +238,8 @@ struct Session::Peer {
   std::string ip;
   bool connected = false;  // GNS finished the handshake: messages can go
   int slot = -1;           // host side: -1 until the HELLO is accepted
-  u64 uid = 0;             // host side: the guest's secret id, from its HELLO (economy account)
+  u64 account = 0;         // host side: the guest's account id here, from its IDENTITY
+  double chat_tokens = 5;  // host side: chat lines it may send now (one more every 2 s, 5 at most)
   double last_recv = 0;    // time of the last message received (the receive time of states)
   bool dead = false;
   std::string dead_reason;
@@ -785,11 +801,7 @@ bool Session::on_status(const void* data) {
   if (state == k_ESteamNetworkingConnectionState_Connected && !p->connected) {
     p->connected = true;
     if (m_mode != Mode::Host) {
-      u8 hello[12];
-      u64 uid = player_uid();
-      memcpy(hello, &kProtocolVersion, 4);
-      memcpy(hello + 4, &uid, 8);
-      p->queue(MSG_HELLO, hello, 12);
+      p->queue(MSG_HELLO, &kProtocolVersion, 4);
     }
   } else if (state == k_ESteamNetworkingConnectionState_ClosedByPeer ||
              state == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
@@ -836,6 +848,8 @@ void Session::leave(const std::string& reason) {
   m_blob.clear();
   m_blob_got = 0;
   m_banned.clear();
+  m_chat.clear();
+  m_server_id = 0;
   if (m_mode != Mode::Offline && !reason.empty()) {
     lg::info("[multiplayer] {}", reason);
   }
@@ -901,9 +915,6 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         }
         u32 version;
         memcpy(&version, data, 4);
-        if (len >= 12) {
-          memcpy(&p.uid, data + 4, 8);
-        }
         const char* reason = nullptr;
         int slot = -1;
         for (int i = 1; i < m_max_players && slot < 0; i++) {
@@ -925,8 +936,42 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
         p.slot = slot;
         m_remotes[slot].clear();
         u8 s = (u8)slot;
-        p.queue(MSG_WELCOME, &s, 1);
+        u64 server = server_id();
+        p.queue(MSG_WELCOME, &s, 1, &server, 8);
         lg::info("[multiplayer] {} joined as player {}", p.ip, slot);
+        return;
+      }
+      case MSG_IDENTITY: {
+        // once: the account id the guest has here (account_id), which tells nothing of its secret
+        if (p.slot < 0 || p.account || len != 8) {
+          return;
+        }
+        memcpy(&p.account, data, 8);
+        return;
+      }
+      case MSG_CHAT: {
+        // at most 5 lines in a row, then one every 2 s; the line goes on with the sender's slot
+        // and name as the host knows them, never as the sender claims
+        if (p.slot < 0 || p.chat_tokens < 1) {
+          return;
+        }
+        auto text = chat_clean(std::string((const char*)data, len));
+        if (text.empty()) {
+          return;
+        }
+        p.chat_tokens -= 1;
+        PlayerState st;
+        std::string name = m_remotes[p.slot].sample(m_now, &st)
+                               ? std::string(st.name, strnlen(st.name, sizeof(st.name)))
+                               : fmt::format("player {}", p.slot);
+        add_chat_line(p.slot, name, text);
+        u8 head[17] = {(u8)p.slot};
+        memcpy(head + 1, name.data(), std::min<size_t>(name.size(), 16));
+        for (auto* o : m_peers) {
+          if (o != &p && o->slot >= 0) {
+            o->queue(MSG_CHAT, head, sizeof(head), text.data(), text.size());
+          }
+        }
         return;
       }
       case MSG_STATE: {
@@ -1002,11 +1047,22 @@ void Session::handle_frame(Peer& p, u8 type, const u8* data, size_t len) {
   // Client side: frames from the host.
   switch (type) {
     case MSG_WELCOME:
-      if (len == 1 && data[0] < kMaxPlayers) {
+      if (len == 9 && data[0] < kMaxPlayers) {
         m_local_slot = data[0];
         m_mode = Mode::Client;
+        memcpy(&m_server_id, data + 1, 8);
+        // our account on this server: derived from our secret id, which stays here
+        u64 account = account_id(player_uid(), m_server_id);
+        p.queue(MSG_IDENTITY, &account, 8);
         m_message = "Connected as player " + std::to_string(m_local_slot);
         lg::info("[multiplayer] {}", m_message);
+      }
+      return;
+    case MSG_CHAT:
+      if (len >= 17 && data[0] < kMaxPlayers) {
+        add_chat_line(data[0],
+                      std::string((const char*)data + 1, strnlen((const char*)data + 1, 16)),
+                      chat_clean(std::string((const char*)data + 17, len - 17)));
       }
       return;
     case MSG_STATE:
@@ -1235,7 +1291,10 @@ void Session::receive_all() {
 }
 
 void Session::update(PlayerState local, double now) {
+  double elapsed = std::max(0.0, now - m_now);
   m_now = now;
+  local.name[sizeof(local.name) - 1] = 0;
+  m_local_name = local.name;
   if (m_mode == Mode::Offline) {
     return;
   }
@@ -1243,20 +1302,21 @@ void Session::update(PlayerState local, double now) {
 
   receive_all();
 
-  // Each peer's quality once a second (the host its guests, a guest the host).
+  // Each peer's quality once a second (the host its guests, a guest the host); its chat allowance.
   for (auto* p : m_peers) {
     if (!p->dead && now >= p->next_status) {
       p->next_status = now + kStatusIntervalMs;
       read_status(*p);
     }
+    p->chat_tokens = std::min(5.0, p->chat_tokens + elapsed / 2000.0);
   }
 
   // Send the local state.
   if (m_local_slot >= 0 && now - m_last_state_sent >= kStateIntervalMs) {
     m_last_state_sent = now;
     local.time_ms = (u32)now;
-    local.ping_ms = (u16)std::clamp(m_mode == Mode::Client ? player_ping(m_local_slot) : 0, 0, 65535);
-    local.name[sizeof(local.name) - 1] = 0;
+    local.ping_ms =
+        (u16)std::clamp(m_mode == Mode::Client ? player_ping(m_local_slot) : 0, 0, 65535);
     u8 s = (u8)m_local_slot;
     for (auto* p : m_peers) {
       if ((p->slot >= 0 || m_mode == Mode::Client) && m_frame % p->state_every() == 0) {
@@ -1849,29 +1909,42 @@ static std::string public_address() {
   return m->address;
 }
 
-u64 Session::slot_uid(int slot) const {
+u64 Session::slot_account(int slot) const {
   if (slot == m_local_slot) {
-    return player_uid();
+    return account_id(player_uid(), m_mode == Mode::Host ? server_id() : m_server_id);
   }
   for (auto* p : m_peers) {
     if (p->slot == slot) {
-      return p->uid;
+      return p->account;
     }
   }
   return 0;
 }
 
-// The player's secret id: read from multiplayer.cfg (uid=), drawn once when there is none, written
-// by every config save. A host keeps each guest's money under it: only that player knows it.
+// ---------------------------------------------------------------------------------------------
+// Players' identity. Each player draws a secret id once (multiplayer.cfg uid=) and each server an
+// id of its own (multiplayer.cfg server=). A guest never sends its secret: it sends the account id
+// it has on that server, HMAC-SHA256 of the server's id keyed by its secret (GameNetworkingSockets'
+// own, with its random source). The same player finds its account on that server whatever its
+// name, slot or address; a server cannot tell its secret, nor its account on another server (as
+// the Minecraft or Terraria servers a player hosts at home, the host is trusted with what it keeps:
+// it can change any account, it cannot pass for its players elsewhere).
+// ---------------------------------------------------------------------------------------------
+
+static u64 random_u64() {
+  u64 v = 0;
+  while (!v) {
+    CCrypto::GenerateRandomBlock(&v, (int)sizeof(v));
+  }
+  return v;
+}
+
 static u64 g_player_uid = 0;
+static u64 g_server_id = 0;
 
 u64 player_uid() {
   if (!g_player_uid) {
-    std::random_device rd;
-    g_player_uid = ((u64)rd() << 32) ^ (u64)rd() ^ (u64)std::chrono::steady_clock::now().time_since_epoch().count();
-    if (!g_player_uid) {
-      g_player_uid = 1;
-    }
+    g_player_uid = random_u64();
   }
   return g_player_uid;
 }
@@ -1880,15 +1953,40 @@ void set_player_uid(u64 uid) {
   g_player_uid = uid;
 }
 
+u64 server_id() {
+  if (!g_server_id) {
+    g_server_id = random_u64();
+  }
+  return g_server_id;
+}
+
+void set_server_id(u64 id) {
+  g_server_id = id;
+}
+
+u64 account_id(u64 uid, u64 server) {
+  static const char kLabel[] = "opengoal-jak3-multiplayer-account";
+  u8 data[sizeof(kLabel) - 1 + 8];
+  memcpy(data, kLabel, sizeof(kLabel) - 1);
+  memcpy(data + sizeof(kLabel) - 1, &server, 8);
+  unsigned char digest[32];
+  CCrypto::GenerateHMAC256(data, (unsigned int)sizeof(data), (const unsigned char*)&uid, 8,
+                           &digest);
+  u64 id;
+  memcpy(&id, digest, 8);
+  return id ? id : 1;
+}
+
 // ---------------------------------------------------------------------------------------------
-// Economy: every player's precursor orbs and Metal Head trophies, kept by the server (the host)
-// alone. The host's GOAL code credits what it validated (an orb that is in its world, that player
-// seen at it, never credited in this session; a Metal Head its world saw that player kill) and
-// debits purchases; the guests only show what the host sends them. Accounts are kept per session
-// key ("campaign", "free"...) in <settings>/multiplayer-economy.json, under each player's secret id,
-// with the orb entities credited in that session (each orb pays once, whoever took it, whenever):
-// saved every minute when something changed and when the session closes; each closing is recorded
-// in <settings>/multiplayer-sessions.log.
+// Economy: every player's precursor orbs, Metal Head trophies and items bought, kept by the
+// server (the host) alone, in its database <settings>/multiplayer-server.db (SQLite): its
+// accounts per session key ("free" for free roam), under each player's account id; the orb
+// entities credited (each orb pays once, whoever took it, whenever); a ledger of every change.
+// Each change is written at once (one transaction), so a crash loses nothing. The host's GOAL
+// code credits what it validated (an orb that is in its world, that player seen at it, never
+// credited in this session; a Metal Head its world saw that player kill) and debits purchases;
+// the guests only show what the host sends them. Each closing is also recorded in
+// <settings>/multiplayer-sessions.log. The JSON file of earlier versions is imported once.
 // ---------------------------------------------------------------------------------------------
 
 struct EconAccount {
@@ -1903,19 +2001,23 @@ struct Economy {
   std::map<u64, EconAccount> accounts;
   std::set<u32> orbs_taken;  // the orb entities (aid) credited in this session, ever
   bool open = false;
-  bool dirty = false;
-  double last_save = 0;
   double opened_at = 0;
   // a guest: its own balances as the host last sent them
   s64 own_orbs = 0;
   s64 own_trophies = 0;
   u32 own_items = 0;
-  int saves = 0;  // saves written (test log)
+  int saves = 0;  // writes to the database (test log)
+  sqlite3* db = nullptr;
+  bool db_tried = false;
 };
 
 static Economy g_econ;
 
-static fs::path econ_path() {
+static fs::path econ_db_path() {
+  return file_util::get_user_settings_dir(g_game_version) / "multiplayer-server.db";
+}
+
+static fs::path econ_json_path() {
   return file_util::get_user_settings_dir(g_game_version) / "multiplayer-economy.json";
 }
 
@@ -1937,72 +2039,189 @@ static void write_file_safely(const fs::path& path, const void* data, size_t siz
   }
 }
 
-static nlohmann::json econ_read_all() {
-  try {
-    if (fs::exists(econ_path())) {
-      return nlohmann::json::parse(file_util::read_text_file(econ_path()));
-    }
-  } catch (...) {
-    // kept aside, not written over: the accounts of every session stay in it
-    fs::path bad = econ_path();
-    bad += fmt::format(".bad-{}", (long long)std::time(nullptr));
-    std::error_code ec;
-    fs::rename(econ_path(), bad, ec);
-    lg::warn("[multiplayer] {} unreadable: kept as {}, the economy starts empty",
-             econ_path().string(), bad.string());
+// One statement: `bind` fills its parameters, `row` reads each row. False on an error (logged).
+static bool econ_sql(const char* sql,
+                     const std::function<void(sqlite3_stmt*)>& bind = {},
+                     const std::function<void(sqlite3_stmt*)>& row = {}) {
+  if (!g_econ.db) {
+    return false;
   }
-  return nlohmann::json::object();
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(g_econ.db, sql, -1, &st, nullptr) != SQLITE_OK) {
+    lg::warn("[multiplayer] economy database: {}", sqlite3_errmsg(g_econ.db));
+    return false;
+  }
+  if (bind) {
+    bind(st);
+  }
+  int rc;
+  while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+    if (row) {
+      row(st);
+    }
+  }
+  sqlite3_finalize(st);
+  if (rc != SQLITE_DONE) {
+    lg::warn("[multiplayer] economy database: {}", sqlite3_errmsg(g_econ.db));
+  }
+  return rc == SQLITE_DONE;
 }
 
-void econ_save(double now) {
-  if (!g_econ.open) {
+static void econ_bind_text(sqlite3_stmt* st, int i, const std::string& s) {
+  sqlite3_bind_text(st, i, s.c_str(), -1, SQLITE_TRANSIENT);
+}
+
+static std::string econ_hex(u64 id) {
+  return fmt::format("{:016x}", id);
+}
+
+static std::string econ_now_text() {
+  std::time_t t = std::time(nullptr);
+  char when[32];
+  std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+  return when;
+}
+
+// Write account `id` as it is now and the change that made it (`what`, `amount`) in the ledger.
+static void econ_store(u64 id, const EconAccount& a, const std::string& what, s64 amount) {
+  if (!g_econ.db) {
     return;
   }
-  auto all = econ_read_all();
-  nlohmann::json accounts = nlohmann::json::object();
-  for (auto& [uid, a] : g_econ.accounts) {
-    accounts[fmt::format("{:016x}", uid)] = {
-        {"name", a.name}, {"orbs", a.orbs}, {"trophies", a.trophies}, {"items", a.items}};
-  }
-  all[g_econ.key] = {{"accounts", accounts}, {"orbs_taken", g_econ.orbs_taken}};
-  std::string text = all.dump(2);
-  write_file_safely(econ_path(), text.data(), text.size());
-  g_econ.dirty = false;
-  g_econ.last_save = now;
+  econ_sql("BEGIN");
+  econ_sql(
+      "INSERT OR REPLACE INTO accounts(session, account, name, orbs, trophies, items) "
+      "VALUES(?, ?, ?, ?, ?, ?)",
+      [&](sqlite3_stmt* st) {
+        econ_bind_text(st, 1, g_econ.key);
+        econ_bind_text(st, 2, econ_hex(id));
+        econ_bind_text(st, 3, a.name);
+        sqlite3_bind_int64(st, 4, a.orbs);
+        sqlite3_bind_int64(st, 5, a.trophies);
+        sqlite3_bind_int64(st, 6, a.items);
+      });
+  econ_sql(
+      "INSERT INTO ledger(at, session, account, name, what, amount, orbs, trophies, items) "
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [&](sqlite3_stmt* st) {
+        econ_bind_text(st, 1, econ_now_text());
+        econ_bind_text(st, 2, g_econ.key);
+        econ_bind_text(st, 3, econ_hex(id));
+        econ_bind_text(st, 4, a.name);
+        econ_bind_text(st, 5, what);
+        sqlite3_bind_int64(st, 6, amount);
+        sqlite3_bind_int64(st, 7, a.orbs);
+        sqlite3_bind_int64(st, 8, a.trophies);
+        sqlite3_bind_int64(st, 9, a.items);
+      });
+  econ_sql("COMMIT");
   g_econ.saves++;
 }
 
+// The JSON file of earlier versions (accounts under the players' secret ids): each account moved
+// under its account id on this server, then the file renamed .imported.
+static void econ_import_json() {
+  if (!fs::exists(econ_json_path())) {
+    return;
+  }
+  int count = 0;
+  try {
+    auto all = nlohmann::json::parse(file_util::read_text_file(econ_json_path()));
+    econ_sql("BEGIN");
+    for (auto& [key, session] : all.items()) {
+      auto accounts = session.value("accounts", nlohmann::json::object());
+      for (auto& [hex, v] : accounts.items()) {
+        u64 id = account_id(std::stoull(hex, nullptr, 16), server_id());
+        econ_sql(
+            "INSERT OR IGNORE INTO accounts(session, account, name, orbs, trophies, items) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
+            [&](sqlite3_stmt* st) {
+              econ_bind_text(st, 1, key);
+              econ_bind_text(st, 2, econ_hex(id));
+              econ_bind_text(st, 3, v.value("name", ""));
+              sqlite3_bind_int64(st, 4, v.value("orbs", (s64)0));
+              sqlite3_bind_int64(st, 5, v.value("trophies", (s64)0));
+              sqlite3_bind_int64(st, 6, v.value("items", (u32)0));
+            });
+        count++;
+      }
+      for (auto& aid : session.value("orbs_taken", nlohmann::json::array())) {
+        econ_sql("INSERT OR IGNORE INTO orbs_taken(session, aid) VALUES(?, ?)",
+                 [&](sqlite3_stmt* st) {
+                   econ_bind_text(st, 1, key);
+                   sqlite3_bind_int64(st, 2, aid.get<u32>());
+                 });
+      }
+    }
+    econ_sql("COMMIT");
+  } catch (...) {
+    econ_sql("ROLLBACK");
+    lg::warn("[multiplayer] {} unreadable: not imported", econ_json_path().string());
+    return;
+  }
+  fs::path done = econ_json_path();
+  done += ".imported";
+  std::error_code ec;
+  fs::rename(econ_json_path(), done, ec);
+  lg::info("[multiplayer] economy: {} account(s) imported from {}", count,
+           econ_json_path().string());
+}
+
+// The database, opened (and made) on first use. Without it the economy still runs, unsaved.
+static void econ_open_db() {
+  if (g_econ.db_tried) {
+    return;
+  }
+  g_econ.db_tried = true;
+  file_util::create_dir_if_needed_for_file(econ_db_path());
+  if (sqlite3_open(econ_db_path().string().c_str(), &g_econ.db) != SQLITE_OK) {
+    lg::warn("[multiplayer] {} not opened: {}: the economy is not saved", econ_db_path().string(),
+             g_econ.db ? sqlite3_errmsg(g_econ.db) : "out of memory");
+    sqlite3_close(g_econ.db);
+    g_econ.db = nullptr;
+    return;
+  }
+  econ_sql("PRAGMA journal_mode=WAL");
+  econ_sql("PRAGMA synchronous=NORMAL");
+  econ_sql(
+      "CREATE TABLE IF NOT EXISTS accounts(session TEXT NOT NULL, account TEXT NOT NULL, name "
+      "TEXT, orbs INTEGER, trophies INTEGER, items INTEGER, PRIMARY KEY(session, account))");
+  econ_sql(
+      "CREATE TABLE IF NOT EXISTS orbs_taken(session TEXT NOT NULL, aid INTEGER NOT NULL, "
+      "PRIMARY KEY(session, aid))");
+  econ_sql(
+      "CREATE TABLE IF NOT EXISTS ledger(at TEXT, session TEXT, account TEXT, name TEXT, what "
+      "TEXT, amount INTEGER, orbs INTEGER, trophies INTEGER, items INTEGER)");
+  econ_import_json();
+}
+
 void econ_open(const std::string& key, double now) {
+  econ_open_db();
   g_econ.key = key.empty() ? "world" : key;
   g_econ.accounts.clear();
   g_econ.orbs_taken.clear();
-  auto all = econ_read_all();
-  if (all.contains(g_econ.key) && all[g_econ.key].is_object()) {
-    auto& session = all[g_econ.key];
-    if (session.contains("orbs_taken") && session["orbs_taken"].is_array()) {
-      for (auto& aid : session["orbs_taken"]) {
-        if (aid.is_number_unsigned()) {
-          g_econ.orbs_taken.insert(aid.get<u32>());
-        }
-      }
-    }
-    // a local: items() of the temporary value() returns would outlive it
-    auto accounts = session.value("accounts", nlohmann::json::object());
-    for (auto& [hex, v] : accounts.items()) {
-      try {
+  econ_sql(
+      "SELECT account, name, orbs, trophies, items FROM accounts WHERE session = ?",
+      [&](sqlite3_stmt* st) { econ_bind_text(st, 1, g_econ.key); },
+      [&](sqlite3_stmt* st) {
         EconAccount a;
-        a.name = v.value("name", "");
-        a.orbs = v.value("orbs", (s64)0);
-        a.trophies = v.value("trophies", (s64)0);
-        a.items = v.value("items", (u32)0);
-        g_econ.accounts[std::stoull(hex, nullptr, 16)] = a;
-      } catch (...) {
-      }
-    }
-  }
+        auto text = [&](int i) {
+          auto* t = sqlite3_column_text(st, i);
+          return std::string(t ? (const char*)t : "");
+        };
+        a.name = text(1);
+        a.orbs = sqlite3_column_int64(st, 2);
+        a.trophies = sqlite3_column_int64(st, 3);
+        a.items = (u32)sqlite3_column_int64(st, 4);
+        try {
+          g_econ.accounts[std::stoull(text(0), nullptr, 16)] = a;
+        } catch (...) {
+        }
+      });
+  econ_sql(
+      "SELECT aid FROM orbs_taken WHERE session = ?",
+      [&](sqlite3_stmt* st) { econ_bind_text(st, 1, g_econ.key); },
+      [&](sqlite3_stmt* st) { g_econ.orbs_taken.insert((u32)sqlite3_column_int64(st, 0)); });
   g_econ.open = true;
-  g_econ.dirty = false;
-  g_econ.last_save = now;
   g_econ.opened_at = now;
   lg::info("[multiplayer] economy \"{}\": {} account(s) and {} orb(s) taken loaded", g_econ.key,
            g_econ.accounts.size(), g_econ.orbs_taken.size());
@@ -2012,14 +2231,10 @@ void econ_close(double now) {
   if (!g_econ.open) {
     return;
   }
-  econ_save(now);
   // the record of this session's closing: when, how long, every account's balances
-  std::time_t t = std::time(nullptr);
-  char when[32];
-  std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
-  std::string line = fmt::format("{} session \"{}\" closed after {:.0f} s:", when, g_econ.key,
-                                 (now - g_econ.opened_at) / 1000.0);
-  for (auto& [uid, a] : g_econ.accounts) {
+  std::string line = fmt::format("{} session \"{}\" closed after {:.0f} s:", econ_now_text(),
+                                 g_econ.key, (now - g_econ.opened_at) / 1000.0);
+  for (auto& [id, a] : g_econ.accounts) {
     line += fmt::format(" [{} orbs {} trophies {} items {:x}]", a.name, a.orbs, a.trophies, a.items);
   }
   file_util::create_dir_if_needed_for_file(econ_log_path());
@@ -2028,19 +2243,248 @@ void econ_close(double now) {
   g_econ.open = false;
 }
 
-// Every frame (host): the accounts saved once a minute when something changed.
-void econ_update(double now) {
-  if (g_econ.open && g_econ.dirty && now - g_econ.last_save >= 60000.0) {
-    econ_save(now);
-  }
+static u64 econ_account_id(int slot) {
+  return g_econ.open ? session().slot_account(slot) : 0;
 }
 
 static EconAccount* econ_account(int slot) {
-  u64 uid = session().slot_uid(slot);
-  if (!g_econ.open || !uid) {
-    return nullptr;
+  u64 id = econ_account_id(slot);
+  return id ? &g_econ.accounts[id] : nullptr;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Chat: lines of text between the players, typed on the keyboard alone. T opens the line (the
+// game's keys are released and ignored meanwhile), Enter sends it, Escape drops it, Backspace
+// erases. GOAL says when the chat may open (online), takes each line sent and sends it or, from
+// the host, runs it as a command (multiplayer.gc "Chat"). The host relays a guest's line with the
+// guest's slot and name as it knows them, at most 5 lines in a row from a guest, then one every
+// 2 s. Lines keep printable ASCII: accented Latin letters lose their accent, '~' (the font's
+// escape) becomes '-'.
+// ---------------------------------------------------------------------------------------------
+
+// Printable ASCII, accented Latin letters without their accent, '~' as '-', at most kChatMax
+// characters; spaces kept.
+static std::string chat_filter(const std::string& text) {
+  // the letters of U+00C0..U+00FF without their accent
+  static const char kFold[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+  std::string out;
+  for (size_t i = 0; i < text.size() && out.size() < kChatMax; i++) {
+    unsigned char c = text[i];
+    if (c >= 32 && c < 127) {
+      out += c == '~' ? '-' : (char)c;
+    } else if (c == 0xc3 && i + 1 < text.size() && (u8)text[i + 1] >= 0x80 &&
+               (u8)text[i + 1] < 0xc0) {
+      out += kFold[(u8)text[++i] - 0x80];
+    }
   }
-  return &g_econ.accounts[uid];
+  return out;
+}
+
+std::string chat_clean(const std::string& text) {
+  auto out = chat_filter(text);
+  size_t a = out.find_first_not_of(' ');
+  if (a == std::string::npos) {
+    return "";
+  }
+  return out.substr(a, out.find_last_not_of(' ') - a + 1);
+}
+
+void Session::add_chat_line(int slot, const std::string& name, const std::string& text) {
+  if (text.empty()) {
+    return;
+  }
+  m_chat.push_back({slot, name, text, now_ms()});
+  while (m_chat.size() > 50) {
+    m_chat.pop_front();
+  }
+  lg::info("[multiplayer] chat {} {}: {}", slot, name, text);
+}
+
+void Session::send_chat(const std::string& raw) {
+  auto text = chat_clean(raw);
+  if (text.empty() || m_local_slot < 0 || m_mode == Mode::Offline) {
+    return;
+  }
+  add_chat_line(m_local_slot, m_local_name, text);
+  if (m_mode == Mode::Host) {
+    u8 head[17] = {(u8)m_local_slot};
+    memcpy(head + 1, m_local_name.data(), std::min<size_t>(m_local_name.size(), 16));
+    for (auto* p : m_peers) {
+      if (p->slot >= 0) {
+        p->queue(MSG_CHAT, head, sizeof(head), text.data(), text.size());
+      }
+    }
+  } else {
+    for (auto* p : m_peers) {
+      p->queue(MSG_CHAT, text.data(), text.size());
+    }
+  }
+}
+
+bool Session::chat_line(int i,
+                        int* slot,
+                        std::string* name,
+                        std::string* text,
+                        double* age_ms) const {
+  if (i < 0 || i >= (int)m_chat.size()) {
+    return false;
+  }
+  const auto& l = m_chat[m_chat.size() - 1 - i];
+  *slot = l.slot;
+  *name = l.name;
+  *text = l.text;
+  *age_ms = now_ms() - l.at;
+  return true;
+}
+
+int Session::find_player(const std::string& raw) const {
+  auto lower = [](std::string s) {
+    for (auto& c : s) {
+      c = (char)std::tolower((unsigned char)c);
+    }
+    return s;
+  };
+  auto want = lower(raw);
+  if (want.empty() || m_mode == Mode::Offline) {
+    return -1;
+  }
+  int prefix = -1, prefixes = 0;
+  for (int s = 0; s < kMaxPlayers; s++) {
+    std::string name;
+    PlayerState st;
+    if (s == m_local_slot) {
+      name = m_local_name;
+    } else if (m_remotes[s].sample(m_now, &st)) {
+      name = std::string(st.name, strnlen(st.name, sizeof(st.name)));
+    } else {
+      continue;
+    }
+    name = lower(name);
+    if (name == want) {
+      return s;
+    }
+    if (name.rfind(want, 0) == 0) {
+      prefix = s;
+      prefixes++;
+    }
+  }
+  return prefixes == 1 ? prefix : -1;
+}
+
+namespace {
+struct ChatInput {
+  std::mutex m;
+  bool enabled = false;  // GOAL: the chat may open
+  bool typing = false;
+  bool hold = false;     // closed by a key still held: the game gets the keyboard once it is up
+  bool text_on = false;  // SDL's text input started (render thread)
+  double ignore_text_until = 0;  // the T that opened the line is no text
+  SDL_Window* window = nullptr;
+  std::string draft;
+  std::deque<std::string> sent;  // lines sent, for GOAL
+};
+ChatInput g_chat;
+
+void chat_key_locked(int key) {
+  auto& c = g_chat;
+  if (!c.typing) {
+    if (c.enabled && key == SDLK_T) {
+      c.typing = true;
+      c.draft.clear();
+      c.ignore_text_until = now_ms() + 60.0;
+    }
+    return;
+  }
+  switch (key) {
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER: {
+      auto line = chat_clean(c.draft);
+      if (!line.empty()) {
+        c.sent.push_back(line);
+      }
+      [[fallthrough]];
+    }
+    case SDLK_ESCAPE:
+      c.typing = false;
+      c.hold = true;
+      c.draft.clear();
+      break;
+    case SDLK_BACKSPACE:
+      if (!c.draft.empty()) {
+        c.draft.pop_back();
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+void chat_text_locked(const char* utf8) {
+  if (g_chat.typing && utf8) {
+    g_chat.draft = chat_filter(g_chat.draft + utf8);
+  }
+}
+}  // namespace
+
+bool chat_wants_keyboard() {
+  std::lock_guard<std::mutex> lock(g_chat.m);
+  auto& c = g_chat;
+  if (c.typing && !c.enabled) {
+    c.typing = false;
+    c.draft.clear();
+  }
+  if (c.typing != c.text_on && c.window) {
+    if (c.typing) {
+      SDL_StartTextInput(c.window);
+    } else {
+      SDL_StopTextInput(c.window);
+    }
+    c.text_on = c.typing;
+  }
+  if (c.hold) {
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    if (!keys || (!keys[SDL_SCANCODE_RETURN] && !keys[SDL_SCANCODE_KP_ENTER] &&
+                  !keys[SDL_SCANCODE_ESCAPE])) {
+      c.hold = false;
+    }
+  }
+  return c.typing || c.hold;
+}
+
+bool chat_sdl_event(const SDL_Event& e, SDL_Window* window) {
+  std::lock_guard<std::mutex> lock(g_chat.m);
+  auto& c = g_chat;
+  c.window = window;
+  switch (e.type) {
+    case SDL_EVENT_KEY_DOWN:
+      if (!c.typing) {
+        if (c.enabled && !e.key.repeat && e.key.key == SDLK_T &&
+            !(e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+          chat_key_locked(SDLK_T);
+          return true;
+        }
+        return false;
+      }
+      chat_key_locked((int)e.key.key);
+      return true;
+    case SDL_EVENT_TEXT_INPUT:
+      if (c.typing && now_ms() >= c.ignore_text_until) {
+        chat_text_locked(e.text.text);
+      }
+      return c.typing;
+    default:
+      return false;
+  }
+}
+
+void chat_key(int sdl_keycode) {
+  std::lock_guard<std::mutex> lock(g_chat.m);
+  chat_key_locked(sdl_keycode);
+}
+
+void chat_text(const char* utf8) {
+  std::lock_guard<std::mutex> lock(g_chat.m);
+  chat_text_locked(utf8);
 }
 
 TestPad g_test_pad;
@@ -2184,7 +2628,6 @@ u64 pc_mp_update(u32 state) {
   if (state) {
     s.update(*Ptr<mp::PlayerState>(state).c(), mp::now_ms());
   }
-  mp::econ_update(mp::now_ms());
   return (u64)(s64)s.mode();
 }
 
@@ -2201,29 +2644,34 @@ void pc_mp_econ_close() {
 
 // (pc-mp-econ-credit slot kind amount name) -> the new balance (host): what the host validated.
 u64 pc_mp_econ_credit(u32 slot, u32 kind, u32 amount, u32 name) {
-  auto* a = mp::econ_account((int)slot);
-  if (!a) {
+  u64 id = mp::econ_account_id((int)slot);
+  if (!id) {
     return 0;
   }
+  auto& a = mp::g_econ.accounts[id];
   if (name) {
-    a->name = goal_string(name);
+    a.name = goal_string(name);
   }
-  s64& v = kind ? a->trophies : a->orbs;
+  s64& v = kind ? a.trophies : a.orbs;
   v += (s64)(s32)amount;
-  mp::g_econ.dirty = true;
+  mp::econ_store(id, a, kind ? "trophies" : "orbs", (s32)amount);
   return (u64)v;
 }
 
 // (pc-mp-econ-buy slot item cost) -> #t when player `slot` had the orbs and did not own the item:
 // the orbs paid, the item owned (host).
 u64 pc_mp_econ_buy(u32 slot, u32 item, u32 cost) {
-  auto* a = mp::econ_account((int)slot);
-  if (!a || item >= 32 || (a->items & (1u << item)) || a->orbs < (s64)cost) {
+  u64 id = mp::econ_account_id((int)slot);
+  if (!id) {
     return to_symbol(false);
   }
-  a->orbs -= cost;
-  a->items |= 1u << item;
-  mp::g_econ.dirty = true;
+  auto& a = mp::g_econ.accounts[id];
+  if (item >= 32 || (a.items & (1u << item)) || a.orbs < (s64)cost) {
+    return to_symbol(false);
+  }
+  a.orbs -= cost;
+  a.items |= 1u << item;
+  mp::econ_store(id, a, fmt::format("bought item {}", item), -(s64)cost);
   return to_symbol(true);
 }
 
@@ -2254,13 +2702,140 @@ u64 pc_mp_econ_take_orb(u32 aid) {
   if (!mp::g_econ.open || !mp::g_econ.orbs_taken.insert(aid).second) {
     return to_symbol(false);
   }
-  mp::g_econ.dirty = true;
+  mp::econ_sql("INSERT OR IGNORE INTO orbs_taken(session, aid) VALUES(?, ?)",
+               [&](sqlite3_stmt* st) {
+                 mp::econ_bind_text(st, 1, mp::g_econ.key);
+                 sqlite3_bind_int64(st, 2, aid);
+               });
+  mp::g_econ.saves++;
   return to_symbol(true);
 }
 
 // (pc-mp-econ-saves) -> saves of the economy file written since boot (test log).
 u64 pc_mp_econ_saves() {
   return (u64)mp::g_econ.saves;
+}
+
+// Copy `text` into the GOAL string `dest` (cut to its size).
+void copy_to_goal(u32 dest, const std::string& text) {
+  if (!dest) {
+    return;
+  }
+  auto* str = Ptr<String>(dest).c();
+  size_t n = std::min<size_t>(text.size(), str->len > 0 ? str->len - 1 : 0);
+  memcpy(str->data(), text.data(), n);
+  str->data()[n] = 0;
+}
+
+// Chat (see mp "Chat"). (pc-mp-chat-enable on?): whether T may open a line (online).
+void pc_mp_chat_enable(u32 on) {
+  std::lock_guard<std::mutex> lock(mp::g_chat.m);
+  mp::g_chat.enabled = on != s7.offset;
+}
+
+// (pc-mp-chat-draft dest) -> #t while a line is typed, copied into dest.
+u64 pc_mp_chat_draft(u32 dest) {
+  std::lock_guard<std::mutex> lock(mp::g_chat.m);
+  if (mp::g_chat.typing) {
+    copy_to_goal(dest, mp::g_chat.draft);
+  }
+  return to_symbol(mp::g_chat.typing);
+}
+
+// (pc-mp-chat-take dest) -> #t when a line was sent with Enter (the oldest not taken, into dest).
+u64 pc_mp_chat_take(u32 dest) {
+  std::lock_guard<std::mutex> lock(mp::g_chat.m);
+  if (mp::g_chat.sent.empty()) {
+    return to_symbol(false);
+  }
+  copy_to_goal(dest, mp::g_chat.sent.front());
+  mp::g_chat.sent.pop_front();
+  return to_symbol(true);
+}
+
+// (pc-mp-chat-send text): a line to every other player, listed here too.
+void pc_mp_chat_send(u32 text) {
+  mp::session().send_chat(goal_string(text));
+}
+
+// (pc-mp-chat-local text): a line for this player alone (slot -1: a command's answer), one of the
+// game's texts (its accents in the game's encoding): kept as it is, 160 characters at most.
+void pc_mp_chat_local(u32 text) {
+  mp::session().add_chat_line(-1, "", goal_string(text).substr(0, 160));
+}
+
+// (pc-mp-chat-line i dest) -> ms since the i-th newest line came (0 the newest), -1 past the
+// last; "name: text" (a command's answer: the text) into dest.
+u64 pc_mp_chat_line(u32 i, u32 dest) {
+  int slot;
+  std::string name, text;
+  double age;
+  if (!mp::session().chat_line((int)i, &slot, &name, &text, &age)) {
+    return (u64)(s64)-1;
+  }
+  copy_to_goal(dest, slot < 0 ? text : name + ": " + text);
+  return (u64)(s64)age;
+}
+
+// (pc-mp-chat-line-slot i) -> the sender's slot of the i-th newest line, -1 a command's answer.
+u64 pc_mp_chat_line_slot(u32 i) {
+  int slot = -1;
+  std::string name, text;
+  double age;
+  mp::session().chat_line((int)i, &slot, &name, &text, &age);
+  return (u64)(s64)slot;
+}
+
+// (pc-mp-chat-arg line i dest) -> #t when `line` has an i-th word (0 the first), copied into dest.
+u64 pc_mp_chat_arg(u32 line, u32 i, u32 dest) {
+  auto words = str_util::split_string(goal_string(line), " ");
+  words.erase(std::remove(words.begin(), words.end(), ""), words.end());
+  if (i >= words.size()) {
+    return to_symbol(false);
+  }
+  copy_to_goal(dest, words[i]);
+  return to_symbol(true);
+}
+
+// (pc-mp-find-player name) -> the slot of the player named so (case ignored, a unique beginning
+// will do), -1 none or several.
+u64 pc_mp_find_player(u32 name) {
+  return (u64)(s64)mp::session().find_player(goal_string(name));
+}
+
+// Test scripts: (pc-mp-chat-test-key keycode) and (pc-mp-chat-test-text text), as typed.
+void pc_mp_chat_test_key(u32 key) {
+  mp::chat_key((int)key);
+}
+
+void pc_mp_chat_test_text(u32 text) {
+  mp::chat_text(goal_string(text).c_str());
+}
+
+// Test scripts: (pc-mp-test-sdl-key keycode) and (pc-mp-test-sdl-text text) push an SDL key press
+// or typed text into SDL's queue, which the renderer hands to the chat as a keyboard's.
+void pc_mp_test_sdl_key(u32 key) {
+  SDL_Event e = {};
+  e.type = SDL_EVENT_KEY_DOWN;
+  e.key.key = (SDL_Keycode)key;
+  e.key.down = true;
+  SDL_PushEvent(&e);
+  e.type = SDL_EVENT_KEY_UP;
+  e.key.down = false;
+  SDL_PushEvent(&e);
+}
+
+void pc_mp_test_sdl_text(u32 text) {
+  // the text must outlive the event: kept here
+  static std::deque<std::string> kept;
+  kept.push_back(goal_string(text));
+  if (kept.size() > 16) {
+    kept.pop_front();
+  }
+  SDL_Event e = {};
+  e.type = SDL_EVENT_TEXT_INPUT;
+  e.text.text = kept.back().c_str();
+  SDL_PushEvent(&e);
 }
 
 // (pc-mp-get-player slot dest) fills dest with the interpolated state of a remote player.
@@ -2363,6 +2938,8 @@ u64 pc_mp_config_load(u32 dest) {
         cfg->mode = std::stoi(val);
       } else if (key == "uid") {
         mp::set_player_uid(std::stoull(val, nullptr, 16));
+      } else if (key == "server") {
+        mp::set_server_id(std::stoull(val, nullptr, 16));
       } else if (key == "skin") {
         // the outfit: one hex value per group, comma separated
         auto parts = str_util::split_string(val, ",");
@@ -2390,10 +2967,11 @@ void pc_mp_config_save(u32 src) {
   for (int i = 0; i < 16; i++) {
     skin += fmt::format("{}{:x}", i ? "," : "", cfg->skin[i]);
   }
-  std::string text =
-      fmt::format("name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\nskin={}\nuid={:x}\n",
-                  name, address, cfg->character, cfg->color, cfg->enabled, cfg->mode, skin,
-                  mp::player_uid());
+  std::string text = fmt::format(
+      "name={}\naddress={}\ncharacter={}\ncolor={}\nenabled={}\nmode={}\nskin={}\nuid={:x}\nserver="
+      "{:x}\n",
+      name, address, cfg->character, cfg->color, cfg->enabled, cfg->mode, skin, mp::player_uid(),
+      mp::server_id());
   mp::write_file_safely(config_path(), text.data(), text.size());
 }
 
@@ -2906,6 +3484,19 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-econ-get", (void*)pc_mp_econ_get);
   make_function_symbol_from_c("pc-mp-econ-set-own", (void*)pc_mp_econ_set_own);
   make_function_symbol_from_c("pc-mp-econ-saves", (void*)pc_mp_econ_saves);
+  make_function_symbol_from_c("pc-mp-chat-enable", (void*)pc_mp_chat_enable);
+  make_function_symbol_from_c("pc-mp-chat-draft", (void*)pc_mp_chat_draft);
+  make_function_symbol_from_c("pc-mp-chat-take", (void*)pc_mp_chat_take);
+  make_function_symbol_from_c("pc-mp-chat-send", (void*)pc_mp_chat_send);
+  make_function_symbol_from_c("pc-mp-chat-local", (void*)pc_mp_chat_local);
+  make_function_symbol_from_c("pc-mp-chat-line", (void*)pc_mp_chat_line);
+  make_function_symbol_from_c("pc-mp-chat-line-slot", (void*)pc_mp_chat_line_slot);
+  make_function_symbol_from_c("pc-mp-chat-arg", (void*)pc_mp_chat_arg);
+  make_function_symbol_from_c("pc-mp-find-player", (void*)pc_mp_find_player);
+  make_function_symbol_from_c("pc-mp-chat-test-key", (void*)pc_mp_chat_test_key);
+  make_function_symbol_from_c("pc-mp-chat-test-text", (void*)pc_mp_chat_test_text);
+  make_function_symbol_from_c("pc-mp-test-sdl-key", (void*)pc_mp_test_sdl_key);
+  make_function_symbol_from_c("pc-mp-test-sdl-text", (void*)pc_mp_test_sdl_text);
   make_function_symbol_from_c("pc-mp-log-net", (void*)pc_mp_log_net);
   make_function_symbol_from_c("pc-mp-test-network", (void*)pc_mp_test_network);
   make_function_symbol_from_c("pc-mp-econ-take-orb", (void*)pc_mp_econ_take_orb);

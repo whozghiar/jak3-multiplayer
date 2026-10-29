@@ -25,6 +25,7 @@
 #include "game/graphics/opengl_renderer/debug_gui.h"
 #include "game/graphics/screenshot.h"
 #include "game/graphics/texture/TexturePool.h"
+#include "game/kernel/jak3/kmultiplayer.h"
 #include "game/runtime.h"
 #include "game/sce/libscf.h"
 #include "game/system/hid/input_manager.h"
@@ -578,6 +579,10 @@ void GLDisplay::process_sdl_events() {
         ImGui_ImplSDL3_ProcessEvent(&evt);
       }
     }
+    // MOD multiplayer -- the Jak 3 chat takes its keys first (T, then the line typed)
+    if (mp::chat_sdl_event(evt, m_window)) {
+      continue;
+    }
     {
       auto p = scoped_prof("sdl-input-monitor-process-event");
       m_input_manager->process_sdl_event(evt);
@@ -597,7 +602,8 @@ void GLDisplay::render() {
   {
     auto p = scoped_prof("sdl-input-monitor-poll-for-kb-mouse");
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureKeyboard) {
+    // MOD multiplayer -- the Jak 3 chat holds the keyboard while a line is typed
+    if (io.WantCaptureKeyboard || mp::chat_wants_keyboard()) {
       m_input_manager->clear_keyboard_actions();
     } else {
       m_input_manager->poll_keyboard_data();

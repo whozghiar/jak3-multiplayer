@@ -7,6 +7,8 @@
 ;; Jak 3 multiplayer mod -- every weapon, for Jak and for Daxter.
 ;;   - "Give every weapon" (Mods menu > multiplayer): the gun, its twelve mods and their ammo
 ;;     upgrades, full ammo (mp-give-all-weapons).
+;;   - Free roam's gun mods: every color at its first mod, the second and third bought at Kleiver's
+;;     shop (mp-free-gun-mods).
 ;;   - Daxter's guns. The stock playable Daxter (indax mode) cannot use the gun: his surfaces carry
 ;;     gun-off, and the gun's own `use` state runs target-gun-check, which pushes Jak's gun
 ;;     animations onto the player's skeleton. So the stock gun stays put away, and this file fires
@@ -37,10 +39,57 @@
 ;; loaded (in another player's world, that player's save), until the title screen.
 (define *mp-all-weapons?* #f)
 
+;; Free roam's economy: every gun color at its first mod (the end of the game gave them all); the
+;; second and third mods of each color are bought at Kleiver's shop (shop items MP_SHOP_GUN_FIRST and
+;; on, multiplayer.gc "Economy"), each player for itself: the host's accounts keep them, every
+;; machine applies its own player's (MP_GUN_HIGHER_MODS, multiplayer.gc).
+
+(defun mp-gun-mods-owned ()
+  "The higher gun mods our player bought (free roam), as game-feature bits."
+  (let ((owned (the-as game-feature 0)))
+    (dotimes (i MP_SHOP_GUNS)
+      (if (logtest? (-> *mp-econ* items) (ash 1 (+ MP_SHOP_GUN_FIRST i)))
+          (logior! owned (the-as game-feature (ash 1 (-> *mp-shop-gun-bits* i))))
+          )
+      )
+    owned
+    )
+  )
+
+(defun mp-allowed-gun-features ()
+  "The gun features a player may have: all of them, but in free roam the higher mods it bought only."
+  (if (mp-free-roam?)
+      (logior (logclear MP_ALL_GUN_FEATURES MP_GUN_HIGHER_MODS) (mp-gun-mods-owned))
+      MP_ALL_GUN_FEATURES
+      )
+  )
+
+(defun mp-free-gun-mods ()
+  "Every frame, free roam in game: the higher mods not bought taken away, those bought given; a mod
+   chosen that went goes back to the first mod of its color."
+  (when (and (mp-free-roam?) (mp-in-game?))
+    (let* ((features (-> *game-info* features))
+           (want (logior (logclear features MP_GUN_HIGHER_MODS) (mp-gun-mods-owned)))
+           (type (the-as int (-> *game-info* gun-type)))
+           )
+      (when (!= want features)
+        (set! (-> *game-info* features) want)
+        (format 0 "[multiplayer] free roam: gun mods #x~X (bought)~%" (shr (logand want MP_GUN_HIGHER_MODS) 6))
+        )
+      ;; pickup-type gun-red-1 (26) to gun-dark-3 (37) are game-feature bits 6 to 17
+      (when (and (>= type 26) (<= type 37) (not (logtest? want (ash 1 (+ type -20)))))
+        (set! (-> *game-info* gun-type) (the-as pickup-type (+ 26 (* 3 (/ (+ type -26) 3)))))
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-give-all-weapons ()
   "The gun with its twelve mods and ammo upgrades, full ammo, the blaster chosen when none was.
-   Jak takes them out with R1 and the D-pad as usual; Daxter fires them too (below)."
-  (logior! (-> *game-info* features) MP_ALL_GUN_FEATURES)
+   Jak takes them out with R1 and the D-pad as usual; Daxter fires them too (below). In free roam
+   the higher mods stay those bought (mp-allowed-gun-features)."
+  (logior! (-> *game-info* features) (mp-allowed-gun-features))
   (if (or (< (the-as int (-> *game-info* gun-type)) 26) (> (the-as int (-> *game-info* gun-type)) 37))
       (set! (-> *game-info* gun-type) (pickup-type gun-yellow-1))
       )
@@ -55,8 +104,12 @@
     ((= (level-status? *level* 'title #f) 'active)
      (set! *mp-all-weapons?* #f)
      )
-    ((and *mp-all-weapons?* (!= (logand (-> *game-info* features) MP_ALL_GUN_FEATURES) MP_ALL_GUN_FEATURES))
-     (logior! (-> *game-info* features) MP_ALL_GUN_FEATURES)
+    ((and *mp-all-weapons?*
+          (let ((allowed (mp-allowed-gun-features)))
+            (!= (logand (-> *game-info* features) allowed) allowed)
+            )
+          )
+     (logior! (-> *game-info* features) (mp-allowed-gun-features))
      (mp-fill-ammo)
      )
     )
@@ -781,8 +834,9 @@
 
 (defun mp-daxter-guns ()
   "Run Daxter's guns for the local player (in his mode or on a lizard), as that player (the fire
-   functions are its behaviors); keep the weapons given."
+   functions are its behaviors); keep the weapons given, free roam's gun mods those bought."
   (mp-keep-all-weapons)
+  (mp-free-gun-mods)
   (when (and *target* (or (focus-test? *target* indax) (mp-fldax? *target*)))
     (with-pp
       (let ((saved pp))

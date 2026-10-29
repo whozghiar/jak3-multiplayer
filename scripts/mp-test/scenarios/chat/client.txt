@@ -1,0 +1,25 @@
+# The text chat, guest side: answers the host (accents lose theirs), its own command is refused (the
+# host's alone); brought next to the host by /tp; kicked at the end.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+80 chat-say Ça va très bien, merci ~
+82 chat-say /kick Host
+84 log-chat
+86 screenshot chat-guest
+92 log-chat
+93 log-me
+100 log-chat

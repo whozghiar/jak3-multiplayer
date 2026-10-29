@@ -122,6 +122,7 @@
                      ;; (mp-pull-msg, multiplayer-world.gc "a mission's introduction")
   (fail-decided 33)  ;; co-op: every player chose the same for the failure shown, iarg 0 (1 retry,
                      ;; 2 quit): the others apply it even if they missed the last vote's states
+  (coop-saved 34)    ;; co-op: the host saved the campaign: the save icon shows on every screen
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -971,6 +972,21 @@
                 gun-yellow-1 gun-yellow-2 gun-yellow-3
                 gun-blue-1 gun-blue-2 gun-blue-3
                 gun-dark-1 gun-dark-2 gun-dark-3
+                gun-upgrade-yellow-ammo-1 gun-upgrade-yellow-ammo-2
+                gun-upgrade-red-ammo-1 gun-upgrade-red-ammo-2
+                gun-upgrade-blue-ammo-1 gun-upgrade-blue-ammo-2
+                gun-upgrade-dark-ammo-1 gun-upgrade-dark-ammo-2
+                )
+  )
+
+;; Free roam's guns: every color at its first mod, with the ammo upgrades; the second and third mods
+;; of each color are bought at Kleiver's shop (multiplayer-guns.gc mp-free-gun-mods).
+(defconstant MP_GUN_HIGHER_MODS
+  (game-feature gun-red-2 gun-red-3 gun-yellow-2 gun-yellow-3 gun-blue-2 gun-blue-3 gun-dark-2 gun-dark-3)
+  )
+(defconstant MP_FREE_GUN_FEATURES
+  (game-feature gun
+                gun-red-1 gun-yellow-1 gun-blue-1 gun-dark-1
                 gun-upgrade-yellow-ammo-1 gun-upgrade-yellow-ammo-2
                 gun-upgrade-red-ammo-1 gun-upgrade-red-ammo-2
                 gun-upgrade-blue-ammo-1 gun-upgrade-blue-ammo-2
@@ -2500,6 +2516,16 @@
   (none)
   )
 
+;; Co-op saves ("Co-op progress saves itself", below): a save due after a story step, when the last
+;; save was shown, its icon.
+(define *mp-coop-save-due?* #f)
+(define *mp-save-icon-at* (the-as time-frame 0))
+(define *mp-save-icon* (new 'global 'hud-sprite))
+(define-extern mp-coop-saved! (function none))
+;; the text chat (multiplayer-chat.gc), every frame from the hook
+(define-extern mp-chat-update (function none))
+(define-extern pc-mp-chat-enable (function symbol none))
+
 (defun mp-on-task-closed ((node game-task-node-info))
   "A task node closed here: the other players close it too, unless they told us to. Closed by our
    own play, its time is kept: a mission it starts is ours to announce (\"Missions started
@@ -2508,6 +2534,10 @@
       (set! (-> *mp-session* step-at) (mp-now))
       )
   (mp-free-replay-note node)
+  ;; co-op: the host saves the campaign once the step's cutscene is over (mp-coop-save-update)
+  (if (and (= *mp-mode* (mp-mode host)) (= (-> *mp-session* kind) 'campaign))
+      (set! *mp-coop-save-due?* #t)
+      )
   (when (and (mp-online?)
              (logtest? *mp-world* (mp-world-flag progress))
              (not *mp-progress-replaying*)
@@ -2778,10 +2808,11 @@
 ;;     file of its own next to the memory card saves, stamped as multiplayer), never into a card
 ;;     slot; the guest saves nothing (another player's world).
 
-;; Every story step done gives most of it; this adds the rest: the gun and its mods with their
-;; upgrades, the hoverboard and its tricks, Dark and Light Jak's powers, the armor, the eco.
+;; Every story step done gives most of it; this adds the rest: the gun and the first mod of each
+;; color with their upgrades (the others are bought: MP_FREE_GUN_FEATURES), the hoverboard and its
+;; tricks, Dark and Light Jak's powers, the armor, the eco.
 (defconstant MP_FREE_FEATURES
-  (logior MP_ALL_GUN_FEATURES
+  (logior MP_FREE_GUN_FEATURES
           (game-feature board board-launch board-trail board-zap
                         darkjak darkjak-smack darkjak-bomb0 darkjak-bomb1 darkjak-tracking darkjak-invinc
                         lightjak lightjak-regen lightjak-swoop lightjak-freeze lightjak-shield
@@ -3354,16 +3385,93 @@
   )
 
 (defun mp-save-campaign ()
-  "Host in co-op: the game into its multiplayer campaign (instead of a memory card slot). #t when
-   written."
+  "Host in co-op: the game into its multiplayer campaign (instead of a memory card slot), the save
+   icon shown on every screen. #t when written."
   (let ((save (mp-world-save-buffer)))
     (save-game *game-info* save "multiplayer")
     (when (pc-mp-campaign-write (the-as pointer (&-> save type)) (the-as int (+ (-> save type size) (-> save length))))
       (+! (-> *mp-session* saves) 1)
+      (set! *mp-coop-save-due?* #f)
       (format 0 "[multiplayer] campaign saved (~D, continue ~S)~%" (-> *mp-session* saves) (-> *game-info* current-continue name))
+      (mp-coop-saved!)
+      (mp-send-event (mp-event-kind coop-saved) -1 0 0.0)
       #t
       )
     )
+  )
+
+;; Co-op progress saves itself: the host's campaign (never a memory card slot, nor the START menu's
+;; save pages) is written after each story step (a mission's start or end: mp-on-task-closed, once
+;; its cutscene is over) and wherever the stock auto-saves (auto-save-command, above). Each save
+;; shows the stock auto-save icon (the checkpoint's, blinking) on every player's screen for 3 s.
+(defun mp-coop-saved! ()
+  "A co-op save made here or told by the host: its icon shows."
+  (set! *mp-save-icon-at* (mp-now))
+  (none)
+  )
+
+(defun mp-coop-save-update ()
+  "Every frame. Host in co-op: a save due (a story step closed) is written once no cutscene plays,
+   no menu is open and our player is in game."
+  (when (and *mp-coop-save-due?*
+             (= *mp-mode* (mp-mode host))
+             (= (-> *mp-session* kind) 'campaign)
+             (mp-in-game?)
+             (not *scene-player*)
+             (not *progress-process*)
+             )
+    (mp-save-campaign)
+    ;; written or not, one try per step
+    (set! *mp-coop-save-due?* #f)
+    )
+  (none)
+  )
+
+(defun mp-draw-save-icon ()
+  "The stock auto-save icon (as auto-save-post draws it: the checkpoint's, 2x, blinking) for 3 s
+   after a co-op save."
+  (when (and (nonzero? *mp-save-icon-at*)
+             (< (- (mp-now) *mp-save-icon-at*) (seconds 3))
+             (< (mod (-> *display* real-clock frame-counter) 300) 270)
+             )
+    (let ((icon *mp-save-icon*))
+      (set! (-> icon color-ptr 0) 128)
+      (set! (-> icon color-ptr 1) 128)
+      (set! (-> icon color-ptr 2) 128)
+      (set! (-> icon color-ptr 3) 128)
+      (set! (-> icon pos x) 440)
+      (set! (-> icon pos y) 210)
+      (set! (-> icon pos z) #xffffff)
+      (set! (-> icon pos w) 0)
+      (set! (-> icon scale-x) 2.0)
+      (set! (-> icon scale-y) 2.0)
+      (set! (-> icon angle) 0.0)
+      (set! (-> icon flags) (hud-sprite-flags))
+      (set! (-> icon tid) (the-as texture-id (get-texture checkpoint level-default-minimap)))
+      (let* ((buf (-> *display* frames (-> *display* on-screen) global-buf))
+             (start (-> buf base))
+             )
+        (draw icon buf (the-as level #f) #f)
+        (let ((end (-> buf base)))
+          (when (!= start end)
+            (let ((pkt (the-as dma-packet (-> buf base))))
+              (set! (-> pkt dma) (new 'static 'dma-tag :id (dma-tag-id next)))
+              (set! (-> pkt vif0) (new 'static 'vif-tag))
+              (set! (-> pkt vif1) (new 'static 'vif-tag))
+              (set! (-> buf base) (&+ (the-as pointer pkt) 16))
+              )
+            (dma-bucket-insert-tag
+              (-> *display* frames (-> *display* on-screen) bucket-group)
+              (bucket-id hud-draw-hud-alpha)
+              start
+              (the-as (pointer dma-tag) end)
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
   )
 
 ;; ------------------------------------------------------------------------------------------------
@@ -3989,6 +4097,9 @@
          )
         (((mp-event-kind econ))
          (mp-econ-apply ev)
+         )
+        (((mp-event-kind coop-saved))
+         (mp-coop-saved!)
          )
         (((mp-event-kind econ-buy))
          (if (= *mp-mode* (mp-mode host))
@@ -5866,14 +5977,18 @@
    a child of it: the precursor orb a get-to challenge leaves at its end (birth-pickup-at-point)."
   (let* ((c *mp-challenge*)
          (proc (handle->process from))
-         (ours? (and proc
+         ;; only while a challenge plays: a pickup taken may have no parent any more (0, not #f)
+         (ours? (and (>= (-> c phase) 3)
+                     proc
                      (or (= from (-> c manager))
-                         (and (-> proc parent) (= (ppointer->process (-> proc parent)) (handle->process (-> c manager))))
+                         (and (nonzero? (-> proc parent))
+                              (= (ppointer->process (-> proc parent)) (handle->process (-> c manager)))
+                              )
                          )
                      )
                 )
          )
-    (when (and (mp-online?) (>= (-> c phase) 3) ours?)
+    (when (and (mp-online?) ours?)
       (cond
         ((< (-> c phase) 5)
          (+! (-> c pending) amount)
@@ -8320,10 +8435,13 @@
 ;; ------------------------------------------------------------------------------------------------
 ;; Economy
 ;;
-;; Every player has precursor orbs and Metal Head trophies, the money of the shop (Kleiver's, in
-;; Spargus, below): the server (the host) alone keeps the accounts (pc-mp-econ-*, kmultiplayer.cpp,
-;; saved in <settings>/multiplayer-economy.json under each player's secret id, per session: a session
-;; hosted again finds its accounts). The host credits only what it checked itself:
+;; Free roam (co-op has no part in it). Every player has precursor orbs and Metal Head trophies,
+;; the money of the shop (Kleiver's, in Spargus, below): the server (the host) alone keeps the
+;; accounts (pc-mp-econ-*, kmultiplayer.cpp: its database <settings>/multiplayer-server.db, each
+;; change written at once, under each player's account id on this server, derived from the player's
+;; secret, which never leaves its machine: a server hosted again finds its accounts). The shop sells
+;; outfits and the gun's higher mods (free roam starts every color at its first mod:
+;; multiplayer-guns.gc mp-free-gun-mods). The host credits only what it checked itself:
 ;;   - an orb: a player took a precursor orb (pickup skill, econ-pick from a guest with the aid of its
 ;;     entity): the entity is in the host's world, of type skill, the host sees that player within
 ;;     8 m of it within 2 s of the claim, and that orb was never credited in this session, this
@@ -8331,10 +8449,10 @@
 ;;   - a trophy: a Metal Head (an enemy that can carry a skull gem: enemy-info gem-joint) died in the
 ;;     host's world from that player's blow (its attacker: our player, or a guest's puppet, through
 ;;     actor-hit).
-;; Purchases are asked of the host (econ-buy), which checks the price and the account. A guest only
-;; shows what the host sends it (econ): no event of a guest changes an account but these two, which
-;; the host checks. Saved every minute when something changed and when the session closes (each
-;; closing recorded in <settings>/multiplayer-sessions.log).
+;; Purchases are asked of the host (econ-buy), which checks the price, the account and, for a third
+;; mod, that the second of its color is owned. A guest only shows what the host sends it (econ): no
+;; event of a guest changes an account but these two, which the host checks. Each closing is also
+;; recorded in <settings>/multiplayer-sessions.log.
 ;; ------------------------------------------------------------------------------------------------
 
 (defconstant MP_ECON_CLAIMS 8)              ;; orb claims waiting for their player at the orb
@@ -8353,7 +8471,7 @@
    (items     uint32)      ;; the shop's items we own, one bit each
    (credits   int32)       ;; host: orbs and trophies credited, claims refused (test log)
    (refused   int32)
-   (result    int32)       ;; our last purchase: 0 none, 1 bought, 2 refused, 3 equipped
+   (result    int32)       ;; our last purchase: 0 none, 1 bought, 2 refused, 3 equipped, 4 needs the mod before
    (result-at time-frame)
    (near?     symbol)      ;; we stand at the merchant
    (spot      int32)       ;; the merchant's spot this session (*mp-merchant-spots*), -1 none yet
@@ -8378,17 +8496,30 @@
 (define-extern pc-mp-econ-saves (function int))
 (define-extern pc-mp-econ-take-orb (function uint symbol))
 
-;; The shop: four outfits for now (the future economy adds weapons, vehicles, powers). Each a price in
-;; orbs and the tints it sets (Appearance page groups, 0 keeps that part).
+;; The shop: four outfits (each a price in orbs and the tints it sets: Appearance page groups, 0 keeps
+;; that part), then the gun's higher mods, the second and third of each color (the third once the
+;; second is owned), by their stock names.
 (define *mp-shop-names* (new 'static 'boxed-array :type text-id
                           (text-id progress-mp-shop-gold)
                           (text-id progress-mp-shop-shadow)
                           (text-id progress-mp-shop-desert)
                           (text-id progress-mp-shop-flame)
+                          (text-id progress-inventory-gun-red-2)
+                          (text-id progress-inventory-gun-red-3)
+                          (text-id progress-inventory-gun-yellow-2)
+                          (text-id progress-inventory-gun-yellow-3)
+                          (text-id progress-inventory-gun-blue-2)
+                          (text-id progress-inventory-gun-blue-3)
+                          (text-id progress-inventory-gun-dark-2)
+                          (text-id progress-inventory-gun-dark-3)
                           )
   )
-(defconstant MP_SHOP_ITEMS 4)
-(define *mp-shop-prices* (new 'static 'array int32 4 5 10 8 6))
+(defconstant MP_SHOP_ITEMS 12)
+(defconstant MP_SHOP_GUN_FIRST 4) ;; the first gun mod among the items
+(defconstant MP_SHOP_GUNS 8)
+(define *mp-shop-prices* (new 'static 'array int32 12 5 10 8 6 15 30 15 30 15 30 20 40))
+;; each gun item's game-feature bit (gun-red-2 ... gun-dark-3)
+(define *mp-shop-gun-bits* (new 'static 'array int32 8 7 8 10 11 13 14 16 17))
 (define *mp-shop-skins*
   (new 'static 'array uint32 64
     ;; gold: shirt, armor, scarf, gloves
@@ -8736,15 +8867,29 @@
 (defun mp-econ-buy ((slot int) (item int))
   "Host: player `slot` buys shop item `item`: paid and owned when its account has the orbs and does
    not own it yet; the answer sent back."
-  (let ((ok? (and (-> *mp-econ* open?)
-                  (>= item 0)
-                  (< item MP_SHOP_ITEMS)
-                  (pc-mp-econ-buy slot item (-> *mp-shop-prices* item))
+  (let* ((first? (or (< item MP_SHOP_GUN_FIRST) (zero? (logand (- item MP_SHOP_GUN_FIRST) 1))))
+         ;; a gun's third mod: its second owned first
+         (ready? (or first? (logtest? (pc-mp-econ-get slot 2) (ash 1 (+ item -1)))))
+         (ok? (and (-> *mp-econ* open?)
+                   (>= item 0)
+                   (< item MP_SHOP_ITEMS)
+                   ready?
+                   (pc-mp-econ-buy slot item (-> *mp-shop-prices* item))
+                   )
+              )
+         )
+    (format 0 "[multiplayer] economy: player ~D buys item ~D: ~A~%" slot item (cond
+                                                                                 (ok? 'bought)
+                                                                                 (ready? 'refused)
+                                                                                 (else 'needs-previous)
+                                                                                 )
+            )
+    (mp-econ-send slot (cond
+                         (ok? 1)
+                         (ready? 2)
+                         (else 4)
+                         )
                   )
-             )
-        )
-    (format 0 "[multiplayer] economy: player ~D buys item ~D: ~A~%" slot item (if ok? 'bought 'refused))
-    (mp-econ-send slot (if ok? 1 2))
     )
   (none)
   )
@@ -8759,8 +8904,8 @@
   )
 
 (defun mp-econ-equip ((item int))
-  "Wear shop item `item` (owned): its tints over our outfit, saved and sent."
-  (when (logtest? (-> *mp-econ* items) (ash 1 item))
+  "Wear shop item `item` (an outfit owned): its tints over our outfit, saved and sent."
+  (when (and (< item MP_SHOP_GUN_FIRST) (logtest? (-> *mp-econ* items) (ash 1 item)))
     (dotimes (i 16)
       (let ((v (-> *mp-shop-skins* (+ (* item 16) i))))
         (if (nonzero? v)
@@ -8777,30 +8922,30 @@
   )
 
 (defun mp-econ-update ()
-  "Every frame from the hook. Host in game: the session's accounts open (key: the campaign, free
-   roam, or the world hosted), closed (saved and recorded) when it stops hosting; while open, each
-   player who comes gets its balances, and the orb claims waiting are checked."
+  "Every frame from the hook. Host in game out of co-op (free roam; a world hosted from a game, the
+   tests' way): the server's accounts open, closed (recorded) when it stops hosting or plays co-op;
+   while open, each player who comes gets its balances, and the orb claims waiting are checked.
+   Co-op has no accounts."
   (let ((e *mp-econ*))
     (cond
-      ((and (= *mp-mode* (mp-mode host)) (mp-in-game?) (not (-> e open?)))
-       (copy-string<-string (-> e key) (case (-> *mp-session* kind)
-                                         (('campaign) "campaign")
-                                         (('free) "free")
-                                         (else "world")
-                                         )
-                            )
+      ((and (= *mp-mode* (mp-mode host)) (mp-in-game?) (!= (-> *mp-session* kind) 'campaign) (not (-> e open?)))
+       (copy-string<-string (-> e key) (if (= (-> *mp-session* kind) 'free) "free" "world"))
        (pc-mp-econ-open (-> e key))
        (set! (-> e open?) #t)
-       ;; Kleiver trades in free roam only (none in co-op)
-       (mp-merchant-set-spot (if (mp-coop?) -1 (rand-vu-int-count MP_MERCHANT_SPOTS)))
+       (mp-merchant-set-spot (rand-vu-int-count MP_MERCHANT_SPOTS))
        (format 0 "[multiplayer] the merchant is at spot ~D~%" (-> e spot))
        (set! (-> e claims) 0)
        (set! (-> e sent) (the-as uint 0))
        (mp-econ-send *mp-local-slot* 0)
        )
-      ((and (-> e open?) (!= *mp-mode* (mp-mode host)))
+      ((and (-> e open?) (or (!= *mp-mode* (mp-mode host)) (= (-> *mp-session* kind) 'campaign)))
        (pc-mp-econ-close)
        (set! (-> e open?) #f)
+       (mp-merchant-set-spot -1)
+       )
+      ;; out of free roam (co-op, or back offline): no merchant left from an earlier session
+      ((and (not (-> e open?)) (>= (-> e spot) 0) (or (not (mp-online?)) (mp-coop?)))
+       (mp-merchant-set-spot -1)
        )
       )
     (when (-> e open?)
@@ -8830,14 +8975,14 @@
 (define-perm *mp-stock-give* (function game-info symbol float handle float) (method-of-type game-info give))
 
 (defmethod give ((this game-info) (arg0 symbol) (arg1 float) (arg2 handle))
-  "Stock; online, a precursor orb taken by our player is claimed for our account (the host checks
-   its entity: \"Economy\"). A co-op burning bush challenge's reward waits for every player's
-   result and goes to the best (mp-challenge-take)."
+  "Stock; online out of co-op, a precursor orb taken by our player is claimed for our account (the
+   host checks its entity: \"Economy\"). A co-op burning bush challenge's reward waits for every
+   player's result and goes to the best (mp-challenge-take)."
   (if (and (= arg0 'skill) (< 0.0 arg1) (mp-challenge-take arg1 arg2))
       (return (-> this skill))
       )
   (let ((ret (*mp-stock-give* this arg0 arg1 arg2)))
-    (when (and (= arg0 'skill) (< 0.0 arg1) (mp-online?))
+    (when (and (= arg0 'skill) (< 0.0 arg1) (mp-online?) (not (mp-coop?)))
       (let* ((proc (handle->process arg2))
              (aid (if (and proc (-> proc entity)) (-> proc entity aid) (the-as uint 0)))
              )
@@ -9227,6 +9372,9 @@
      (mp-update-beams)
      (mp-update-race)
      (mp-econ-update)
+     (mp-coop-save-update)
+     (mp-draw-save-icon)
+     (mp-chat-update)
      (mp-update-merchant)
      (mp-update-fluts)
      (mp-update-fail)
@@ -9245,6 +9393,7 @@
      )
     ((or (!= *mp-mode* (mp-mode offline)) (handle->process (-> *mp-globals* manager)))
      (mp-shutdown)
+     (pc-mp-chat-enable #f)
      (mp-update-pause)
      (mp-update-skins)
      )

@@ -1,0 +1,25 @@
+# Free roam's economy, guest side: starts at the first mods; gets 40 orbs from the host's /give, buys
+# the yellow second mod (15 orbs): its gun has it, its account keeps it on the host.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+75 log-guns
+76 log-econ
+98 log-econ
+99 shop-buy 6
+101 log-econ
+102 log-guns
+106 log

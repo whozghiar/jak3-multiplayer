@@ -42,6 +42,23 @@ def grab(lines: list[str], pattern: str) -> list[tuple[str, ...]]:
     return [m.groups() for line in lines if (m := rx.search(line))]
 
 
+def econ_db(settings: Path):
+    """The server's database in a settings folder: its accounts {(session, account): (name, orbs,
+    trophies, items)} and the orbs credited per session."""
+    import sqlite3
+    path = settings / "multiplayer-server.db"
+    if not path.exists():
+        return {}, {}
+    con = sqlite3.connect(str(path))
+    try:
+        accounts = {(s, a): (n, o, t, i) for s, a, n, o, t, i in
+                    con.execute("SELECT session, account, name, orbs, trophies, items FROM accounts")}
+        taken = dict(con.execute("SELECT session, COUNT(*) FROM orbs_taken GROUP BY session"))
+    finally:
+        con.close()
+    return accounts, taken
+
+
 def pause_logs(lines):
     """Every log-pause, as a dict: master, applied, world, resume, live, prevent, menu, target, pads, list."""
     out = []
@@ -1358,22 +1375,23 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "at Kleiver's spot the shop opens (triangle); X wears the item bought; triangle leaves it",
                 any(n == "#t" for _, _, _, _, n in ge) and ("mp-shop",) in menus and menus[-1] != ("mp-shop",)
                 and bool(skin) and skin[-1][0].split()[1] == "c0ffd040" and ge[-1][3] == "3", f"{skin[-1:]}, menus {menus}")
-        saved = (settings / "multiplayer-economy.json").read_text(encoding="utf-8") if (settings / "multiplayer-economy.json").exists() else ""
+        accounts, taken = econ_db(settings)
         record = (settings / "multiplayer-sessions.log").read_text(encoding="utf-8") if (settings / "multiplayer-sessions.log").exists() else ""
-        c.check(scenario, "the session's closing saves the accounts and the orbs credited, and is recorded; hosting it again loads them back",
-                '"orbs": 8' in saved and '"items": 1' in saved and '"orbs_taken"' in saved and 'session "world" closed' in record
-                and any('economy "world": 2 account(s) and 2 orb(s) taken loaded' in l for l in host), f"{record.strip()[-160:]}")
+        c.check(scenario, "the server's database keeps the accounts and the orbs credited, the closing is recorded; hosting again loads them back",
+                any(s == "world" and a[1] == 8 and a[3] == 1 for (s, _), a in accounts.items()) and taken.get("world", 0) == 2
+                and 'session "world" closed' in record
+                and any('economy "world": 2 account(s) and 2 orb(s) taken loaded' in l for l in host), f"{accounts}, {record.strip()[-120:]}")
 
     elif scenario == "economy-persist":
         settings = OUT / "economy-persist" / "host" / "OpenGOAL" / "jak3" / "settings"
         hs = grab(host, r"\] econ host key (\S+) credits (\d+) refused (\d+) saves (\d+)")
         ge = grab(client, r"\] econ orbs (\d+) trophies (\d+)")
-        saved = (settings / "multiplayer-economy.json").read_text(encoding="utf-8") if (settings / "multiplayer-economy.json").exists() else ""
+        accounts, taken = econ_db(settings)
         c.check(scenario, "the host credits its orb and the guest's, and 7 more to the guest (8)",
                 bool(ge) and ge[-1][0] == "8" and any("an orb for player 0" in l for l in host), f"guest {ge}")
-        c.check(scenario, "a minute after the change the accounts are saved while the session runs (no closing)",
-                bool(hs) and int(hs[-1][3]) >= 1 and '"orbs": 8' in saved and '"orbs_taken"' in saved
-                and not any("closed and recorded" in l for l in host), f"saves {hs[-1:]}")
+        c.check(scenario, "each change is in the server's database at once, while the session runs (no closing)",
+                bool(hs) and int(hs[-1][3]) >= 1 and any(a[1] == 8 for a in accounts.values()) and taken.get("world", 0) == 2
+                and not any("closed and recorded" in l for l in host), f"saves {hs[-1:]}, {accounts}")
 
     elif scenario == "economy-reload":
         ge = grab(client, r"\] econ orbs (\d+) trophies (\d+)")
@@ -1490,6 +1508,72 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "the dead player's body stays on the ground, drawn where it fell, on the other machine (logged each second)",
                 still(hb) and still(gb), f"host sees the guest {len(hb)} s dead {hb[0][:3] if hb else None} -> {hb[-1:]}, "
                 f"guest sees the host {len(gb)} s dead {gb[0][:3] if gb else None} -> {gb[-1:]}")
+
+    elif scenario == "free-shop":
+        settings = OUT / "free-shop" / "host" / "OpenGOAL" / "jak3" / "settings"
+        hg = grab(host, r"\] guns mods #x(\w+) type (\d+) items #x(\w+) free (\S+)")
+        gg = grab(client, r"\] guns mods #x(\w+) type (\d+) items #x(\w+) free (\S+)")
+        he = grab(host, r"\] econ orbs (\d+) trophies (\d+) items #x(\w+) result (\d+)")
+        ge = grab(client, r"\] econ orbs (\d+) trophies (\d+) items #x(\w+) result (\d+)")
+        c.check(scenario, "free roam starts every gun color at its first mod, on both machines",
+                bool(hg) and hg[0][0] == "0" and hg[0][3] == "#t" and bool(gg) and gg[0][0] == "0", f"host {hg[:1]}, guest {gg[:1]}")
+        c.check(scenario, "a third mod before its second is refused (needs the previous), then both bought: the host's gun has them (100 - 15 - 30 = 55 orbs)",
+                any(r == "4" and o == "100" for o, _, _, r in he) and any("buys item 5: needs-previous" in l for l in host)
+                and any(o == "55" and i == "30" for o, _, i, _ in he) and any(m == "6" for m, _, _, _ in hg), f"{he}, {hg[-1:]}")
+        c.check(scenario, "the host's /give credits the guest 40 orbs; it buys the yellow second mod (25 left), its gun has it",
+                any("chat: the host gives player 1 40 of kind 0 (40 now)" in l for l in host)
+                and any(o == "40" for o, _, _, _ in ge) and any(o == "25" and i == "40" and r == "1" for o, _, i, r in ge)
+                and bool(gg) and gg[-1][0] == "10", f"guest {ge}, {gg[-1:]}")
+        accounts, _ = econ_db(settings)
+        names = {a[0]: a for a in accounts.values()}
+        # each player's secret id (multiplayer.cfg uid=), which the server must never have seen
+        secrets = set()
+        for side in ("host", "client"):
+            cfg = OUT / "free-shop" / side / "OpenGOAL" / "jak3" / "settings" / "multiplayer.cfg"
+            secrets |= set(re.findall(r"^uid=(\w+)", cfg.read_text(encoding="utf-8"), re.M)) if cfg.exists() else set()
+        c.check(scenario, "the server's database keeps both accounts under their account ids (never the players' secret ids)",
+                names.get("Host", (0, 0, 0, 0))[1:] == (55, 0, 0x30) and names.get("Guest", (0, 0, 0, 0))[1:] == (25, 0, 0x40)
+                and not ({acc.lstrip("0") for _, acc in accounts} & secrets), f"{accounts}, secrets {secrets}")
+        shop = grab(host, r"\] lobby menu (\S+)")
+        c.check(scenario, "Kleiver's shop opens and scrolls to its last items (screenshot shop-scrolled)", ("mp-shop",) in shop, f"{shop}")
+
+    elif scenario == "chat":
+        hl = grab(host, r"\] chat line (\d+) slot (-?\d+) age (\d+): (.*)")
+        gl = grab(client, r"\] chat line (\d+) slot (-?\d+) age (\d+): (.*)")
+        drafts = grab(host, r"\] chat typing (\S+) draft (.*)")
+        c.check(scenario, "a line typed (T, text, Enter) reaches the other player with the sender's name, both ways",
+                any(s == "0" and x == "Host: Hello guest, welcome" for _, s, _, x in gl)
+                and any(s == "1" and x.startswith("Guest: Ca va tres bien, merci") for _, s, _, x in hl), "")
+        c.check(scenario, "through SDL's event queue (the renderer's way): T opens the line, the text typed, Enter sends it",
+                any(s == "0" and x == "Host: through SDL" for _, s, _, x in gl), "")
+        c.check(scenario, "accents lose theirs, '~' (the font's escape) becomes '-'",
+                any(x == "Guest: Ca va tres bien, merci -" for _, _, _, x in hl), "")
+        c.check(scenario, "while typing the line shows (Backspace erases), Escape drops it unsent",
+                ("#t", "typing a line") in drafts and ("#t", "typing a lin") in drafts and ("#f", "") in drafts
+                and not any("typing a" in x for _, _, _, x in gl), f"{drafts}")
+        c.check(scenario, "a guest's command is refused (the host's alone), sent to nobody",
+                any(s == "-1" for _, s, _, x in gl) and not any("/kick Host" in x for _, _, _, x in hl), "")
+        hme = grab(host, r"\] me (\S+) (\S+) (\S+) speed")
+        gme = grab(client, r"\] me (\S+) (\S+) (\S+) speed")
+        near = bool(hme) and bool(gme) and math.dist([float(v) for v in hme[-1]], [float(v) for v in gme[-1]]) < 10.0
+        c.check(scenario, "the host's /tp brings the guest next to it; /players, /help and an unknown command answer the host alone",
+                near and sum(1 for _, s, _, _ in hl if s == "-1") >= 4, f"host {hme[-1:]}, guest {gme[-1:]}")
+        c.check(scenario, "/kick by the beginning of a name kicks the guest",
+                any("player 1 left: You were kicked by the host" in l for l in host)
+                and any("You were kicked by the host" in l for l in client), "")
+
+    elif scenario == "coop-save":
+        hs = grab(host, r"\] save campaign saves (\d+) due (\S+) icon (\S+) kind (\S+)")
+        gs = grab(client, r"\] save campaign saves (\d+) due (\S+) icon (\S+) kind (\S+)")
+        c.check(scenario, "co-op saves itself into the campaign file (the mission's start), not a card slot",
+                any("campaign saved (1," in l for l in host) and any("multiplayer-campaign.bin" in l for l in host), "")
+        c.check(scenario, "a story step closed: the host saves once no cutscene plays, its save icon shows",
+                any("campaign saved (2," in l for l in host) and any(n == "2" and i == "#t" for n, _, i, _ in hs), f"{hs}")
+        c.check(scenario, "the guest sees the save icon when the host saves, and writes no campaign",
+                any(i == "#t" for _, _, i, _ in gs) and all(n == "0" for n, _, _, _ in gs), f"{len(gs)} logs")
+        c.check(scenario, "the START ring: the host's Save Game saves at once, Load Game is refused online; the guest's Save Game says the host saves",
+                any("START ring save: text #x15bd" in l for l in host) and any("campaign saved (3," in l for l in host)
+                and any("START ring load: text #x15bf" in l for l in host) and any("START ring save: text #x15be" in l for l in client), "")
 
     elif scenario == "economy-trophy":
         c.check(scenario, "a Metal Head killed by the host's blow: a trophy for the host",
@@ -1695,9 +1779,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         hidden = grab(host, r"session sidekick-hidden (\S+) sidekick (\S+) character 0")
         c.check(scenario, "online, Jak has no Daxter of his own on his shoulder (a Daxter player stands there), before and after the guest leaves",
                 bool(hidden) and all(h == ("#t", "#f") for h in hidden), f"{hidden}")
-        c.check(scenario, "continuing restores the campaign saved (story steps closed after it open again)",
-                len(sess) >= 3 and sess[-1][1] < max(cl for _, cl in sess) and sess[-1][1] == sess[1][1],
-                f"closed {[cl for _, cl in sess]}")
+        c.check(scenario, "continuing restores the campaign as last saved: the story steps closed in play saved themselves",
+                len(sess) >= 3 and sess[-1][1] == max(cl for _, cl in sess) > sess[1][1] and len(saved) >= 2,
+                f"closed {[cl for _, cl in sess]}, {len(saved)} saves")
 
     elif scenario == "powers":
         shown = grab(host, r"power puppet 1 blend (\S+) dark (\S+) effect #x(\w+) fade (\S+)")

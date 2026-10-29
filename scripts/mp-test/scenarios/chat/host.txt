@@ -1,0 +1,41 @@
+# The text chat, host side: says hello; types a line and drops it with Escape (not sent); brings the
+# guest with /tp, lists the players, asks /help, an unknown command; kicks the guest by the beginning
+# of its name.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+63 press x 100
+70 wait-player 1
+72 chat-say Hello guest, welcome
+74 chat-key t
+74.3 chat-text typing a lin
+74.6 chat-text e
+75 log-chat
+75.3 screenshot chat-typing
+76 chat-key backspace
+76.3 log-chat
+77 chat-key escape
+77.5 log-chat
+80 chat-say /tp guest
+81 chat-say /players
+82 chat-say /help
+83 chat-say /dance
+84 log-chat
+84.5 screenshot chat-host
+86 sdl-key t
+86.4 sdl-text through SDL
+86.8 log-chat
+87 sdl-key enter
+87.5 log-chat
+100 log-chat
+101 log-me
+104 chat-say /kick gue
+106 log-chat
+108 log

@@ -3,8 +3,8 @@
 # players). X starts the mission once the guest (Daxter) is ready: every story step before it done.
 # With Daxter played by the guest, the host's Jak has no Daxter on his shoulder. An auto-save goes into
 # the multiplayer campaign (not a card slot). Back at the title screen, Host Game offers to continue
-# the campaign (co-op page, "Continue the campaign", now enabled): X loads it: the story steps closed after the
-# save are open again.
+# the campaign (co-op page, "Continue the campaign", now enabled): X loads it: the story steps closed in
+# play are there (each story step saves the campaign).
 1 enable
 1 name Host
 1 color 1

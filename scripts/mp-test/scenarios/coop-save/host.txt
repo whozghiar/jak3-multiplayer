@@ -1,0 +1,50 @@
+# Co-op saves itself, host side: the arena's jump training in co-op; a story step closes, so the
+# campaign is written (not a card slot) and the save icon shows on both screens; the START ring's Save
+# Game saves at once, its Load Game is refused online.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 log-lobby
+31.5 log-missions
+32 press square 100
+33 wait-menu mp-mode
+33.5 press down 100
+34 press x 100
+35 wait-menu mp-coop-start
+35.5 screenshot coop-page
+36 log-lobby
+37 press down 100
+37.5 press down 100
+38 press x 100
+39 wait-menu mp-mission
+39.3 press down 100
+39.7 press x 100
+40.2 log-lobby
+40.5 screenshot mission-page
+41 press x 100
+43 wait-menu mp-lobby-host
+43.5 log-lobby
+44 screenshot lobby-coop
+62 log-lobby
+63 press x 100
+64 log-lobby
+100 log-save
+101 log-session
+124 log-save
+125 close-task 1
+125.4 screenshot save-icon
+126 log-save
+130 log-save
+135 ring-save save
+135.4 screenshot ring-save
+136 log-save
+140 ring-save load
+141 log-save
+150 log

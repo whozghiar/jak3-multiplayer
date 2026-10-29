@@ -11,16 +11,18 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
 
 | Layer | File | Role |
 |---|---|---|
-| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | The session over GameNetworkingSockets (host or client, five lanes), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, the economy's accounts (4.20), test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
+| Runtime (C++) | `game/kernel/jak3/kmultiplayer.cpp`, `.h` | The session over GameNetworkingSockets (host or client, five lanes), relay, player slots, kick and ban, interpolation of players, objects and poses, pose encoding, config file, the co-op campaign file, players' account ids and the server's economy database (4.20), the text chat (4.35), test scripts. Exposed to GOAL as the `pc-mp-*` kernel functions, registered from `InitMachine_PCPort` (`game/kernel/jak3/kmachine.cpp`). |
 | Renderer (C++) | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `shaders/merc2_outline.*` | Other players seen through walls: their models drawn again, at the end of the 3D scene, as an outline in their color where something hides them (4.9). |
 | Renderer (C++) | `TextureAnimator.cpp`, `.h`, `foreground/Merc2.cpp`, `shaders/merc2.vert`, `.frag` | Another player's Dark Jak skin at its own level (4.11); each player's outfit colors (4.12). |
+| Renderer (C++) | `game/graphics/pipelines/opengl.cpp` | The chat holds the keyboard while a line is typed: the game's keys released, SDL's text input on, every SDL event handed to the chat first (4.35). |
 | Runtime (C++) | `game/kernel/jak3/kmultiplayer_nat.cpp`, `.h` | The host's UDP port opened on its router (UPnP IGD, NAT-PMP), himstan's port mapping. |
 | Runtime (C++) | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
-| Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), a pose at scale 1 (12-byte bones) and a blob's id, events kept while not taken, and the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order). |
-| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, Daxter on a shoulder (4.16), cutscene outfits (4.17), the co-op return next to a teammate (4.19), the economy and Kleiver's spot (4.20), missions started together and the host's choice in game (4.24), a lizard for every player (4.25), per-frame hook. |
+| Test | `test/test_kmultiplayer.cpp` | Interpolation, a loopback host + client session (join, relay, event, objects, a pose with an emitter and a sound, ban, refusal reason), a pose at scale 1 (12-byte bones) and a blob's id, events kept while not taken, the reliable channel under 20 % packet loss (a 200 KB world and 200 events, each once and in order), and account ids and chat lines (an id per server, a guest's line relayed with its name, the text cleaned, a player found by name). |
+| GAME | `goal_src/jak3/pc/features/multiplayer/multiplayer.gc` | Local state, remote puppets (in their player's outfit) and their hurtboxes, passenger seat, shared enemy deaths and story progress, hit forwarding, player hits, Daxter mode, cheats state, teleports, overlay, Daxter on a shoulder (4.16), cutscene outfits (4.17), the co-op return next to a teammate (4.19), the economy and Kleiver's spot (4.20), missions started together and the host's choice in game (4.24), a lizard for every player (4.25), co-op saves and their icon (1.7), per-frame hook. |
 | GAME | `.../multiplayer-world.gc` | The shared world: who simulates which NPCs, NPC and prop replication, full poses, particle emitters and sounds, sleeping NPCs, hits on replicas, NPC vehicles, effects, projectiles, world objects (cycles, doors, elevators), cutscenes, levels leaving, crates and pickups. |
-| GAME | `.../multiplayer-guns.gc` | Every weapon (Mods menu), and Daxter's guns (4.8). |
-| GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby and its game mode, co-op and mission pages, the on-screen keyboard, START > Options > Multiplayer and its administration page, Kleiver's shop page (4.20), the Mods menu entries. |
+| GAME | `.../multiplayer-guns.gc` | Every weapon (Mods menu), free roam's gun mods (4.20), and Daxter's guns (4.8). |
+| GAME | `.../multiplayer-menu.gc` | The title screen's Host Game and Join Game, the lobby and its game mode, co-op and mission pages, the on-screen keyboard, START > Options > Multiplayer and its administration page, Kleiver's shop page (4.20), the START ring's Save Game and Load Game online (1.7), the Mods menu entries. |
+| GAME | `.../multiplayer-chat.gc` | The text chat on the keyboard and the host's commands (4.35). |
 | GAME | `.../multiplayer-test.gc` | Automated test commands (inert without `MP_TEST_SCRIPT`). |
 | Tool | `scripts/mp-test/run_mp_test.py`, `scenarios/`, `compare_poses.py` | Runs several game instances on one PC with a script each, gathers logs and screenshots; compares an owner's bones with its copies'. |
 | Tool | `scripts/mp-test/local_pair.py` | Starts two instances on one PC to play by hand, one with the controller, the other with the keyboard. |
@@ -384,8 +386,9 @@ the union. Host setting **Share story progress** (on by default).
     `wascitya-start`); once in game, `mp-unlock-everything` closes `city-win-resolution` with
     `task-node-close!`, whose `open!` closes every node it needs first (the whole story, 254
     nodes, with their rewards; not sent to the others, `*mp-progress-replaying*`), then adds the
-    features the story does not give (`MP_FREE_FEATURES`: every gun mod and ammo upgrade, the
-    hoverboard's tricks, Dark and Light Jak's powers, armor), the eight vehicles, the secrets
+    features the story does not give (`MP_FREE_FEATURES`: each gun color's first mod and the ammo
+    upgrades, the others bought, 4.20; the hoverboard's tricks, Dark and Light Jak's powers,
+    armor), the eight vehicles, the secrets
     shop's upgrades (not its cheats), full ammo and eco. The host answers no world request until
     that is done; a guest loads that world, and keeps `MP_FREE_FEATURES` while the host's world
     flag `free` is set (its loaded save leaves two out; a respawn restores the save's). Nothing
@@ -399,13 +402,22 @@ the union. Host setting **Share story progress** (on by default).
     `resetter-spec` whose node is the mission's `play-node` and its `play-continue`, as the stock
     mission list's `play-task` starts one: that node opened, the nodes it needs closed). The
     lobby picks "continue" when the server starts and a campaign exists, else "new".
-    - *The multiplayer campaign:* while it runs (`*mp-session*` `kind` `'campaign`), every save
-      of the host (`auto-save-command` `'save`, `'save-last`, `'auto-save`: the pause menu's,
-      checkpoints') is written into `multiplayer-campaign.bin` next to the memory card saves
-      (`pc-mp-campaign-write`: the `save-game` of the in-memory save, after an 8-byte stamp
-      `OGMPCOOP`), never into a card slot; the menu that asked is told it is done. The guest
-      saves nothing (another player's world). Loading a card save, or the title screen (10 s
-      after a start), ends the campaign.
+    - *The multiplayer campaign saves itself:* while it runs (`*mp-session*` `kind`
+      `'campaign`), the host's game is written into `multiplayer-campaign.bin` next to the
+      memory card saves (`pc-mp-campaign-write`: the `save-game` of the in-memory save, after an
+      8-byte stamp `OGMPCOOP`), never into a card slot: after each story step (a mission's start
+      or end: `mp-on-task-closed` marks a save due, `mp-coop-save-update` writes it once no
+      cutscene plays and no menu is open) and wherever the stock auto-saves
+      (`auto-save-command` `'save`, `'save-last`, `'auto-save`; the menu that asked is told it is
+      done). Each save shows the stock auto-save icon (the checkpoint's, blinking at the right
+      for 3 s, `mp-draw-save-icon`) on every screen (`coop-saved` event). The guest saves nothing
+      (another player's world). Loading a card save, or the title screen (10 s after a start),
+      ends the campaign.
+    - *The START ring online:* its Save Game and Load Game open no memory card page (the
+      `menu-main-menu-option` `respond-progress` wrapper, `mp-ring-save-load`): the host's Save
+      Game in co-op saves the campaign at once ("Co-op progress saved"), a guest's says the host
+      saves it on its own, free roam's that it is not saved, Load Game that loading waits for
+      the session's end.
     - *Roles:* once per session, a guest playing the host's character is switched to the other
       one (`mp-update-coop-roles`); the lobby offers it first.
     - *Daxter on the shoulder:* a Jak player online carries no Daxter of the game, and a Daxter
@@ -555,7 +567,11 @@ world and has NPCs react to online players, and to take the best of both. Read i
 | Daxter climbs onto a shoulder only next to a Jak, with the stock animation | 4.16. |
 | No Jak player carries a Daxter that is not a player | 4.16. |
 | The world's synchronization compared with himstan's, the best of both | 1.10. |
-| Precursor orbs and Metal Head trophies per player, kept by the server alone, saved regularly and at each session's end, reloaded with the session | 4.20. |
+| Precursor orbs and Metal Head trophies per player, kept by the server alone, saved at once in its database, reloaded with the session | 4.20. |
+| An economy proof of concept: free roam's gun colors at their first mod, the higher mods bought at Kleiver's | 4.20. |
+| The economy at the server's level, each player identified | Account ids per server, derived from the player's secret (4.20). |
+| Co-op saves apart from the single-player saves, on their own, with the save icon (a mission's end included) | 1.7. |
+| A text chat between the players, the keyboard alone, commands for the administrator | 4.35. |
 | Kleiver's shop in Spargus, opened from his line, trading orbs | 4.20. |
 
 ## 3. Vanilla touch points
@@ -567,14 +583,14 @@ Each is marked `MOD multiplayer`.
 | `game/kernel/jak3/kmachine.cpp` | `InitMachine_PCPort` registers the `pc-mp-*` functions. |
 | `game/sce/libpad.cpp` | Pad 0 input forced by a test script (buttons with their pressure, both sticks). |
 | `game/CMakeLists.txt`, `test/CMakeLists.txt` | The new C++ file and its test. |
-| `goal_src/jak3/dgos/game.gd` | The five mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o`, `jak-indax+0-ag.go`, `jak-pidax+0-ag.go` (Daxter's driving animations, for `pilot` with `as-daxter?`) and `jak-pilot-gun+0-ag.go` (Daxter holding and firing the gun, 4.8). |
+| `goal_src/jak3/dgos/game.gd` | The six mod files at the end of GAME, `target-indax.o`, `target-indax-hang.o`, `jak-indax+0-ag.go`, `jak-pidax+0-ag.go` (Daxter's driving animations, for `pilot` with `as-daxter?`) and `jak-pilot-gun+0-ag.go` (Daxter holding and firing the gun, 4.8). |
 | `goal_src/jak3/dgos/facc.gd`, `voca.gd`, `halfpipe.gd`, `vin.gd` | The same three objects removed: a copy in a level DGO would relink the indax states into that level's heap, and they would dangle once it unloads. |
 | `goal_src/jak3/dgos/lctypatk.gd` | `jak-pidax+0-ag.go` removed (now in GAME): only that level had Daxter's driving art, so Daxter could not drive elsewhere (`process-drawable-art-error`). |
 | `goal_src/jak3/dgos/comba.gd`, `cwi.gd`, `hga.gd`, `raila.gd` | `jak-pilot-gun+0-ag.go` removed (now in GAME, 88 KB): Daxter's clips holding the gun (`daxter-pilot-gun-*`) were only loaded in those city levels. |
 | `goal_src/jak3/dgos/wwd.gd`, `voca.gd` | `jak-fldax+0-ag.go` added after `jak-flut+0-ag.go`: Daxter's lizard clips (`daxter-fldax-*`) and the lizard's under him (`flut-saddle-fldax-*`), which only the desert chase loaded (DESLIZ, unchanged). Its lizard clips link to the lizard of the same level, so it is not in GAME (4.22). |
 | `goal_src/jak3/levels/common/race/race-manager.gc` | The manager's `active` post gives every racer's progress and bits (`mp-racer-progress`, `mp-racer-bits`, `mp-race-slot`, `mp-race-sync`), the place back to the stock rank, our score saved at our finish, then our result waits for the host's verdict (`mp-race-result-wait?`) and takes it (`mp-race-won?`); `update-lap-distance` starts with `mp-race-mirror!` (a guest's racers but its own follow the host's race) (4.15). |
 | `goal_src/jak3/engine/ui/text-h.gc` | Text ids `#x1500`-`#x1514`, `#x1520`-`#x152c`, `#x1530`-`#x154e`, `#x1550`-`#x155f` and `#x1560`-`#x1597` for the menu labels, the prompts, the game modes, the player list, the lobby, the keyboard, the co-op pages, the countdowns, the Appearance page, the co-op lines, the session's end, the session status, Kleiver's shop and the race start's line (`#x1594`), the spectating lines (`#x1598`, `#x1599`), the merchant's name (`#x159a`), the result waiting for the others (`#x159b`) and the acts of the
-mission pages (`#x159c`-`#x159f`), Daxter's L1 + triangle prompt (`#x15a0`) and a failure's votes (`#x15a1`-`#x15a3`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
+mission pages (`#x159c`-`#x159f`), Daxter's L1 + triangle prompt (`#x15a0`), a failure's votes (`#x15a1`-`#x15a3`), the internet address, door and mission waits (`#x15a9`-`#x15ad`), the shop's mod answer and owned gun mod (`#x15ae`, `#x15c1`), the chat (`#x15af`-`#x15bc`) and the co-op saves (`#x15bd`-`#x15c0`); `#x1595`-`#x1597` removed with the ride options of a race start. `*fallback-text-heap*` raised from 80 KB to 128 KB: the English text, loaded as every language's fallback, outgrew it with the mod's strings (`0COMMON.TXT` 78.6 KB), and every boot stopped in `c_symlink2` after loading it. |
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?`; then `mp-race-bind-players!` (course-race.gc) puts the other player in a racer slot (4.15). |
@@ -582,7 +598,7 @@ mission pages (`#x159c`-`#x159f`), Daxter's L1 + triangle prompt (`#x15a0`) and 
 | `goal_src/jak3/levels/desert/wvehicle/wvehicle-race.gc` | The racers' AI reads every other racer's forward direction through `mp-racer-fvec!`: another player's puppet in a racer slot has no rigid body (its `rbody` read crashed every racer, 4.15). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
-| `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`). |
+| `game/graphics/pipelines/opengl.cpp` | The renderer keeps 8 more levels for Jak 3 (`fr3_level_count`); the chat holds the keyboard while a line is typed (`mp::chat_wants_keyboard`, `mp::chat_sdl_event`, 4.35). |
 | `game/graphics/opengl_renderer/foreground/Shadow2.cpp` | An engine fix: a shadow too big for the VU program is skipped to the next bucket (`!=`); upstream's skip loop tested `==`, skipped nothing, and the bucket dispatch then asserted (`dma.current_tag_offset() == m_render_state.next_bucket`): the guest's game stopped in the palace ruins (2026-10-20 play test). |
 | `game/assets/jak3/text/game_custom_text_en-US.json`, `fr-FR.json` | Their English and French strings. |
 
@@ -607,11 +623,12 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | `com-airlock` `want-cross-airlock?` | `engine/common-obs/airlock.gc` | Doors open for remote players too; in co-op an open door waits for a teammate behind it (4.34). |
 | `scene-player-init` | `engine/scene/scene.gc` | Every cutscene starts there; a mission's introduction asks the others first (4.24). |
 | `level` `deactivate` | `engine/level/level.gc` | Drop what refers to a leaving level first; the art heap goes with its host level. |
-| `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world or in free roam; the co-op campaign's saves into its file (1.7). |
+| `auto-save-command` | `engine/game/game-save.gc` | No save while in another player's world or in free roam; the co-op campaign's saves into its file, its icon on every screen (1.7). |
+| `menu-main-menu-option` `respond-progress` | `engine/ui/progress/progress.gc` | Online, the START ring's Save Game and Load Game open no memory card page (1.7). |
 | `target-gun-compute-pos` | `engine/target/target-gun.gc` | Where the gun is drawn: in Daxter's hand, opened to the mod, while he holds it (4.8). |
 | `joint-control-remap!` | `engine/anim/joint.gc` | The sidekick (Daxter's model in his mode) calls it after copying the player's clips: Daxter's clip holding the gun goes on his upper body there (4.8); on Jak's shoulder, the climb of a Daxter player (4.16). |
 | `target-death-reset` | `engine/target/target-death.gc` | Co-op: a dead player back next to a living teammate, no task manager told (4.19). |
-| `game-info` `give` | `engine/game/game-info.gc` | A precursor orb taken is claimed from the host for our account (4.20). |
+| `game-info` `give` | `engine/game/game-info.gc` | Out of co-op, a precursor orb taken is claimed from the host for our account (4.20). |
 | `merc-eye-anim` | `engine/gfx/foreground/eye.gc` | Our player's own model feeds no eyes while it plays Daxter online: it wrote Daxter's eyes into the eye slot every Jak shares (4.2). |
 | `restart-mission` | `engine/game/task/task-control.gc` | START > Restart restarts every player (4.21). |
 | `spawn-resetter!` (`resetter-control`) | same file | A mission's failure shown on every machine, no auto-reset in co-op, a new vote (4.26). |
@@ -1091,41 +1108,67 @@ and "Spectating: <name>" with "Back in N" shows at the top (`mp-draw-spectate`, 
 `#x1599`). A teammate who dies meanwhile is left for another; with none left, the stock death
 follows.
 
-### 4.20 Economy: orbs, trophies and Kleiver's shop
+### 4.20 Economy: orbs, trophies, Kleiver's shop and the gun's mods
 
-multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cpp` `mp::Economy`:
+multiplayer.gc "Economy", multiplayer-guns.gc "Every weapon", multiplayer-menu.gc "Kleiver's shop",
+`kmultiplayer.cpp` `mp::Economy` and "Players' identity". A proof of concept of the economy the
+user plans (rare items, customization, more features), for free roam alone:
 
-- **Accounts.** Every player has precursor orbs and Metal Head trophies, the money of the shop.
-  The host alone keeps the accounts, under each player's secret id (`uid=` in its
-  `multiplayer.cfg`, drawn once, sent in `HELLO`: nobody else knows it, and the same player finds
-  its account on that host whatever its name or slot), per session key: `campaign`, `free` or
-  `world`. A guest only shows what the host sends it (`econ` event); no event of a guest changes
-  an account but an orb claim and a purchase, which the host checks.
+- **Free roam only.** Co-op has no accounts: `mp-econ-update` opens them for a host out of co-op
+  (free roam, session key `free`; a world hosted from a game, the tests' way, key `world`); a
+  co-op guest claims no orb (`give`) and sees no Kleiver.
+- **Players' identity.** Each player draws a secret id once (`uid=` in its `multiplayer.cfg`) and
+  each server an id of its own (`server=`), both from GameNetworkingSockets' random source
+  (`CCrypto::GenerateRandomBlock`). A guest's `HELLO` carries its protocol version alone; the
+  host's `WELCOME` carries the slot and the server id; the guest answers `IDENTITY`: its account
+  id there, the first 8 bytes of HMAC-SHA256 of the server id keyed by its secret
+  (`mp::account_id`, GameNetworkingSockets' `CCrypto::GenerateHMAC256`). The secret never leaves
+  the player's machine: the player finds its account on that server whatever its name, slot or
+  address, and a server can neither tell its secret nor pass for it on another server. As on a
+  Minecraft or Terraria server hosted at home, the host is trusted with what it keeps: it can
+  change any account.
+- **Accounts.** Every player has precursor orbs, Metal Head trophies and items bought. The host
+  alone keeps them; a guest only shows what the host sends it (`econ` event). No event of a guest
+  changes an account but an orb claim and a purchase, which the host checks.
 - **Orbs.** Every orb taken goes through `game-info` `give` ('skill, with the pickup's handle),
   wrapped: the taker claims it from the host with the orb's entity (`econ-pick`). The host refuses
   a claim whose entity is not a precursor orb (type `skill`) in its world; otherwise it holds it
   (8 at most) until it sees the claimant within 8 m of the orb (it sees a guest a little late, so
   the claim can come first), then credits one orb if that orb was never credited in this session
-  (`pc-mp-econ-take-orb`: the orbs credited are saved with the accounts, so each orb pays once,
+  (`pc-mp-econ-take-orb`: the orbs credited are kept with the accounts, so each orb pays once,
   whoever took it, whenever). Not seen there within 2 s: refused. A claim from afar, of an orb
   not taken or taken before, credits nothing.
 - **Trophies.** A Metal Head (an enemy that can carry a skull gem: `enemy-info` `gem-joint` above
   0) dying in the host's world from a player's blow (its attacker: the host's player and what it
   fired or drives, or a guest's puppet hitting it through `actor-hit`) gives that player a trophy
   (the `mark-as-dead` wrapper).
-- **Saved.** In `<settings>/multiplayer-economy.json` on the host: every minute when something
-  changed, and when the session closes (the host stops hosting); each closing adds a line to
-  `<settings>/multiplayer-sessions.log` (date, session, duration, every account's balances).
-  Hosting the same session again loads them back, also after the game was closed without ending
-  the session (the minute's save). Each player who comes (or comes back) gets its balances once
-  (`sent` bits): a returning guest sees the orbs it earned before.
+- **The server's database.** `<settings>/multiplayer-server.db` (SQLite, `third-party/sqlite3`,
+  WAL journal): `accounts` (session key, account id, name, orbs, trophies, items), `orbs_taken`
+  (session key, orb entity) and `ledger` (every change: when, who, what, the amount, the balances
+  after). Each credit, purchase or orb taken is written at once, in one transaction: a crash or a
+  game closed without ending the session loses nothing. Each closing also adds a line to
+  `<settings>/multiplayer-sessions.log`. Hosting again loads the session's accounts, and each
+  player who comes (or comes back) gets its balances once (`sent` bits). The JSON file of earlier
+  versions (`multiplayer-economy.json`, accounts under the secret ids) is imported once, under the
+  account ids, then renamed `.imported`.
+- **The gun's mods.** Free roam starts every gun color at its first mod: `MP_FREE_FEATURES` holds
+  `MP_FREE_GUN_FEATURES` (the first mods and the ammo upgrades), and `mp-free-gun-mods` takes the
+  others the story's end gave away, every frame, on every machine for its own player. The second
+  and third mods of each color are shop items 4 to 11 (`*mp-shop-gun-bits*`: red, yellow and blue
+  15 then 30 orbs, dark 20 then 40); a third needs its second (the host answers 4: "Buy the mod
+  before it first"). Bought, its `game-feature` bit is set for that player: the game offers a mod
+  whose bit is in both `game-info` `features` and the setting's (`target-gun.gc`); pickup-type
+  `gun-red-1` (26) to `gun-dark-3` (37) are bits 6 to 17. A mod chosen that went goes back to its
+  color's first. In free roam the Mods menu's "Give every weapon" gives the mods bought only
+  (`mp-allowed-gun-features`).
 - **Kleiver's spot.** The host draws one of four spots of Kleiver's in Spargus when its accounts
   open (`*mp-merchant-spots*`: his garage at the doors, the lower city's square, his spot in the
   upper city, another place there) and sends it with the balances (`econ` event, `fvec x`): every
   player finds him at the same place, for the session. His own minimap icon (class 116, his face,
   without the missions' trail, kept on the minimap's edge when far, on the big map too) is owned
   by the manager at that spot, and "Merchant" ("Marchand") is drawn in yellow over it within
-  80 m, as a player's name and above one standing there (`mp-draw-merchant-name`, `#x159a`).
+  80 m, as a player's name and above one standing there (`mp-draw-merchant-name`, `#x159a`). No
+  accounts, no spot: a guest offline or in co-op drops one left from an earlier session.
 - **Kleiver's model** stands at the spot, idle (`mp-update-merchant-model`). His art
   (`skel-kleever-highres`) is in the borrowed level `lkleever`, which his missions load into
   waswide's borrow slot 0 (`game-task.gc`: `(waswide 0 lkleever special)`): while his spot is
@@ -1137,18 +1180,20 @@ multiplayer.gc "Economy", multiplayer-menu.gc "Kleiver's shop", `kmultiplayer.cp
   a player walking into him stops against him; the collision is off while our player stands
   within 1.2 m of him (a teleport or his spot moving onto it would trap it inside). He turns
   toward our player within 12 m, and his five idle clips (`*mp-kleiver-idles*`) follow one
-  another every 6 s, blended 30 frames (`mp-kleiver-live`). In free roam only: in co-op the host draws no spot (-1), so no icon, name or
-  shop, on any machine.
+  another every 6 s, blended 30 frames (`mp-kleiver-live`).
 - **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
   Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
+  The chat's `/give` and `/trophies` credit any player (4.35).
 - **Kleiver's shop.** At Kleiver's spot, within 4 m, on foot: his line ("Kleiver: Got orbs? I've
   got just what you need.") and "Press triangle to trade". Triangle's other uses there come first
   (a cutscene, L1 + triangle to ride along, another player's vehicle or shoulder, one of our
-  vehicles): his spot may be where the players start, by their vehicles. Triangle opens the START menu on one page, the shop
-  (`activate-progress` with `'mp-shop`): the balances, four outfits with their prices (5 to 10
-  orbs; the future economy adds weapons, vehicles and powers), X buys one (asked of the host,
-  which checks the price and the account) or wears one owned (its tints over the outfit, saved
-  and sent), triangle leaves.
+  vehicles): his spot may be where the players start, by their vehicles. Triangle opens the
+  START menu on one page, the shop (`activate-progress` with `'mp-shop`): the balances, then
+  twelve items with their prices, six rows shown (`MP_SHOP_ROWS`, the list scrolls with the
+  choice, 4:3 too): four outfits (5 to 10 orbs) and the eight gun mods by their stock names. X
+  buys one (asked of the host, which checks the price, the account and a third mod's second) or
+  wears an outfit owned (its tints over the outfit, saved and sent); a gun mod owned reads
+  "Owned" (`#x15c1`). Triangle leaves.
 
 ### 4.21 Session flow: restart, quitting, the START page, cutscenes
 
@@ -1628,6 +1673,39 @@ Offline, alone or in free roam, the stock doors (opening for a remote player in 
 online). Checked by `door-wait`: at Spargus, the host 30 m past the door, the guest 20 m behind
 it: the door stays open; once the guest joined the host it closes.
 
+### 4.35 Text chat and the host's commands
+
+multiplayer-chat.gc, `kmultiplayer.cpp` "Chat", `game/graphics/pipelines/opengl.cpp`:
+
+- **The keyboard alone.** Online, T opens a line (unbound by default). The renderer asks the chat
+  every frame whether it holds the keyboard (`mp::chat_wants_keyboard`): the game's keys are then
+  released and ignored, as for ImGui, and SDL's text input is on. It hands every SDL event to the
+  chat first (`mp::chat_sdl_event`): while a line is typed, each key press is the chat's. Enter
+  sends the line, Escape drops it, Backspace erases; the game gets the keyboard back once Enter or
+  Escape is up (Enter is START by default). A pad has no way in.
+- **What a line keeps.** Printable ASCII, 96 characters at most (`mp::chat_clean`): the accented
+  Latin letters lose their accent, `~` (the font's escape) becomes `-`. The answers to commands
+  are the game's own texts, accents and all.
+- **Sent through the host.** A guest's line goes to the host (`MSG_CHAT`), which lists it and
+  relays it with the guest's slot and name as it knows them, never as the guest claims, at most
+  5 lines in a row from a guest, then one every 2 s. Fifty lines are kept; a session starts
+  empty, with "Press T to chat (keyboard)" (`#x15af`).
+- **Drawn.** At the left, above the eco meter (`mp-chat-draw`): the last 8 lines, each for 12 s
+  (fading its last 2 s); while a line is typed, all 8 and the line under them after "> ", with a
+  blinking cursor. Our lines light blue, the answers to commands yellow, the others' white.
+- **Commands.** A line starting with `/` is a command, the host's alone: the server's
+  administrator. A guest's is refused ("Only the host can use commands") and sent to nobody. The
+  answers are the host's alone. A name may be the beginning of one, case ignored
+  (`pc-mp-find-player`: an exact name first, else a unique beginning).
+
+| Command | Effect |
+|---|---|
+| `/help` | The commands. |
+| `/players` | Each player's slot, name and ping. |
+| `/kick name`, `/ban name` | As the administration page: that player disconnected (and, banned, its address refused until the server stops). |
+| `/tp name`, `/tpall` | That player, or every player, brought next to the host. |
+| `/give name orbs`, `/trophies name n` | That account credited (debited, negative), while the accounts are open (free roam). |
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1724,6 +1802,10 @@ A script line is `<seconds> <command>`:
 | `goto-door`, `log-door`, `goto-elevator`, `log-elevator` | Stand in front of the nearest door or on the nearest elevator; print the door or elevator nearest to player 0 (on a guest) or to us (on the host), its state and height, whether it waits for a teammate (`door hold`, 4.34), and the elevator trips sent and shown. |
 | `goto-door-at <meters>` | Stand that far in front of the nearest door, along its axis (negative: behind it). |
 | `wait-vote` | The script waits until another player's mission asks our answer (then `press up` or `press down`). |
+| `chat-key <t\|enter\|escape\|backspace>`, `chat-text <text>`, `chat-say <text>` | A key or text as the keyboard gives them to the chat; T, the text, Enter. |
+| `sdl-key <key>`, `sdl-text <text>` | The same through SDL's event queue, the renderer's way. |
+| `log-chat` | Whether a line is typed (and what), the last 8 lines (slot, ms since, text). |
+| `log-guns`, `log-save`, `ring-save <save\|load>` | Free roam's higher gun mods (bits: red 2 and 3, yellow 2 and 3...), the mod chosen, the items owned; co-op saves written, one due, the icon shown; the START ring's Save Game or Load Game picked online. |
 | `scene <name>`, `log-levels` | Start a cutscene as a mission would; print the levels loaded (`art-heap #t`: the art heap is in its memory), the art heap and the art groups loaded alone, and the cutscenes sent, shown and playing. |
 | `log-shaders` | Walk the texture shader lists with bounds: links counted and broken (0 when every level is below 256 MB), and each level's heap. |
 | `far-levels <0\|1>` | Load the art of distant players' objects (default 1); 0 for a counter-test. |
@@ -1869,7 +1951,7 @@ pass, the reliable channel's under 20 % loss included): `smoke`, `pvp`, `join-wo
 | Scenario | Checks | Result |
 |---|---|---|
 | `lobby` (rewritten) | Host Game, joining before the start, keyboard, mode list, free roam | Host Game opens the lobby; the guest is listed there before any game starts (2 players); on the keyboard the host's name goes from "Host" to "Jak3"; square opens the mode list (six modes grayed out); X is refused until the guest is ready, then starts free roam: 254 story nodes closed, `city-win-resolution` done, every feature, the eight vehicles; the guest follows into it with the same. |
-| `coop-campaign` | Co-op from the lobby, three players | Co-op from the mode list, the co-op page, the mission list (act 1's first mission: the arena's jump training): the mission starts with 4 nodes closed; a third player is refused ("The server is full"); the host's auto-save goes to `multiplayer-campaign.bin`, the guest's is refused; while the guest plays Daxter the host's Jak has no Daxter (sidekick off), he is back once the guest leaves; after 3 more nodes closed (7), "Continue the campaign" loads the save: 4 again. |
+| `coop-campaign` | Co-op from the lobby, three players | Co-op from the mode list, the co-op page, the mission list (act 1's first mission: the arena's jump training): the mission starts with 4 nodes closed; a third player is refused ("The server is full"); the host's auto-save goes to `multiplayer-campaign.bin`, the guest's is refused; while the guest plays Daxter the host's Jak has no Daxter (sidekick off), he is back once the guest leaves; after 3 more nodes closed (7), each saving the campaign, "Continue the campaign" loads it: 7. |
 | `daxter-fire` | Daxter fires every weapon | The weapons cheat gives the twelve mods; Daxter fires each one at the host 4 to 7 m away: 47 hits taken, by ten kinds of shots (scatter gun, wave concussor, blaster, beam reflexor, gyro burster, vulcan fury, needle lazer, peace maker, mass inverter, super nova); screenshots of the blaster and the arc wielder fired by Daxter. |
 | `outline` | Another player through a vehicle | In the open 9 m away, about 107 pixels of fill and outline (its feet in the ground); behind a Rhino buggy spawned between the players, 1770 to 1848: its red outline shows through the buggy (screenshot). |
 | `player-list` | Health | The list gives each player's health (8/8) next to its ping (16 ms). |
@@ -1938,15 +2020,18 @@ turtle rolls down the start's slope (6); it now moves there 1 s before: 8 of 8 i
 | `daxter-ride` (rewritten) | Daxter with a driving Jak | The guest, Daxter, presses L1 + triangle next to the host's buggy: he sits on the driving host's shoulder (the host's own Daxter shown there for him), travels 25 m with the vehicle, within 0.8 m of the driver; 8 checks. |
 | `scene-skins` | Cutscene outfits | A Spargus cutscene on both machines: its Jak wears the host's shirt (`99ff3010`), its Daxter the guest's fur (`cc2040ff`) while the guest plays Daxter, the stock Daxter once it plays Jak, on both; 6 checks (screenshot). Before the fix, reading a cutscene's actors crashed the host (`handle->process` of a 0 handle). |
 | `player-list` (extended) | A long name | A 15-character guest name fits before its health bar, nothing overlaps (screenshot); the LAN playout delay logged (76 ms). |
-| `economy` | Orbs, the shop, saves | The host and the guest each take an orb: credited after the host checked the entity (and saw the guest at it); a claim of an entity that is no orb, and the guest's claim of an orb 80 m away, refused; a purchase without the orbs refused, then the gold outfit bought (5 orbs paid, item owned); at Kleiver's spot his line, triangle opens the shop page, X wears the outfit; the session's closing saves the accounts and the 2 orbs credited, records the session, and hosting again loads "2 account(s) and 2 orb(s) taken"; triangle leaves the shop; 9 checks (screenshots). |
+| `economy` | Orbs, the shop, saves | The host and the guest each take an orb: credited after the host checked the entity (and saw the guest at it); a claim of an entity that is no orb, and the guest's claim of an orb 80 m away, refused; a purchase without the orbs refused, then the gold outfit bought (5 orbs paid, item owned); at Kleiver's spot his line, triangle opens the shop page, X wears the outfit; the server's database keeps the accounts and the 2 orbs credited, the closing is recorded, and hosting again loads "2 account(s) and 2 orb(s) taken"; triangle leaves the shop; 9 checks (screenshots). |
+| `free-shop` | Free roam's gun mods | Free roam starts both players at each color's first mod; the host credits itself 100 orbs, asks the red third mod first (refused: its second first), buys the second then the third (55 orbs left, its gun has them); the host's chat `/give Guest 40` credits the guest, which buys the yellow second mod (25 left, its gun has it); the database keeps both accounts under their account ids, never the players' secret ids; Kleiver's shop scrolled to its last items; 9 checks. |
+| `chat` | The text chat | Lines both ways with the sender's name; accents lose theirs, `~` becomes `-`; a line typed shows, Backspace erases, Escape drops it unsent; T, text and Enter through SDL's event queue; a guest's command refused; the host's `/tp` brings the guest, `/players`, `/help` and an unknown command answer the host alone; `/kick gue` kicks the guest; 10 checks (screenshots). |
+| `coop-save` | Co-op saves itself | The arena's jump training in co-op: saved at the mission's start into `multiplayer-campaign.bin`; a story step closed: saved again, the icon on the host's screen (screenshot) and the guest's, which writes nothing; the START ring: the host's Save Game saves, Load Game refused, the guest's Save Game says the host saves; 8 checks. |
 | `economy-trophy` | Metal Head trophies | A Metal Head killed by the host's blow: a trophy for the host; one killed by the guest's puppet's blow: a trophy for the guest, sent to it; 6 checks. |
 | `coop-respawn` | Back next to a teammate | The guest killed comes back next to the host (`target-stance`, health 8, no continue point), then the host next to the guest; 6 checks. |
 | `beam-real` | Regression | Passes again after the sidekick pointer check (the arena's cutscene left `(-> *target* sidekick)` `#f`, a crash in the `joint-control-remap!` wrapper). |
 | `pressure` | Network pressure (1.1) | The guest drops 40 % of what it receives from 60 s to 80 s (`net`): the host reads 32 to 49 % delivered in its pings, goes severe ("between batches every 5 frames"), sends it about 180 KB/s instead of 290 to 330, and is back to normal 3 s after the losses stop; 7 checks. |
 | `drive --loss 30` | Driving under 30 % loss | The buggy's copy follows the owner's path: 4.7 cm at the 95th percentile with the pressure (links congested and severe), 1.4 cm with `--fixed-cadence`; both within the check (10 cm), both as smooth as the owner's. |
 | `race-board` (extended) | The choice on screen | The line shown at each step: Jak's (own vehicle or L1 + triangle), riding's, Daxter's, the shoulder's (screenshots: above the count, clear of the prompts and the minimap); 9 checks. |
-| `economy-persist` | Saved while running | An orb each, 7 more credited to the guest; 70 s later the minute's save holds the accounts and the orbs credited, and the games are stopped without ending the session; 6 checks. |
-| `economy-reload` (`--settings-from economy-persist`) | After a restart | Hosting again loads "2 account(s) and 2 orb(s) taken"; the guest finds its 8 orbs by its secret id (before the fix: 0 until it earned something), the host its 1; the orbs each takes again in its fresh world are refused as already credited; 7 checks, the pair passing twice in a row. |
+| `economy-persist` | Saved while running | An orb each, 7 more credited to the guest; each change is in the server's database at once, and the games are stopped without ending the session; 6 checks. |
+| `economy-reload` (`--settings-from economy-persist`) | After a restart | Hosting again loads "2 account(s) and 2 orb(s) taken"; the guest finds its 8 orbs by its account id (its secret and the server's id kept in the configs), the host its 1; the orbs each takes again in its fresh world are refused as already credited; 7 checks, the pair passing twice in a row. |
 
 Scenarios of 2026-10-20 (the user's bug list and co-op rules; `check_results.py`). Each feature's
 scenarios and its regressions ran after its commit (`pvp`, `vehicle-hit` after the co-op
@@ -2080,6 +2165,13 @@ public IP.
 - A challenge's score is read at fixed offsets in two level types (4.29); a challenge of another
   kind is ranked by its time.
 - Past 256 events waiting in a paused game, the oldest effects are not replayed (4.30).
+- The economy is a proof of concept: one server per host machine (its `server=` id), free roam
+  alone, eight gun mods and four outfits to buy. Co-op does not share the orb and skull gem
+  counters yet: each player counts what it takes.
+- A player's account rests on its `multiplayer.cfg` (`uid=`): a player who loses that file loses
+  its accounts on every server. The host can change any account (its database is on its machine).
+- The chat keeps printable ASCII: accented letters lose their accent; another script's letters
+  are dropped. T opens it even when the player bound T to a game action.
 
 - A failure keeps the game's choices: a story mission's offers only to go on (the game puts the
   players back at the mission's start), a minigame's retry or quit. A failure's `execute` script
@@ -2201,6 +2293,19 @@ public IP.
   cadence, both within the check). Its levels follow pings, once a second.
 
 ## 7. Change log
+
+- **2026-10-29:** the user asked for an economy proof of concept (free roam's gun colors at their
+  first mod, the higher mods bought at Kleiver's), at the server's level with each player
+  identified, co-op saves apart from the single-player ones and on their own with the save icon,
+  and a keyboard chat with the administrator's commands. Account ids per server, derived from the
+  player's secret by HMAC-SHA256, and the economy in a SQLite database written at once (4.20);
+  co-op saves after each story step, the icon on every screen, the START ring's Save and Load
+  Game online (1.7); the chat and its commands (4.35); protocol 12. Fixed on the way: a pickup
+  with no parent any more crashed `mp-challenge-take` on every orb taken outside a challenge
+  (`economy`). Scenarios `free-shop` 9/9, `chat` 10/10, `coop-save` 8/8; `coop-campaign` now
+  continues the progress saved after each step (11/11); `economy` 9/9, `economy-persist` 6/6,
+  `economy-reload` 7/7, `economy-trophy` 6/6, `merchant` 11/11, `challenge-free` 12/12,
+  `mission-trigger` 9/9, `smoke` 9/9; unit tests 6/6.
 
 - **2026-10-28 (night):** the user asked that both players accept a mission: the others are always
   asked (D-pad up to join, D-pad down to decline, 15 s), the mission goes on when at least half of

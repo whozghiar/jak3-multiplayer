@@ -1933,10 +1933,13 @@
 ;; ------------------------------------------------------------------------------------------------
 ;; Kleiver's shop (page 'mp-shop, opened at his spot in Spargus: mp-update-merchant, multiplayer.gc)
 ;;
-;; The only page trading for precursor orbs: the shop's items (outfits for now) with their price,
-;; our orbs and Metal Head trophies as the host keeps them. Up / down pick an item; X buys it (the
-;; host decides: "Economy", multiplayer.gc) or, owned, wears it; triangle leaves.
+;; The only page trading for precursor orbs: the shop's items (outfits, then the gun's higher mods)
+;; with their price, our orbs and Metal Head trophies as the host keeps them. Up / down pick an item
+;; (MP_SHOP_ROWS show, the list scrolls with the choice); X buys it (the host decides: "Economy",
+;; multiplayer.gc) or, an outfit owned, wears it; triangle leaves.
 ;; ------------------------------------------------------------------------------------------------
+
+(defconstant MP_SHOP_ROWS 6) ;; items shown at once (above the answer and the keys, 4:3 too)
 
 (deftype menu-mp-shop-option (menu-option)
   ((selected int32)
@@ -1971,6 +1974,7 @@
        )
       ((cpad-pressed? 0 confirm)
        (cpad-clear! 0 confirm)
+       ;; owned: an outfit is worn, a gun mod is already in the gun
        (if (logtest? (-> *mp-econ* items) (ash 1 (-> this selected)))
            (mp-econ-equip (-> this selected))
            (mp-econ-request-buy (-> this selected))
@@ -2001,12 +2005,15 @@
     (set-flags! font-ctx (font-flags kerning middle large))
     (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-shop-balance) #f) (-> e orbs) (-> e trophies))
     (mp-lobby-print-fit font-ctx *mp-lobby-line* left (+ top 6.0) width 0.45 (font-color font-color-33))
-    ;; the items: name on the left, price or owned on the right
-    (dotimes (i MP_SHOP_ITEMS)
-      (let ((y (+ top 34.0 (* 24.0 (the float i))))
-            (on? (= i (-> this selected)))
-            (owned? (logtest? (-> e items) (ash 1 i)))
-            )
+    ;; the items: name on the left, price or owned on the right; MP_SHOP_ROWS of them, from the one
+    ;; that keeps the choice in view
+    (dotimes (row MP_SHOP_ROWS)
+      (let* ((first (max 0 (min (+ (-> this selected) -2) (- MP_SHOP_ITEMS MP_SHOP_ROWS))))
+             (i (+ first row))
+             (y (+ top 34.0 (* 24.0 (the float row))))
+             (on? (= i (-> this selected)))
+             (owned? (logtest? (-> e items) (ash 1 i)))
+             )
         (if on?
             (mp-menu-box (the int (+ left 4.0)) (the int (+ y -3.0)) (the int (+ width -8.0)) 22
                          (new 'static 'rgba :r #x50 :g #x50 :b #x60 :a #x50)
@@ -2017,7 +2024,15 @@
                             (if on? (font-color font-color-33) (font-color font-color-32))
                             )
         (if owned?
-            (copy-string<-string *mp-lobby-line* (lookup-text! *common-text* (text-id progress-mp-shop-owned) #f))
+            ;; an outfit is worn with X, a gun mod is in the gun
+            (copy-string<-string *mp-lobby-line* (lookup-text! *common-text*
+                                                               (if (< i MP_SHOP_GUN_FIRST)
+                                                                   (text-id progress-mp-shop-owned)
+                                                                   (text-id progress-mp-shop-owned-gun)
+                                                                   )
+                                                               #f
+                                                               )
+                                  )
             (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-shop-price) #f) (-> *mp-shop-prices* i))
             )
         ;; right-aligned text ends at its origin: the frame's right edge
@@ -2033,11 +2048,13 @@
       (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (case (-> e result)
                                                                   ((1) (text-id progress-mp-shop-bought))
                                                                   ((2) (text-id progress-mp-shop-refused))
+                                                                  ((4) (text-id progress-mp-shop-needs))
                                                                   (else (text-id progress-mp-shop-worn))
                                                                   )
                                                  #f
                                                  )
-                          left (- bottom 50.0) width 0.45 (if (= (-> e result) 2) (font-color red) (font-color green))
+                          left (- bottom 50.0) width 0.45
+                          (if (or (= (-> e result) 2) (= (-> e result) 4)) (font-color red) (font-color green))
                           )
       )
     (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (text-id progress-mp-shop-keys) #f) left (- bottom 26.0) width 0.4
@@ -2149,6 +2166,59 @@
           (mp-update-title)
           )
       (*mp-stock-set-menu-options* this arg0)
+      )
+    )
+  )
+
+;; MOD multiplayer -- online, the START ring's Load Game and Save Game do not open the memory card
+;; pages (engine/ui/progress/progress.gc): co-op progress is the host's campaign, saved on its own
+;; (multiplayer.gc "Co-op progress saves itself"), apart from the single-player saves; loading a
+;; game would leave the session; free roam saves nothing (the server keeps the accounts). Save Game
+;; saves the co-op campaign at once on the host and says so; otherwise a line says why not.
+(define-perm *mp-stock-main-option-respond* (function menu-main-menu-option progress symbol int)
+  (the-as (function menu-main-menu-option progress symbol int) (method-of-type menu-main-menu-option respond-progress))
+  )
+
+(defun mp-ring-save-load ((load? symbol))
+  "Online, the START ring's Load Game (`load?`) or Save Game picked: the co-op campaign saved at once
+   on the host, else a line saying why not."
+  (let ((id (cond
+              (load?
+               (text-id progress-mp-online-no-load)
+               )
+              ((not (mp-coop?))
+               (text-id progress-mp-free-no-save)
+               )
+              ((and (= *mp-mode* (mp-mode host)) (mp-save-campaign))
+               (text-id progress-mp-coop-saved)
+               )
+              (else
+                (text-id progress-mp-coop-save-auto)
+                )
+              )
+            )
+        )
+    (format 0 "[multiplayer] START ring ~A: text #x~X~%" (if load? 'load 'save) id)
+    (mp-show-message (lookup-text! *common-text* id #f))
+    )
+  (none)
+  )
+
+(defmethod respond-progress ((this menu-main-menu-option) (progress progress) (selected? symbol))
+  "Stock behavior; online, Save Game and Load Game as said above."
+  (cond
+    ((and (mp-online?)
+          (or (= (-> this name) (text-id progress-save-game)) (= (-> this name) (text-id progress-load-save)))
+          (cpad-pressed? 0 confirm)
+          (= (-> progress ring-angle) (-> progress ring-want-angle))
+          )
+     (cpad-clear! 0 confirm)
+     (sound-play "generic-beep")
+     (mp-ring-save-load (= (-> this name) (text-id progress-load-save)))
+     0
+     )
+    (else
+      (*mp-stock-main-option-respond* this progress selected?)
       )
     )
   )
