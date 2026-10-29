@@ -2297,6 +2297,12 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-29:** the root `README.md` rewritten as the players' tutorial, at the user's request:
+  enabling the mod, hosting (the address to give on a local network or over the Internet),
+  joining and the connection errors, the lobby; then each online mode (free roam with the
+  economy, Kleiver's shop and its prices, the accounts per server; co-op with its starts, its
+  save and how the story plays together), the chat and its commands, the controls, and the
+  features both modes share.
 - **2026-10-29:** the user asked for an economy proof of concept (free roam's gun colors at their
   first mod, the higher mods bought at Kleiver's), at the server's level with each player
   identified, co-op saves apart from the single-player ones and on their own with the save icon,
