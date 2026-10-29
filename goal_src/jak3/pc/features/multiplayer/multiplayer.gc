@@ -3407,6 +3407,7 @@
 (defun mp-coop-saved! ()
   "A co-op save made here or told by the host: its icon shows."
   (set! *mp-save-icon-at* (mp-now))
+  (format 0 "[multiplayer] co-op saved: the save icon shows~%")
   (none)
   )
 

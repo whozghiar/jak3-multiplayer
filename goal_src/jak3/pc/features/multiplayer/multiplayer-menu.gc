@@ -1935,11 +1935,11 @@
 ;;
 ;; The only page trading for precursor orbs: the shop's items (outfits, then the gun's higher mods)
 ;; with their price, our orbs and Metal Head trophies as the host keeps them. Up / down pick an item
-;; (MP_SHOP_ROWS show, the list scrolls with the choice); X buys it (the host decides: "Economy",
+;; (8 show in 16:9, 5 in 4:3, the list scrolls with the choice); X buys it (the host decides: "Economy",
 ;; multiplayer.gc) or, an outfit owned, wears it; triangle leaves.
 ;; ------------------------------------------------------------------------------------------------
 
-(defconstant MP_SHOP_ROWS 6) ;; items shown at once (above the answer and the keys, 4:3 too)
+;; items shown at once, above the answer and the keys: 8 in 16:9, 5 in 4:3
 
 (deftype menu-mp-shop-option (menu-option)
   ((selected int32)
@@ -2005,10 +2005,10 @@
     (set-flags! font-ctx (font-flags kerning middle large))
     (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-shop-balance) #f) (-> e orbs) (-> e trophies))
     (mp-lobby-print-fit font-ctx *mp-lobby-line* left (+ top 6.0) width 0.45 (font-color font-color-33))
-    ;; the items: name on the left, price or owned on the right; MP_SHOP_ROWS of them, from the one
-    ;; that keeps the choice in view
-    (dotimes (row MP_SHOP_ROWS)
-      (let* ((first (max 0 (min (+ (-> this selected) -2) (- MP_SHOP_ITEMS MP_SHOP_ROWS))))
+    ;; the items: name on the left, price or owned on the right; as many as fit above the answer
+    ;; and the keys, from the one that keeps the choice in view
+    (dotimes (row (if wide? 8 5))
+      (let* ((first (max 0 (min (+ (-> this selected) -2) (- MP_SHOP_ITEMS (if wide? 8 5)))))
              (i (+ first row))
              (y (+ top 34.0 (* 24.0 (the float row))))
              (on? (= i (-> this selected)))

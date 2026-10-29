@@ -1,5 +1,6 @@
-# Free roam's economy, guest side: starts at the first mods; gets 40 orbs from the host's /give, buys
-# the yellow second mod (15 orbs): its gun has it, its account keeps it on the host.
+# Free roam's economy, guest side: starts at the first mods; gets 40 orbs from the host's /give; at
+# Kleiver's, opens his shop (triangle), goes down to the yellow second mod and buys it with X (15
+# orbs): its gun has it, its account keeps it on the host.
 1 enable
 1 name Guest
 1 color 2
@@ -19,7 +20,19 @@
 75 log-guns
 76 log-econ
 98 log-econ
-99 shop-buy 6
-101 log-econ
-102 log-guns
-106 log
+100 goto-merchant
+103 log-econ
+104 press triangle 100
+105 wait-menu mp-shop
+106 press down 100
+106.4 press down 100
+106.8 press down 100
+107.2 press down 100
+107.6 press down 100
+108 press down 100
+109 press x 100
+110.5 log-econ
+111 screenshot shop-bought
+111.5 press triangle 100
+113 log-guns
+116 log

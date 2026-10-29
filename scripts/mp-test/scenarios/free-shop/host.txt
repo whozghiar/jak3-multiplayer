@@ -1,7 +1,7 @@
 # Free roam's economy, host side: every gun color at its first mod; the host credits itself 100 orbs,
 # asks for the red third mod first (refused: its second first), buys the second then the third; gives
 # the guest 40 orbs with the chat's /give; opens Kleiver's shop and scrolls to its last items; leaves
-# (the server's database keeps both accounts).
+# (the server's database keeps both accounts). Kleiver stands at the lower city's square (spot 1).
 1 enable
 1 name Host
 1 color 1
@@ -15,6 +15,7 @@
 63 press x 100
 70 wait-player 1
 71 log-guns
+71.5 merchant-spot 1
 72 log-econ
 73 econ-grant-self 0
 74 log-econ
@@ -28,7 +29,6 @@
 82 chat-say /give Guest 40
 83 chat-say /trophies Nobody 3
 84 log-chat
-86 merchant-spot 1
 87 goto-merchant
 90 log-econ
 91 press triangle 100
@@ -45,5 +45,5 @@
 97 press triangle 100
 99 log-econ
 100 log-guns
-110 leave
-112 log
+125 leave
+127 log

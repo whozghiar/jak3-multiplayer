@@ -2378,6 +2378,7 @@ struct ChatInput {
   bool typing = false;
   bool hold = false;     // closed by a key still held: the game gets the keyboard once it is up
   bool text_on = false;  // SDL's text input started (render thread)
+  bool text_active = false;  // SDL says its text input is on for the window (test log)
   double ignore_text_until = 0;  // the T that opened the line is no text
   SDL_Window* window = nullptr;
   std::string draft;
@@ -2441,6 +2442,7 @@ bool chat_wants_keyboard() {
     }
     c.text_on = c.typing;
   }
+  c.text_active = c.window && SDL_TextInputActive(c.window);
   if (c.hold) {
     const bool* keys = SDL_GetKeyboardState(nullptr);
     if (!keys || (!keys[SDL_SCANCODE_RETURN] && !keys[SDL_SCANCODE_KP_ENTER] &&
@@ -2740,6 +2742,12 @@ u64 pc_mp_chat_draft(u32 dest) {
     copy_to_goal(dest, mp::g_chat.draft);
   }
   return to_symbol(mp::g_chat.typing);
+}
+
+// (pc-mp-chat-text-input?) -> #t while SDL's text input is on for the game's window (test log).
+u64 pc_mp_chat_text_input() {
+  std::lock_guard<std::mutex> lock(mp::g_chat.m);
+  return to_symbol(mp::g_chat.text_active);
 }
 
 // (pc-mp-chat-take dest) -> #t when a line was sent with Enter (the oldest not taken, into dest).
@@ -3493,6 +3501,7 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-chat-line-slot", (void*)pc_mp_chat_line_slot);
   make_function_symbol_from_c("pc-mp-chat-arg", (void*)pc_mp_chat_arg);
   make_function_symbol_from_c("pc-mp-find-player", (void*)pc_mp_find_player);
+  make_function_symbol_from_c("pc-mp-chat-text-input?", (void*)pc_mp_chat_text_input);
   make_function_symbol_from_c("pc-mp-chat-test-key", (void*)pc_mp_chat_test_key);
   make_function_symbol_from_c("pc-mp-chat-test-text", (void*)pc_mp_chat_test_text);
   make_function_symbol_from_c("pc-mp-test-sdl-key", (void*)pc_mp_test_sdl_key);

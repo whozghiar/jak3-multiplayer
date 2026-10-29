@@ -66,5 +66,10 @@
 472 log-race
 487 log-race
 502 log-race
+505 log-save
+510 log-save
+515 log-save
 520 screenshot finish
+521 log-save
+524 log-save
 525 log

@@ -823,6 +823,11 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                     any("our result waits for the host's verdict" in l for l in host + client)
                     and verdict[-1:] == [("won",)] and hres[-1:] == [("won",)] and gres[-1:] == [("won",)],
                     f"verdict {verdict}, host {hres}, guest {gres}")
+            saves = grab(host, r"campaign saved \((\d+), continue (\S+)\)")
+            c.check(scenario, "the race won ends the mission: the campaign saves itself, the save icon on both machines",
+                    len(saves) >= 2 and saves[-1][1] != saves[0][1]
+                    and sum(1 for l in host if "the save icon shows" in l) >= 2
+                    and any("the save icon shows" in l for l in client), f"{saves}")
 
     elif scenario == "pre-game":
         crashed = [l for l in host + client if "crash:" in l]
@@ -1520,7 +1525,7 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
         c.check(scenario, "a third mod before its second is refused (needs the previous), then both bought: the host's gun has them (100 - 15 - 30 = 55 orbs)",
                 any(r == "4" and o == "100" for o, _, _, r in he) and any("buys item 5: needs-previous" in l for l in host)
                 and any(o == "55" and i == "30" for o, _, i, _ in he) and any(m == "6" for m, _, _, _ in hg), f"{he}, {hg[-1:]}")
-        c.check(scenario, "the host's /give credits the guest 40 orbs; it buys the yellow second mod (25 left), its gun has it",
+        c.check(scenario, "the host's /give credits the guest 40 orbs; at Kleiver's it buys the yellow second mod from his shop page (X, 25 left), its gun has it",
                 any("chat: the host gives player 1 40 of kind 0 (40 now)" in l for l in host)
                 and any(o == "40" for o, _, _, _ in ge) and any(o == "25" and i == "40" and r == "1" for o, _, i, r in ge)
                 and bool(gg) and gg[-1][0] == "10", f"guest {ge}, {gg[-1:]}")
@@ -1548,6 +1553,9 @@ def run_checks(scenario: str, s: dict, c: Checker) -> None:
                 any(s == "0" and x == "Host: through SDL" for _, s, _, x in gl), "")
         c.check(scenario, "accents lose theirs, '~' (the font's escape) becomes '-'",
                 any(x == "Guest: Ca va tres bien, merci -" for _, _, _, x in hl), "")
+        tin = grab(host, r"\] chat sdl-text-input (\S+)")
+        c.check(scenario, "T turns SDL's text input on for the game's window, the line sent turns it off",
+                ("#t",) in tin and tin[-1] == ("#f",), f"{tin}")
         c.check(scenario, "while typing the line shows (Backspace erases), Escape drops it unsent",
                 ("#t", "typing a line") in drafts and ("#t", "typing a lin") in drafts and ("#f", "") in drafts
                 and not any("typing a" in x for _, _, _, x in gl), f"{drafts}")
