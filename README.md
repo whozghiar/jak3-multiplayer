@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/AI--assisted-Modding-purple.svg" alt="AI Assisted">
 </p>
 
-> **Contents:** [Overview](#overview) · [Getting Started](#getting-started) · [Online Modes](#online-modes) · [Chat and Server Commands](#chat-and-server-commands) · [Controls](#controls) · [Features in Every Mode](#features-in-every-mode) · [Download & Play](#download--play-via-opengoal-launcher-players) · [Developer Setup](#developer-setup--local-compilation) · [Demo Video](#demonstration-video) · [Technical Documentation](#technical-documentation)
+> **Contents:** [Overview](#overview) · [Features](#features) · [Getting Started](#getting-started) · [Online Modes](#online-modes) · [Chat and Server Commands](#chat-and-server-commands) · [Controls](#controls) · [Download & Play](#download--play-via-opengoal-launcher-players) · [Developer Setup](#developer-setup--local-compilation) · [Demo Video](#demonstration-video) · [Technical Documentation](#technical-documentation)
 
 ---
 
@@ -21,10 +21,73 @@ played today:
 - **Co-op:** the story for 2 players, one as Jak and one as Daxter, with a campaign that saves
   itself apart from your single-player saves.
 
-This page shows how to set up a session, then how each mode works.
+This page presents the features, then shows how to set up a session and how each mode works.
 
 - **Target Game:** Jak 3
 - **Repository:** [`whozghiar/jak3-multiplayer`](https://github.com/whozghiar/jak3-multiplayer), created from the modding base [`whozghiar/jak-project`](https://github.com/whozghiar/jak-project)
+
+## Features
+
+### Sessions
+- **Host or join from the title screen:** up to 8 players, by address on a local network or over
+  the Internet. The host's router opens its port by itself.
+- **A lobby before the game:** everyone picks Jak or Daxter and says they are ready; the host picks
+  the mode and starts a 10-second countdown.
+- **Your save is safe:** joining loads the host's world and never writes into your own save.
+- **Encrypted connections** that send less to a player whose connection struggles, then recover.
+
+### Two online modes
+- **Free roam (up to 8 players):** the end of the game with everything unlocked. The activities
+  that pay precursor orbs can be played again and again.
+- **Co-op (2 players):** the whole story as Jak and Daxter, every mission playable together, with a
+  campaign that saves itself apart from your single-player saves.
+- **Coming soon:** Parkour, Egg hunt, PvP, Battlefront, Hide and seek and Races are listed in the
+  lobby, grayed out.
+
+### Economy (free roam)
+- **Orbs and trophies per player:** every precursor orb you take and every Metal Head you kill
+  counts for you.
+- **Kept by the server:** the host's computer stores every account in a database and finds it again
+  each time it hosts.
+- **Kleiver's shop in Spargus:** outfits, and the second and third mods of each gun color (each
+  color starts at its first mod).
+- **One account per server,** whatever your name, tied to a secret id that never leaves your
+  computer.
+
+### Co-op together
+- **Never left behind:** missions start when both players accept, cutscenes play for both, and doors
+  and waypoints wait for the other player.
+- **Failures and deaths:** a failed mission is retried together; a fallen player comes back next to
+  their partner.
+- **Races:** one race for both, a vehicle each.
+- **Automatic saves** after each step of the story, with the save icon on both screens.
+
+### Jak and Daxter
+- **Daxter fully playable:** he fires every gun, drives vehicles, rides lizards and his own jet-board,
+  and climbs onto a Jak's shoulder to ride along.
+- **Roles:** each player picks their character; in co-op there is always one Jak and one Daxter,
+  and the roles can be swapped in game.
+
+### One shared world
+- **The same world for everyone:** citizens, guards, enemies and traffic are the same on every
+  screen, and enemies can target any player. Enemies killed, crates broken, pickups taken, doors,
+  elevators and platforms are shared.
+- **Shared story:** a mission completed by one player is completed for all, with its reward.
+- **Shared vehicles:** steal another player's vehicle, or ride along in a free seat.
+- **Players hitting each other:** in free roam, unless the host turns it off; never in co-op.
+
+### Seeing each other
+- **Names, health bars, colors and outfits** over every player, as they move on their own screen.
+- **Outlines through walls,** colored cones on the minimap, and a player list with each ping (hold
+  SELECT).
+- **Appearance page:** a color for each part of Jak's and Daxter's clothes.
+
+### Chat and administration
+- **Text chat** on the keyboard (T).
+- **Host administration** from the chat or a menu page: kick, ban, teleport players, allow cheats
+  for guests, give orbs, stop the server.
+- **Pause for everyone** with the host's SELECT; START opens your own menu while the game goes on.
+- **Cheats menu** (L3 + SELECT): every weapon, ammo, health, eco, invincibility, teleports.
 
 ## Getting Started
 
@@ -253,38 +316,6 @@ and your time of day, stopping the server.
 | Co-op: accept / decline a mission the other player starts | D-pad up / D-pad down (15 s) |
 | Co-op: ask to skip a cutscene | Triangle |
 
-## Features in Every Mode
-- **The host's world for everyone:** a player who joins loads the host's game (its progress,
-  equipment and place, after a loading screen) and appears next to the host. Their own save is
-  neither loaded nor overwritten, and nothing is saved into it while they play in the host's
-  world.
-- **Play as Jak or Daxter:** Daxter is the game's own playable Daxter. A Jak played online carries
-  no Daxter of the game: Daxter is a player, who climbs onto Jak's shoulder and rides there, in
-  vehicles too. Daxter fires every gun (R1 fires the mod chosen with the D-pad, aimed at the
-  nearest enemy ahead), drives vehicles, rides the lizards and takes out a jet-board at his size
-  (R2).
-- **See each other:** every player shows with their name and health bar over their head, as a
-  colored cone on the minimap, with their gun, shots, hoverboard, vehicle, Dark Jak and Light Jak,
-  in their own outfit, moving as they move on their own screen. A player hidden behind a wall shows
-  as an outline in their color.
-- **One shared world:** the host's citizens, guards, enemies and traffic are the same for everyone
-  and react to every player's shots. Enemies can target any player. Doors open for whoever stands
-  at them, an elevator is one elevator for everyone, and platforms feel every player's weight.
-  Enemies killed, crates broken and pickups taken disappear for everybody.
-- **Share vehicles:** next to another player's vehicle, triangle steals it, L1 + triangle rides
-  along in a free seat (up to three passengers in a city car). Guests can also take the host's
-  traffic vehicles.
-- **Shared story:** a mission completed by one player is completed for everybody, with its reward;
-  cutscenes play for the players together (the host can turn it off).
-- **Pause:** the host's SELECT pauses the game for everyone, and SELECT again resumes it after a
-  3-second countdown. START opens your own menu while the game goes on. START > Restart restarts
-  the mission for every player; START > Quit leaves the server.
-- **Cheats menu:** the Mods menu (L3 + SELECT) gives every weapon, refills ammo, health, dark eco
-  and light eco, makes you invincible and teleports you to a zone or a player. Guests use it only
-  when the host allows cheats for guests.
-- **Weak connections:** when a player's connection loses messages, the game sends them less of
-  what can wait, and goes back to full rate once it recovers.
-
 ## Download & Play via OpenGOAL Launcher (Players)
 
 > [!TIP]
@@ -300,7 +331,7 @@ and your time of day, stopping the server.
 4. Select your clean PS2 game ISO when prompted. The launcher will automatically extract assets and launch the game!
 
 ### Option B — Manual Installation from GitHub Releases
-1. Download the pre-built package for your operating system from the [Releases](https://github.com/whozghiar/jak3-multiplayer/releases) tab (`windows-v*.zip` or `linux-v*.zip`).
+1. Download the pre-built package for your operating system from the [Releases](https://github.com/whozghiar/jak3-multiplayer/releases) tab (`windows-multiplayer-v*.zip` or `linux-multiplayer-v*.zip`).
 2. Extract the archive into your OpenGOAL Launcher features directory:
    - **Windows:** `%APPDATA%\OpenGOAL-Launcher\features\jak3\mods\_local\multiplayer\`
    - **Linux:** `~/.config/OpenGOAL-Launcher/features/jak3/mods/_local/multiplayer/`
@@ -368,8 +399,12 @@ by side, one played with the controller and one with the keyboard; join with `12
 > *Demonstration videos must be hosted externally on YouTube to prevent repository bloating. Replace `{YOUTUBE_ID}` with your YouTube video ID (e.g. `MnqnybexhSA` from `https://youtu.be/MnqnybexhSA`).*
 
 ## Technical Documentation
-For the complete technical breakdown, architecture, developer notes and change log, refer to:
-- [`docs/modding/current_mod/multiplayer_readme.md`](docs/modding/current_mod/multiplayer_readme.md)
+- [How it works](docs/modding/current_mod/multiplayer_technical_overview.md): the mod's mechanics
+  explained step by step (sessions, shared world, co-op, economy, chat, tests). Start here.
+- [Technical notes](docs/modding/current_mod/multiplayer_readme.md): every detail, the vanilla
+  touch points, the test scenarios, the known limits and the change log.
+- [GitHub workflow](docs/modding/current_mod/github_workflow.md): from a commit to a release, and
+  what each GitHub Actions workflow does.
 
 ## Credits
 The title screen's Host Game and Join Game, the lobby and its countdown, the SELECT player list,

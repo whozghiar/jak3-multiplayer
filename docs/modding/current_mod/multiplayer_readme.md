@@ -4,6 +4,9 @@ How the online mod is built: the network layer in the runtime, the GOAL side, th
 the vanilla hook points, how to test it in game automatically, its limits, and the change log.
 Player-facing description: the root [`README.md`](../../../README.md). GOAL patterns referenced
 here live in the Lisp wiki ([`.agents/skills/goal-lisp/wiki/`](../../../.agents/skills/goal-lisp/wiki/index.md)).
+New to the mod? Start with [`multiplayer_technical_overview.md`](multiplayer_technical_overview.md),
+the same mechanics explained briefly; [`github_workflow.md`](github_workflow.md) covers commits,
+workflows and releases.
 
 ## 1. Architecture
 
@@ -2297,6 +2300,12 @@ public IP.
 
 ## 7. Change log
 
+- **2026-10-30:** documentation split at the user's request: the root `README.md` opens with a
+  presentation of the features, grouped by theme (the duplicate "Features in Every Mode" list
+  folded into it, the release archives' names corrected); `multiplayer_technical_overview.md`
+  explains the mechanics briefly for a newcomer, linking here for detail; `github_workflow.md`
+  covers this repository on GitHub (where the code lives, commit to push, the three workflows,
+  releasing, the protocol version per release).
 - **2026-10-29:** the root `README.md` rewritten as the players' tutorial, at the user's request:
   enabling the mod, hosting (the address to give on a local network or over the Internet),
   joining and the connection errors, the lobby; then each online mode (free roam with the
