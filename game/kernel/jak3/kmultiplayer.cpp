@@ -2127,10 +2127,15 @@ static void econ_import_json() {
   try {
     auto all = nlohmann::json::parse(file_util::read_text_file(econ_json_path()));
     econ_sql("BEGIN");
-    for (auto& [key, session] : all.items()) {
+    // named variables, not structured bindings: the lambdas below capture them, which Clang
+    // before 16 refuses for a structured binding (the Linux release build)
+    for (auto& entry : all.items()) {
+      const std::string key = entry.key();
+      auto& session = entry.value();
       auto accounts = session.value("accounts", nlohmann::json::object());
-      for (auto& [hex, v] : accounts.items()) {
-        u64 id = account_id(std::stoull(hex, nullptr, 16), server_id());
+      for (auto& account : accounts.items()) {
+        auto& v = account.value();
+        u64 id = account_id(std::stoull(account.key(), nullptr, 16), server_id());
         econ_sql(
             "INSERT OR IGNORE INTO accounts(session, account, name, orbs, trophies, items) "
             "VALUES(?, ?, ?, ?, ?, ?)",
