@@ -826,13 +826,14 @@
          (format (clear *mp-lobby-line*) (lookup-text! *common-text* (text-id progress-mp-countdown) #f) (/ (+ ms 999) 1000))
          (mp-lobby-print font-ctx *mp-lobby-line* left (- bottom 72.0) width 0.6 (font-color font-color-33))
          )
+        ;; one line, shrunk to fit: wrapped, the English free roam hint ran into the keys below
         ((and (nonzero? (-> *mp-globals* lobby-cancel)) (< (- (mp-now) (-> *mp-globals* lobby-cancel)) (seconds 3)))
-         (mp-lobby-print font-ctx (lookup-text! *common-text* (text-id progress-mp-countdown-cancelled) #f)
-                         left (- bottom 66.0) width 0.4 (font-color font-color-33)
-                         )
+         (mp-lobby-print-fit font-ctx (lookup-text! *common-text* (text-id progress-mp-countdown-cancelled) #f)
+                             left (- bottom 66.0) width 0.4 (font-color font-color-33)
+                             )
          )
         ((nonzero? hint)
-         (mp-lobby-print font-ctx (lookup-text! *common-text* hint #f) left (- bottom 66.0) width 0.4 (font-color font-color-33))
+         (mp-lobby-print-fit font-ctx (lookup-text! *common-text* hint #f) left (- bottom 66.0) width 0.4 (font-color font-color-33))
          )
         )
       (mp-lobby-print font-ctx

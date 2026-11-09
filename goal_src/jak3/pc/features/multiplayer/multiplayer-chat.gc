@@ -8,7 +8,7 @@
 ;;   - The keyboard alone: T opens a line (kmultiplayer.cpp "Chat" holds the keyboard meanwhile, the
 ;;     game's keys released), Enter sends it, Escape drops it, Backspace erases. Online only.
 ;;   - The last lines show at the left, above the eco meter, each for 12 s (fading its last 2 s);
-;;     while a line is typed, the last 8 and the line itself under them, after a "> " and a blinking
+;;     while a line is typed, the last 8 and the line itself under them, with a blinking
 ;;     cursor. Our lines are light blue, the answers to the host's commands yellow.
 ;;   - A line starting with '/' is a command, the host's alone (the server's administrator): /help,
 ;;     /players, /kick <name>, /ban <name>, /tp <name>, /tpall, /give <name> <orbs>,
@@ -183,17 +183,19 @@
 (defun mp-chat-draw ()
   "The last lines at the left above the eco meter, newest lowest; while typing, the line typed under
    them."
+  ;; the large font, as the mod's other lines: the small one at any scale was a few pixels high
   (let* ((typing? (pc-mp-chat-draft *mp-chat-draft*))
-         (ctx (new 'stack 'font-context *font-default-matrix* 16 0 0.0 (font-color default) (font-flags shadow kerning)))
+         (ctx (new 'stack 'font-context *font-default-matrix* 16 0 0.0 (font-color default) (font-flags shadow kerning large)))
          (bottom 280.0)
-         (row-h 18.0)
+         (row-h 20.0)
          )
     (set-width! ctx 470)
-    (set-height! ctx 20)
-    (set-scale! ctx 0.7)
+    (set-height! ctx 22)
+    (set-scale! ctx 0.45)
     (when typing?
       ;; the cursor blinks twice a second
-      (format (clear *mp-chat-out*) "> ~S~S" *mp-chat-draft* (if (< (mod (-> *display* real-clock frame-counter) 150) 75) "_" ""))
+      ;; no ">" before it: the game's font has no such glyph
+      (format (clear *mp-chat-out*) "~S~S" *mp-chat-draft* (if (< (mod (-> *display* real-clock frame-counter) 150) 75) "_" ""))
       (set! (-> ctx origin y) bottom)
       (set! (-> ctx color) (font-color font-color-32))
       (print-game-text *mp-chat-out* ctx #f 44 (bucket-id hud-draw-hud-alpha))
