@@ -1,0 +1,78 @@
+# README tour (run_mp_test.py readme-world --retail --english --shot-size 960x540), free roam in
+# the desert, host side: our outfit colored (the guest sees it), a line typed in the chat and the
+# /players answer, a buggy driven with the guest riding on its back, recorded from our camera as a
+# burst of screenshots (a GIF), the Appearance page.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+63 press x 100
+70 wait-player 1
+72 continue desert-start
+73 skin 1 ff3010 60
+73.5 skin 5 20ff40 80
+95 chat-key t
+95.3 chat-text Who wants a ride?
+96 screenshot chat-typing
+96.5 chat-key enter
+100 chat-say /players
+101.5 screenshot chat
+104 vehicle 13
+110 press x 6000
+110.5 screenshot drive-000
+110.625 screenshot drive-001
+110.75 screenshot drive-002
+110.875 screenshot drive-003
+111 screenshot drive-004
+111.125 screenshot drive-005
+111.25 screenshot drive-006
+111.375 screenshot drive-007
+111.5 screenshot drive-008
+111.625 screenshot drive-009
+111.75 screenshot drive-010
+111.875 screenshot drive-011
+112 screenshot drive-012
+112.125 screenshot drive-013
+112.25 screenshot drive-014
+112.375 screenshot drive-015
+112.5 screenshot drive-016
+112.625 screenshot drive-017
+112.75 screenshot drive-018
+112.875 screenshot drive-019
+113 screenshot drive-020
+113.125 screenshot drive-021
+113.25 screenshot drive-022
+113.375 screenshot drive-023
+113.5 screenshot drive-024
+113.625 screenshot drive-025
+113.75 screenshot drive-026
+113.875 screenshot drive-027
+114 screenshot drive-028
+114.125 screenshot drive-029
+114.25 screenshot drive-030
+114.375 screenshot drive-031
+114.5 screenshot drive-032
+114.625 screenshot drive-033
+114.75 screenshot drive-034
+114.875 screenshot drive-035
+115 screenshot drive-036
+115.125 screenshot drive-037
+115.25 screenshot drive-038
+115.375 screenshot drive-039
+115.5 screenshot drive-040
+115.625 screenshot drive-041
+115.75 screenshot drive-042
+115.875 screenshot drive-043
+116 screenshot drive-044
+116.125 screenshot drive-045
+116.25 screenshot drive-046
+116.375 screenshot drive-047
+116.5 screenshot drive-048
+124 skin-page
+126 screenshot appearance
+128 screenshot end

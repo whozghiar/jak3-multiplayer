@@ -22,8 +22,8 @@ own worktree (`task modding-switch -- jak3-multiplayer`); its remote for `main` 
 1. **Work and check locally.** After a C++ change, `task build-release-game`; then
    `task compile-check`, the unit tests and the scenarios the change touches
    ([technical overview, section 10](multiplayer_technical_overview.md#10-testing)).
-2. **Document it.** A line in the change log of [`multiplayer_readme.md`](multiplayer_readme.md)
-   (section 7), and the root `README.md` when players see the change.
+2. **Document it.** In [`multiplayer_readme.md`](multiplayer_readme.md) for developers, and in
+   the root `README.md` when players see the change.
 3. **Commit.** One commit per feature or fix, with a scope: `feat(multiplayer): ...`,
    `fix(multiplayer): ...`, `test(multiplayer): ...`, `docs(multiplayer): ...`. A commit written
    with an AI agent ends with `(AI-assisted)`.

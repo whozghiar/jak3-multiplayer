@@ -28,65 +28,101 @@ This page presents the features, then shows how to set up a session and how each
 
 ## Features
 
-### Sessions
-- **Host or join from the title screen:** up to 8 players, by address on a local network or over
-  the Internet. The host's router opens its port by itself.
-- **A lobby before the game:** everyone picks Jak or Daxter and says they are ready; the host picks
-  the mode and starts a 10-second countdown.
+The captures below come from two copies of the game running side by side, one hosting and one joining.
+
+### Host or join from the title screen
+Pick **Host Game** to open a server, or **Join Game** to type the host's address. Up to 8 players can play together, on a local network or over the Internet.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/title.jpg" alt="The title screen with Host Game and Join Game" width="49%">
+  <img src="docs/modding/current_mod/readme-media/join.jpg" alt="The Join Game page and its server address" width="49%">
+</p>
+
+### Meet in the lobby
+Everyone picks Jak or Daxter and says they are ready. The host picks the game mode and starts a 10-second countdown. Two modes can be played: **Free roam** and **Co-op**. The others are listed as coming soon.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/lobby.jpg" alt="The lobby with two players and the start countdown" width="49%">
+  <img src="docs/modding/current_mod/readme-media/modes.jpg" alt="The game mode list" width="49%">
+</p>
+
+### Play as Daxter
+Daxter is a full character: he fires every gun, drives vehicles and rides lizards. Next to a Jak, press **L1 + triangle** to jump on his shoulder and ride along; **X** jumps off.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/daxter-shoulder.gif" alt="Daxter jumps on Jak's shoulder and rides along while Jak runs" width="70%">
+</p>
+
+### See each other
+Every player shows with their name, health bar and color. Hold **SELECT** to see the player list with each player's health and ping.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/names.jpg" alt="Another player with their name and health bar" width="49%">
+  <img src="docs/modding/current_mod/readme-media/player-list.jpg" alt="The player list" width="49%">
+</p>
+
+A player hidden behind a wall or a vehicle shows as an outline in their color.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/outline.jpg" alt="The host outlined in red behind a vehicle" width="49%">
+</p>
+
+### Free roam: earn orbs, shop at Kleiver's
+Free roam is the end of the game with everything unlocked. Every precursor orb you take counts for you, and the host's server keeps your orbs and purchases between sessions. Kleiver waits in Spargus: press **triangle** next to him to buy outfits and the gun's higher mods.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/kleiver.jpg" alt="Kleiver at his spot in Spargus" width="49%">
+  <img src="docs/modding/current_mod/readme-media/shop.jpg" alt="Kleiver's shop after a purchase" width="49%">
+</p>
+
+### Text chat
+Press **T** on the keyboard to write and **Enter** to send. The host can also type commands, such as `/players`, `/kick` or `/give`; their answers show in yellow.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/chat.jpg" alt="Chat lines and the answer to /players" width="49%">
+</p>
+
+### Co-op: the story together
+Two players play the story as Jak and Daxter. The host starts a new campaign, continues the saved one, or picks any mission.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/coop-mission-page.jpg" alt="The mission page of the co-op start" width="49%">
+</p>
+
+When one player starts a mission, the other is asked to join. Both watch the cutscene, and it is skipped once both ask.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/coop-vote.jpg" alt="The other player is asked to join the mission" width="49%">
+  <img src="docs/modding/current_mod/readme-media/coop-cutscene.jpg" alt="The cutscene with the skip vote" width="49%">
+</p>
+
+The campaign saves itself, apart from your single-player saves, and the save icon shows on both screens. Where the story gives Jak a lizard, each player gets one.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/coop-save.jpg" alt="The save icon at the start of a mission" width="49%">
+  <img src="docs/modding/current_mod/readme-media/coop-lizards.jpg" alt="Both players on their own lizard" width="49%">
+</p>
+
+### Share vehicles
+Next to another player's vehicle, press **triangle** to steal it, or **L1 + triangle** to ride along in a free seat.
+
+<p>
+  <img src="docs/modding/current_mod/multiplayer-screenshots/passenger-seated-jak.jpg" alt="Two players seated in the same buggy" width="49%">
+</p>
+
+### Your own look
+The Appearance page gives a color to each part of Jak's and Daxter's clothes. Every player sees your outfit.
+
+<p>
+  <img src="docs/modding/current_mod/readme-media/appearance.jpg" alt="The Appearance page" width="49%">
+</p>
+
+### And also
+- **One shared world:** citizens, guards, enemies and traffic are the same for everyone. Enemies killed, crates broken and doors opened are shared.
+- **Shared story:** a mission completed by one player is completed for all.
 - **Your save is safe:** joining loads the host's world and never writes into your own save.
-- **Encrypted connections** that send less to a player whose connection struggles, then recover.
-
-### Two online modes
-- **Free roam (up to 8 players):** the end of the game with everything unlocked. The activities
-  that pay precursor orbs can be played again and again.
-- **Co-op (2 players):** the whole story as Jak and Daxter, every mission playable together, with a
-  campaign that saves itself apart from your single-player saves.
-- **Coming soon:** Parkour, Egg hunt, PvP, Battlefront, Hide and seek and Races are listed in the
-  lobby, grayed out.
-
-### Economy (free roam)
-- **Orbs and trophies per player:** every precursor orb you take and every Metal Head you kill
-  counts for you.
-- **Kept by the server:** the host's computer stores every account in a database and finds it again
-  each time it hosts.
-- **Kleiver's shop in Spargus:** outfits, and the second and third mods of each gun color (each
-  color starts at its first mod).
-- **One account per server,** whatever your name, tied to a secret id that never leaves your
-  computer.
-
-### Co-op together
-- **Never left behind:** missions start when both players accept, cutscenes play for both, and doors
-  and waypoints wait for the other player.
-- **Failures and deaths:** a failed mission is retried together; a fallen player comes back next to
-  their partner.
-- **Races:** one race for both, a vehicle each.
-- **Automatic saves** after each step of the story, with the save icon on both screens.
-
-### Jak and Daxter
-- **Daxter fully playable:** he fires every gun, drives vehicles, rides lizards and his own jet-board,
-  and climbs onto a Jak's shoulder to ride along.
-- **Roles:** each player picks their character; in co-op there is always one Jak and one Daxter,
-  and the roles can be swapped in game.
-
-### One shared world
-- **The same world for everyone:** citizens, guards, enemies and traffic are the same on every
-  screen, and enemies can target any player. Enemies killed, crates broken, pickups taken, doors,
-  elevators and platforms are shared.
-- **Shared story:** a mission completed by one player is completed for all, with its reward.
-- **Shared vehicles:** steal another player's vehicle, or ride along in a free seat.
-- **Players hitting each other:** in free roam, unless the host turns it off; never in co-op.
-
-### Seeing each other
-- **Names, health bars, colors and outfits** over every player, as they move on their own screen.
-- **Outlines through walls,** colored cones on the minimap, and a player list with each ping (hold
-  SELECT).
-- **Appearance page:** a color for each part of Jak's and Daxter's clothes.
-
-### Chat and administration
-- **Text chat** on the keyboard (T).
-- **Host administration** from the chat or a menu page: kick, ban, teleport players, allow cheats
-  for guests, give orbs, stop the server.
-- **Pause for everyone** with the host's SELECT; START opens your own menu while the game goes on.
+- **Pause for everyone** with the host's SELECT.
+- **Server administration** for the host: kick, ban, teleport players, allow cheats for guests.
 - **Cheats menu** (L3 + SELECT): every weapon, ammo, health, eco, invincibility, teleports.
 
 ## Getting Started

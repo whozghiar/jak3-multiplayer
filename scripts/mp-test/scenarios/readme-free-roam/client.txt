@@ -1,0 +1,105 @@
+# README tour, free roam, guest side, playing Daxter: Join Game and its address, the host's lobby,
+# ready; in free roam, onto the host's shoulder (L1 + triangle) for its run, off again (X), each
+# recorded as a burst of screenshots (a GIF); the host seen with its name and health bar; the player
+# list (SELECT held); a line in the chat.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+31 screenshot join
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+58 screenshot lobby-guest
+62 wait-joined
+70 goto-player 0 2 0
+71 face-player 0
+71.6 screenshot climb-000
+71.725 screenshot climb-001
+71.85 screenshot climb-002
+71.975 screenshot climb-003
+72 press l1+triangle 200
+72.1 screenshot climb-004
+72.225 screenshot climb-005
+72.35 screenshot climb-006
+72.475 screenshot climb-007
+72.6 screenshot climb-008
+72.725 screenshot climb-009
+72.85 screenshot climb-010
+72.975 screenshot climb-011
+73.1 screenshot climb-012
+73.225 screenshot climb-013
+73.35 screenshot climb-014
+73.475 screenshot climb-015
+73.6 screenshot climb-016
+73.725 screenshot climb-017
+73.85 screenshot climb-018
+73.975 screenshot climb-019
+74.1 screenshot climb-020
+74.225 screenshot climb-021
+74.35 screenshot climb-022
+78.5 screenshot ride-000
+78.625 screenshot ride-001
+78.75 screenshot ride-002
+78.875 screenshot ride-003
+79 screenshot ride-004
+79.125 screenshot ride-005
+79.25 screenshot ride-006
+79.375 screenshot ride-007
+79.5 screenshot ride-008
+79.625 screenshot ride-009
+79.75 screenshot ride-010
+79.875 screenshot ride-011
+80 screenshot ride-012
+80.125 screenshot ride-013
+80.25 screenshot ride-014
+80.375 screenshot ride-015
+80.5 screenshot ride-016
+80.625 screenshot ride-017
+80.75 screenshot ride-018
+80.875 screenshot ride-019
+81 screenshot ride-020
+81.125 screenshot ride-021
+81.25 screenshot ride-022
+81.375 screenshot ride-023
+81.5 screenshot ride-024
+81.625 screenshot ride-025
+81.75 screenshot ride-026
+81.875 screenshot ride-027
+82 screenshot ride-028
+82.125 screenshot ride-029
+82.25 screenshot ride-030
+82.375 screenshot ride-031
+82.5 screenshot ride-032
+82.625 screenshot ride-033
+82.75 screenshot ride-034
+82.875 screenshot ride-035
+83 screenshot ride-036
+83.125 screenshot ride-037
+83.25 screenshot ride-038
+83.375 screenshot ride-039
+83.5 screenshot ride-040
+83.625 screenshot ride-041
+83.75 screenshot ride-042
+83.875 screenshot ride-043
+84 screenshot ride-044
+84.125 screenshot ride-045
+84.25 screenshot ride-046
+84.375 screenshot ride-047
+84.5 screenshot ride-048
+85 press x 100
+86.5 goto-player 0 4 0
+87 look-player 0
+88 screenshot names
+90 press select 3000
+91.5 screenshot player-list
+110 chat-say On my way!
+113.5 screenshot chat-guest
+116 screenshot end

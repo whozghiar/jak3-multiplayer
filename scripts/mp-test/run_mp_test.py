@@ -56,8 +56,9 @@ def script_length(script: Path) -> float:
     return last
 
 
-def prepare_instance(folder: Path, index: int) -> None:
-    """A config folder with the user's saves and settings, the window placed for this instance."""
+def prepare_instance(folder: Path, index: int, english: bool = False) -> None:
+    """A config folder with the user's saves and settings, the window placed for this instance (the
+    game in English with `english`)."""
     jak3 = folder / "OpenGOAL" / "jak3"
     if folder.exists():
         shutil.rmtree(folder)
@@ -81,6 +82,8 @@ def prepare_instance(folder: Path, index: int) -> None:
         # no vsync: with the display asleep or the session locked, a frame swap waiting for the
         # screen blocks the game (its frame limiter keeps 60 frames a second)
         text = re.sub(r"\(vsync [^)]*\)", "(vsync #f)", text)
+        if english:
+            text = re.sub(r"\((game|text|subtitle)-language [^)]*\)", r"(\1-language 0)", text)
         pc.write_text(text, encoding="utf-8")
     display = settings / "display-settings.json"
     data = json.loads(display.read_text(encoding="utf-8")) if display.exists() else {"version": "1.2"}
@@ -102,6 +105,8 @@ def main() -> int:
                         help="boot as task boot-game-retail: the title screen, no debug segment")
     parser.add_argument("--fixed-cadence", action="store_true",
                         help="no network pressure: every send at its full rate (MP_TEST_FIXED_CADENCE, a baseline)")
+    parser.add_argument("--english", action="store_true",
+                        help="the game in English, whatever the user's language (captures for the README)")
     parser.add_argument("--settings-from", default="",
                         help="scenario whose instances' economy files and multiplayer.cfg to start with")
     args = parser.parse_args()
@@ -123,7 +128,7 @@ def main() -> int:
     for index, script in enumerate(scripts):
         name = script.stem
         folder = out / name
-        prepare_instance(folder, index)
+        prepare_instance(folder, index, args.english)
         if args.settings_from:
             # the economy and the secret id of the same instance in an earlier run
             src = ROOT / "out" / "mp-test" / args.settings_from / name / "OpenGOAL" / "jak3" / "settings"

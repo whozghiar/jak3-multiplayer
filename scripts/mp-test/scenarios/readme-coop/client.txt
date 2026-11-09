@@ -1,0 +1,84 @@
+# README tour, co-op, guest side (Daxter): joins the co-op lobby; asked to join the mission the host
+# starts with Kleiver (D-pad up), watches the intro with the host and asks to skip it; the save
+# icon shows here too; gets on the lizard beside the host's, then records the host riding away.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+50 screenshot lobby-coop-guest
+57 press x 100
+62 wait-joined
+64 shot-save-icon save-icon
+68 continue wasdoors-city
+75 wait-vote
+76.5 screenshot vote
+77 press up 100
+78 wait-scene
+82 screenshot intro-guest
+84 press triangle 100
+100 goto-flut
+102 press triangle 100
+110.5 look-player 0
+111.5 screenshot lizard-000
+111.625 screenshot lizard-001
+111.75 screenshot lizard-002
+111.875 screenshot lizard-003
+112 screenshot lizard-004
+112.125 screenshot lizard-005
+112.25 screenshot lizard-006
+112.375 screenshot lizard-007
+112.5 screenshot lizard-008
+112.625 screenshot lizard-009
+112.75 screenshot lizard-010
+112.875 screenshot lizard-011
+113 screenshot lizard-012
+113.125 screenshot lizard-013
+113.25 screenshot lizard-014
+113.375 screenshot lizard-015
+113.5 screenshot lizard-016
+113.625 screenshot lizard-017
+113.75 screenshot lizard-018
+113.875 screenshot lizard-019
+114 screenshot lizard-020
+114.125 screenshot lizard-021
+114.25 screenshot lizard-022
+114.375 screenshot lizard-023
+114.5 screenshot lizard-024
+114.625 screenshot lizard-025
+114.75 screenshot lizard-026
+114.875 screenshot lizard-027
+115 screenshot lizard-028
+115.125 screenshot lizard-029
+115.25 screenshot lizard-030
+115.375 screenshot lizard-031
+115.5 screenshot lizard-032
+115.625 screenshot lizard-033
+115.75 screenshot lizard-034
+115.875 screenshot lizard-035
+116 screenshot lizard-036
+116.125 screenshot lizard-037
+116.25 screenshot lizard-038
+116.375 screenshot lizard-039
+116.5 screenshot lizard-040
+116.625 screenshot lizard-041
+116.75 screenshot lizard-042
+116.875 screenshot lizard-043
+117 screenshot lizard-044
+117.125 screenshot lizard-045
+117.25 screenshot lizard-046
+117.375 screenshot lizard-047
+117.5 screenshot lizard-048
+117.625 screenshot lizard-049
+117.75 screenshot lizard-050
+117.875 screenshot lizard-051
+118 screenshot lizard-052
+119 screenshot end

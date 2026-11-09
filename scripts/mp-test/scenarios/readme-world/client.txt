@@ -1,0 +1,87 @@
+# README tour, free roam in the desert, guest side (Jak): goes to the desert itself (its levels
+# load), then sees the host's outfit from 9 m and the host hidden behind a vehicle (its outline); a
+# chat line; onto the back of the host's buggy (L1 + triangle) for its drive, recorded too.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+70 continue desert-start
+84 goto-player 0 9 0
+84.5 look-player 0
+86 screenshot outfit
+88 spawn-vehicle 17
+89 look-player 0
+90.5 screenshot outline
+92 chat-say Me!
+99 goto-player 0 0 3
+100 press l1+triangle 200
+102 screenshot seated
+103 screenshot ride-000
+103.125 screenshot ride-001
+103.25 screenshot ride-002
+103.375 screenshot ride-003
+103.5 screenshot ride-004
+103.625 screenshot ride-005
+103.75 screenshot ride-006
+103.875 screenshot ride-007
+104 screenshot ride-008
+104.125 screenshot ride-009
+104.25 screenshot ride-010
+104.375 screenshot ride-011
+104.5 screenshot ride-012
+104.625 screenshot ride-013
+104.75 screenshot ride-014
+104.875 screenshot ride-015
+105 screenshot ride-016
+105.125 screenshot ride-017
+105.25 screenshot ride-018
+105.375 screenshot ride-019
+105.5 screenshot ride-020
+105.625 screenshot ride-021
+105.75 screenshot ride-022
+105.875 screenshot ride-023
+106 screenshot ride-024
+106.125 screenshot ride-025
+106.25 screenshot ride-026
+106.375 screenshot ride-027
+106.5 screenshot ride-028
+106.625 screenshot ride-029
+106.75 screenshot ride-030
+106.875 screenshot ride-031
+107 screenshot ride-032
+107.125 screenshot ride-033
+107.25 screenshot ride-034
+107.375 screenshot ride-035
+107.5 screenshot ride-036
+107.625 screenshot ride-037
+107.75 screenshot ride-038
+107.875 screenshot ride-039
+108 screenshot ride-040
+108.125 screenshot ride-041
+108.25 screenshot ride-042
+108.375 screenshot ride-043
+108.5 screenshot ride-044
+108.625 screenshot ride-045
+108.75 screenshot ride-046
+108.875 screenshot ride-047
+109 screenshot ride-048
+109.125 screenshot ride-049
+109.25 screenshot ride-050
+109.375 screenshot ride-051
+109.5 screenshot ride-052
+109.625 screenshot ride-053
+109.75 screenshot ride-054
+109.875 screenshot ride-055
+110 screenshot ride-056
+112 screenshot end

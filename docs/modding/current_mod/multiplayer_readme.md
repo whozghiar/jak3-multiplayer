@@ -1693,9 +1693,10 @@ multiplayer-chat.gc, `kmultiplayer.cpp` "Chat", `game/graphics/pipelines/opengl.
   relays it with the guest's slot and name as it knows them, never as the guest claims, at most
   5 lines in a row from a guest, then one every 2 s. Fifty lines are kept; a session starts
   empty, with "Press T to chat (keyboard)" (`#x15af`).
-- **Drawn.** At the left, above the eco meter (`mp-chat-draw`): the last 8 lines, each for 12 s
-  (fading its last 2 s); while a line is typed, all 8 and the line under them after "> ", with a
-  blinking cursor. Our lines light blue, the answers to commands yellow, the others' white.
+- **Drawn.** At the left, above the eco meter (`mp-chat-draw`), in the game's large font at scale
+  0.45 (its small font was a few pixels high): the last 8 lines, each for 12 s (fading its last
+  2 s); while a line is typed, all 8 and the line under them with a blinking cursor (the font has
+  no ">" glyph). Our lines light blue, the answers to commands yellow, the others' white.
 - **Commands.** A line starting with `/` is a command, the host's alone: the server's
   administrator. A guest's is refused ("Only the host can use commands") and sent to nobody. The
   answers are the host's alone. A name may be the beginning of one, case ignored
@@ -1750,6 +1751,15 @@ in order (`MP_TEST_LATENCY`, `Session::receive_all` in `kmultiplayer.cpp`), and 
 drops that share of the datagrams received (`MP_TEST_LOSS`): both instances run on one machine,
 these stand in for the network between two. `--shot-size` renders the screenshots at that size
 (`MP_TEST_SHOT_SIZE`, 1280x720 by default): 2560x1440 shows Daxter's hands from a few meters.
+`--english` puts the instances' game in English (`game-language`, `text-language` and
+`subtitle-language` 0 in their `pc-settings.gc`), whatever the user's language.
+
+The root `README.md`'s captures come from the scenarios `readme-free-roam`, `readme-coop` and
+`readme-world`, run with `--retail --english --shot-size 960x540`. A GIF is a burst of
+`screenshot` lines 0.125 s apart (some are lost while the game is busy), assembled with ffmpeg; a
+recording of the desktop also records whatever window covers the game. Do not end a retail
+scenario with `log` or `log-econ`: printing a symbol's name there can read memory the level
+loads reused, and the instance crashes (`mp-test-run`).
 
 `python scripts/mp-test/compare_poses.py` compares, after a `pose-all` run, the bones the host
 logged for its objects with those of their copies on the guest at the same moment: both log every

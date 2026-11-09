@@ -1,0 +1,49 @@
+# README tour (run_mp_test.py readme-coop --retail --english --shot-size 960x540), co-op, host
+# side (Jak): the co-op page and the mission page in the lobby, then the kanga-rat hunt: we talk to
+# Kleiver, the intro waits for the guest's answer, both watch it and skip it, the save icon shows;
+# a lizard each, ours ridden away while the guest records it (a GIF).
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+32 press square 100
+33 wait-menu mp-mode
+33.5 press down 100
+34 press x 100
+35 wait-menu mp-coop-start
+35.5 screenshot coop-page
+37 press down 100
+37.5 press down 100
+38 press x 100
+39 wait-menu mp-mission
+39.3 press down 100
+39.7 press x 100
+40.5 screenshot mission-page
+41 press x 100
+43 wait-menu mp-lobby-host
+43.5 coop-mission-intro
+43.7 coop-mission wascity-chase
+44.5 screenshot lobby-coop
+63 press x 100
+70 wait-player 1
+78 shot-save-icon save-icon
+86 goto-type kleever-npc
+87 goto-type kleever-npc
+88 press triangle 100
+90 wait-scene
+96 screenshot intro
+98 press triangle 100
+108 goto-flut
+109 screenshot two-lizards
+118 goto-flut
+119 press triangle 100
+121 look-player 1
+122 screenshot both-riding
+124 stick 128 0 3000
+127.5 stick 100 0 2000
+131 screenshot end

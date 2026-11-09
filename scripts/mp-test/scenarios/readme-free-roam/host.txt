@@ -1,0 +1,47 @@
+# README tour (run_mp_test.py readme-free-roam --retail --english --shot-size 960x540), free roam,
+# host side: the title screen's Host Game, the lobby with the guest, the game mode list, the
+# countdown; in free roam we run with the guest's Daxter on our shoulder, buy at Kleiver's shop,
+# then write in the chat.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 0
+26 wait-menu title
+27 screenshot title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+50 screenshot lobby
+51 press square 100
+52 wait-menu mp-mode
+52.5 screenshot modes
+53.5 press x 100
+54.5 wait-menu mp-lobby-host
+60 screenshot lobby-ready
+63 press x 100
+65 screenshot countdown
+70 wait-player 1
+72 merchant-spot 1
+72.5 econ-grant-self 0
+86 stick 128 0 2500
+89 stick 100 0 2000
+98 goto-merchant
+100 screenshot kleiver
+101 press triangle 100
+102 wait-menu mp-shop
+103 screenshot shop
+104 press down 100
+104.4 press down 100
+104.8 press down 100
+105.2 press down 100
+106 press x 100
+107.5 screenshot shop-bought
+109 press triangle 100
+114 chat-key t
+114.3 chat-text Hi Guest! Kleiver is in the square today
+115 screenshot chat-typing
+115.5 chat-key enter
+120 chat-say /players
+121.5 screenshot chat
+123 screenshot end
