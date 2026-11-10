@@ -14,6 +14,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -38,6 +39,8 @@
 #include "common/util/string_util.h"
 
 #include "game/graphics/screenshot.h"
+#include "game/overlord/jak3/sbank.h"
+#include "game/sound/sndshim.h"
 #include "game/kernel/common/Ptr.h"
 #include "game/kernel/common/kscheme.h"
 #include "game/kernel/jak3/kscheme.h"
@@ -2527,6 +2530,11 @@ std::atomic<int>& skin_draws() {
   return count;
 }
 
+std::atomic<bool>& keep_mode_banks() {
+  static std::atomic<bool> keep{false};
+  return keep;
+}
+
 namespace test {
 struct Step {
   double at_ms;
@@ -2613,6 +2621,7 @@ u64 pc_mp_join(u32 address) {
 void pc_mp_leave() {
   mp::stop_port_mapping();
   mp::session().leave("Disconnected");
+  mp::keep_mode_banks() = false;
 }
 
 // (pc-mp-public-address dest) -> #t when the router opened our server's port: its internet
@@ -2635,6 +2644,7 @@ u64 pc_mp_update(u32 state) {
   if (state) {
     s.update(*Ptr<mp::PlayerState>(state).c(), mp::now_ms());
   }
+  mp::keep_mode_banks() = s.mode() != mp::Mode::Offline;
   return (u64)(s64)s.mode();
 }
 
@@ -3084,14 +3094,74 @@ void pc_mp_add_sound(u32 snd) {
   }
 }
 
+// Test log: the sounds other players' objects play here (not stops), and those no loaded sound
+// bank has (silent here), with the last such name.
+static int g_sounds_checked = 0;
+static int g_sounds_missing = 0;
+static char g_sound_missing_name[17] = {0};
+static std::set<std::string> g_sound_missing_names;  // the distinct ones, 16 at most
+
 // (pc-mp-get-sounds id frame dest max) -> sounds of object `id` to play now, written into dest.
 u64 pc_mp_get_sounds(u32 id, u32 frame, u32 dest, u32 max) {
   if (!frame || !dest) {
     return 0;
   }
-  return (u64)mp::session().get_sounds(id, mp::now_ms(), Ptr<float>(frame).c(),
-                                       Ptr<mp::SoundIO>(dest).c(),
-                                       std::min<int>((int)max, mp::kMaxPoseSounds * 4));
+  auto* out = Ptr<mp::SoundIO>(dest).c();
+  int n = mp::session().get_sounds(id, mp::now_ms(), Ptr<float>(frame).c(), out,
+                                   std::min<int>((int)max, mp::kMaxPoseSounds * 4));
+  if (mp::test::script().loaded) {
+    for (int i = 0; i < n; i++) {
+      if (out[i].flags & 2) {
+        continue;
+      }
+      char name[17] = {0};
+      char upper[17] = {0};
+      memcpy(name, out[i].name, 16);
+      // the overlord looks a sound up by its name in capitals, '-' as '_' (srpc.cpp,
+      // strcpy_toupper)
+      for (int k = 0; k < 16 && name[k]; k++) {
+        upper[k] = name[k] == '-' ? '_' : (char)toupper((unsigned char)name[k]);
+      }
+      g_sounds_checked++;
+      if (!snd_HasSound(upper)) {
+        g_sounds_missing++;
+        memcpy(g_sound_missing_name, name, 17);
+        if (g_sound_missing_names.size() < 16) {
+          g_sound_missing_names.insert(name);
+        }
+      }
+    }
+  }
+  return (u64)n;
+}
+
+// (pc-mp-sounds-missing dest) -> sounds other players played here that no loaded bank has; the
+// last one's name copied into dest. *checked* the sounds looked up (test log).
+u64 pc_mp_sounds_missing(u32 dest) {
+  if (dest) {
+    auto* str = Ptr<String>(dest).c();
+    size_t n = std::min<size_t>(strlen(g_sound_missing_name), str->len > 0 ? str->len - 1 : 0);
+    memcpy(str->data(), g_sound_missing_name, n);
+    str->data()[n] = 0;
+  }
+  return (u64)g_sounds_missing;
+}
+
+u64 pc_mp_sounds_checked() {
+  return (u64)g_sounds_checked;
+}
+
+// (pc-mp-log-banks): the overlord's bank slots and the sound player's banks, printed (test log).
+void pc_mp_log_banks() {
+  jak3::PrintBanks();
+  lg::info("[mp-test] sound player banks {}, RED_SHOT_FIRE found {}, BLUE_SHOT_FIRE found {}, TOAD_IDLE found {}",
+           snd_BankCount(), snd_HasSound("RED_SHOT_FIRE"), snd_HasSound("BLUE_SHOT_FIRE"), snd_HasSound("TOAD_IDLE"));
+  std::string names;
+  for (auto& n : g_sound_missing_names) {
+    names += n + " ";
+  }
+  lg::info("[mp-test] sounds in no bank since the last log-banks: {}", names);
+  g_sound_missing_names.clear();
 }
 
 // (pc-mp-send-poses): send the queued poses.
@@ -3589,6 +3659,9 @@ void init_multiplayer_functions() {
   make_function_symbol_from_c("pc-mp-leave", (void*)pc_mp_leave);
   make_function_symbol_from_c("pc-mp-public-address", (void*)pc_mp_public_address);
   make_function_symbol_from_c("pc-mp-update", (void*)pc_mp_update);
+  make_function_symbol_from_c("pc-mp-sounds-missing", (void*)pc_mp_sounds_missing);
+  make_function_symbol_from_c("pc-mp-sounds-checked", (void*)pc_mp_sounds_checked);
+  make_function_symbol_from_c("pc-mp-log-banks", (void*)pc_mp_log_banks);
   make_function_symbol_from_c("pc-mp-get-player", (void*)pc_mp_get_player);
   make_function_symbol_from_c("pc-mp-send-event", (void*)pc_mp_send_event);
   make_function_symbol_from_c("pc-mp-pop-event", (void*)pc_mp_pop_event);

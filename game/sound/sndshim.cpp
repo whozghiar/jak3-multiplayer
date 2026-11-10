@@ -166,6 +166,14 @@ s32 snd_PlaySoundVolPanPMPB(snd::BankHandle bank,
   }
 }
 
+bool snd_HasSound(const char* sound_name) {
+  return player && player->HasSound(sound_name);
+}
+
+int snd_BankCount() {
+  return player ? player->BankCount() : -1;
+}
+
 s32 snd_PlaySoundByNameVolPanPMPB(snd::BankHandle bank_handle,
                                   char* bank_name,
                                   char* sound_name,

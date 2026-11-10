@@ -61,6 +61,8 @@
   (fail-shown 18)  ;; its game shows a mission's failure, waiting for a choice ("A mission failed")
   (fail-retry 19)  ;; ... its player chose to retry (or to go on, when there is no choice)
   (fail-quit 20)   ;; ... its player chose to quit
+  (scene-ready 21) ;; its cutscene is loaded and held at its start ("Cutscenes started together")
+  (scene-play 22)  ;; its cutscene plays
   )
 
 ;; Network events (mp-event kind). The C++ session only routes them.
@@ -123,6 +125,14 @@
   (fail-decided 33)  ;; co-op: every player chose the same for the failure shown, iarg 0 (1 retry,
                      ;; 2 quit): the others apply it even if they missed the last vote's states
   (coop-saved 34)    ;; co-op: the host saved the campaign: the save icon shows on every screen
+  (gift 35)          ;; host to a player: its game counts gain fvec x precursor orbs (iarg 0 = 0) or
+                     ;; skull gems (1): the chat's /give and /trophies (mp-give-own)
+  (mission-timer 36) ;; co-op, host to everyone: its task manager of node iarg 0 has run iarg 1 frames
+                     ;; since its start-time (-1 none) and iarg 2 in its state (text) ("Co-op: mission
+                     ;; timers")
+  (ram 37)           ;; to an object's owner: the sender's vehicle rammed the copy of its vehicle iarg 0
+                     ;; (pid): fvec the point and (w) the impulse, iarg 1 the prim id, text the normal
+                     ;; and the velocity (3 floats each) (mp-replica-ram)
   )
 
 ;; Server settings chosen by the host in the administration page.
@@ -263,6 +273,11 @@
 ;; driven vehicle (body and wheels) are dropped here at once (mp-stolen-copy?), -1 for none.
 (define *mp-stolen-from* -1)
 (define *mp-stolen-until* 0)
+;; An NPC vehicle of another authority we just took (mp-take-replica-vehicle): its owner's slot,
+;; until when and around where its late copies are dropped (mp-stolen-copy?), -1 for none.
+(define *mp-taken-from* -1)
+(define *mp-taken-until* 0)
+(define *mp-taken-pos* (new 'global 'vector))
 ;; Teleport-to-player requested from the Mods menu, applied by the manager. -1 for none.
 (define *mp-request-teleport* -1)
 (define *mp-test-coop-intro* #f) ;; test (coop-mission-intro): co-op starts at the chosen mission's introduction
@@ -439,6 +454,7 @@
 
 ;; Last time a hit was forwarded to each player (real clock), to rate-limit them.
 (define *mp-hit-sent* (new 'global 'boxed-array time-frame MP_MAX_PLAYERS))
+(define *mp-hits-forwarded* 0) ;; test log: enemy blows on puppets sent to their players
 
 ;; aid of enemies recently killed because another player said so: their death is not echoed back.
 (define *mp-remote-kills* (new 'global 'boxed-array uint32 8))
@@ -1039,7 +1055,9 @@
   (copyn-charp<-string (-> *mp-config* address) "127.0.0.1:7777" 32)
   (set! (-> *mp-config* character) 0)
   (set! (-> *mp-config* color) 0)
-  (set! (-> *mp-config* enabled) 0)
+  ;; on by default (the user's choice): Host Game and Join Game on the title screen from the first
+  ;; boot; the Mods menu's toggle turns the mod off, remembered in the config
+  (set! (-> *mp-config* enabled) 1)
   (set! (-> *mp-config* mode) 0)
   (dotimes (i 16)
     (set! (-> *mp-config* skin i) (the-as uint 0))
@@ -1231,6 +1249,56 @@
     )
   )
 
+;; Cutscenes started together: each machine loads a cutscene's art and sound at its own pace, the
+;; one that got the "scene" event a little later: they played seconds apart. Loaded, a scene player
+;; waits at its start (a loop after the last wait of its wait state, engine/scene/scene.gc) while
+;; another player of our region watches a cutscene that is not yet loaded there nor playing
+;; (in-scene, neither scene-ready nor scene-play), 5 s at most: every machine starts it within a
+;; state's delay of the others.
+(define-extern mp-provider-of (function int int)) ;; multiplayer-world.gc
+
+(define *mp-scene-ready-at* 0) ;; real-clock time our cutscene was first held at its start, 0 none
+(define *mp-scene-holds* 0)    ;; test log: cutscenes held at their start for another player
+
+(defconstant MP_SCENE_SYNC_TIME (seconds 5))
+
+(defbehavior mp-scene-sync-hold? scene-player ()
+  "#t while our cutscene, loaded, waits at its start for another player of our region still loading
+   its own (see above)."
+  (let ((wait? #f))
+    (when (mp-online?)
+      (dotimes (i MP_MAX_PLAYERS)
+        (let ((st (mp-remote-state i)))
+          (if (and st
+                   (= (mp-provider-of i) (mp-provider-of *mp-local-slot*))
+                   (logtest? (-> st flags) (mp-flag in-scene))
+                   (not (logtest? (-> st flags) (mp-flag scene-ready scene-play)))
+                   )
+              (set! wait? #t)
+              )
+          )
+        )
+      )
+    (when (and wait? (zero? *mp-scene-ready-at*))
+      (set! *mp-scene-ready-at* (mp-now))
+      (+! *mp-scene-holds* 1)
+      (format 0 "[multiplayer] our cutscene is loaded: it waits for the other players to load theirs~%")
+      )
+    (cond
+      ((and wait? (< (- (mp-now) *mp-scene-ready-at*) MP_SCENE_SYNC_TIME))
+       #t
+       )
+      (else
+        (if (nonzero? *mp-scene-ready-at*)
+            (format 0 "[multiplayer] our cutscene starts, held ~D ms~%" (/ (* (- (mp-now) *mp-scene-ready-at*) 10) 3))
+            )
+        (set! *mp-scene-ready-at* 0)
+        #f
+        )
+      )
+    )
+  )
+
 (defun mp-skippable-scene ()
   "The cutscene playing here, when it can be skipped (scene-flags scf1, nearly every cutscene), else #f."
   (let ((sp (if *scene-player*
@@ -1344,11 +1412,22 @@
         ((2) (logior! (-> st flags) (mp-flag fail-quit)))
         )
       )
-    ;; a cutscene we watch, and our vote to skip it
-    (when (mp-skippable-scene)
-      (logior! (-> st flags) (mp-flag in-scene))
-      (if (-> *mp-skip* voted?)
-          (logior! (-> st flags) (mp-flag skip-vote))
+    ;; a cutscene we watch, and our vote to skip it; held at its start, or playing
+    (let ((sp (mp-skippable-scene)))
+      (when sp
+        (logior! (-> st flags) (mp-flag in-scene))
+        (if (-> *mp-skip* voted?)
+            (logior! (-> st flags) (mp-flag skip-vote))
+            )
+        (if (nonzero? *mp-scene-ready-at*)
+            (logior! (-> st flags) (mp-flag scene-ready))
+            )
+        (if (and (-> sp next-state) (= (-> sp next-state name) 'play-anim))
+            (logior! (-> st flags) (mp-flag scene-play))
+            )
+        )
+      (if (not *scene-player*)
+          (set! *mp-scene-ready-at* 0)
           )
       )
     ;; the host's pause for everyone, and the time left before it resumes
@@ -1549,6 +1628,47 @@
   (call-parent-method this offset)
   )
 
+(defmethod get-trans ((this mp-puppet) (mode int))
+  "Mode 1, the ground under it, is its position. The puppet never probes the ground: its gspot-pos
+   stayed at -10000 m, so the nav enemies never became hostile to it (nav-enemy
+   can-become-hostile-to? checks that height against their notice range) and their chases aimed
+   far below. They only noticed another player and went on fighting ours."
+  (if (= mode 1)
+      (-> this root trans)
+      (call-parent-method this mode)
+      )
+  )
+
+;; MOD multiplayer -- engine/ai/enemy.gc: an enemy keeps its focus while it lives, unless the enemy
+;; has multi-focus. Online, one focused on a player picks its best player every frame, as those do.
+(define-perm *mp-stock-update-focus* (function enemy process) (method-of-type enemy update-focus))
+
+(defmethod update-focus ((this enemy))
+  "Stock, except online: an enemy focused on a player (ours, or another player's puppet), alive,
+   picks its best player again every frame (find-best-focus: the most aware first, then the
+   nearest), as the stock multi-focus enemies do. The first player it noticed stayed its target,
+   even with the other one at its side."
+  (let ((cur (handle->process (-> this focus handle))))
+    (cond
+      ((and (mp-online?)
+            cur
+            (or (= cur *target*) (type? cur mp-puppet))
+            (not (logtest? (-> (the-as process-focusable cur) focus-status) (focus-status disable dead)))
+            (not (logtest? (enemy-flag lock-focus) (-> this enemy-flags)))
+            (not (logtest? (-> this focus flags) (enemy-flag look-at-focus)))
+            )
+       ;; ponytail: no hysteresis, two players at the same distance may trade the focus; the
+       ;; stock multi-focus enemies (marauders) do the same
+       (find-best-focus this)
+       (the-as process #f)
+       )
+      (else
+        (*mp-stock-update-focus* this)
+        )
+      )
+    )
+  )
+
 (defun mp-puppet-pose-id ((slot int))
   "Id under which a player's own model is sent in pose batches (its props use their pid)."
   (the-as uint (logior (shl slot 24) #xffffff))
@@ -1560,6 +1680,7 @@
              (>= (- (mp-now) (-> *mp-hit-sent* slot)) (seconds 1))
              )
     (set! (-> *mp-hit-sent* slot) (mp-now))
+    (+! *mp-hits-forwarded* 1)
     (mp-send-event (mp-event-kind hit) slot 0 1.0)
     )
   (none)
@@ -2013,8 +2134,11 @@
 ;; of kind crate (no faction of the AI picks it as an enemy), offered to no target search
 ;; (get-search-info-flag): neither the guns' aim nor an enemy focuses it.
 (deftype mp-hurtbox (process-focusable)
-  ()
+  ((last-id uint32)) ;; the attack id last answered: a blow lands once, as on a stock enemy
   )
+
+(define *mp-hurtbox-blows* 0)  ;; test log: 'attack messages our blows sent the puppets' hurtboxes
+(define *mp-hurtbox-landed* 0) ;; ... and those answered #t (each made the attacker's hit sound)
 
 (defmethod get-trans ((this mp-hurtbox) (mode int))
   "Where the weapons aim: the sphere's center (modes 2, 3 and 10), else the root. The stock method
@@ -2071,9 +2195,21 @@
   :event (behavior ((proc process) (argc int) (message symbol) (block event-message-block))
     (case message
       (('attack)
-       ;; returning #t tells the attacker the blow landed (the projectile stops, the punch hits)
-       (send-event (ppointer->process (-> self parent)) 'mp-hit proc (-> block param 1))
-       #t
+       ;; returning #t tells the attacker the blow landed (the projectile stops, the punch hits).
+       ;; A punch touches the sphere on several frames with one attack id: each #t made the
+       ;; attacker play its hit sound and effect again (several at once, heard by both players), so
+       ;; only the first answer of an id is #t, as a stock enemy answers
+       (let* ((info (the-as attack-info (-> block param 1)))
+              (id (if (and info (logtest? (attack-mask id) (-> info mask))) (-> info id) (the-as uint 0)))
+              )
+         (send-event (ppointer->process (-> self parent)) 'mp-hit proc info)
+         (+! *mp-hurtbox-blows* 1)
+         (when (or (zero? id) (!= id (-> self last-id)))
+           (set! (-> self last-id) id)
+           (+! *mp-hurtbox-landed* 1)
+           #t
+           )
+         )
        )
       )
     )
@@ -2402,6 +2538,17 @@
 ;; Enemies: shared deaths
 ;; ------------------------------------------------------------------------------------------------
 
+(defun mp-mission-pickup? ((proc process))
+  "#t for an object a mission counts as it is collected, shared in co-op: the arena training's
+   tokens (arena-token, the counter is the tokens left), the temple's board training tokens
+   (tpl-token). By type name: their types are level code."
+  (and proc
+       (or (= (-> proc type symbol) 'arena-token)
+           (= (-> proc type symbol) 'tpl-token)
+           )
+       )
+  )
+
 (defun mp-remote-kill? ((aid uint))
   "#t when `aid` died because another player said so (its death must not be echoed back)."
   (dotimes (i (-> *mp-remote-kills* length))
@@ -2423,7 +2570,7 @@
 (defun mp-apply-remote-kill ((aid uint))
   "Another player killed the enemy of entity `aid` (its death animation plays here too), or broke the
    crate or took the pickup of entity `aid` (it is removed here; the break effect comes with the
-   shared effects)."
+   shared effects), or collected a mission's object (mp-mission-pickup?: collected here too)."
   (let ((ent (entity-by-aid aid)))
     (when ent
       (let ((proc (-> (the-as entity-actor ent) extra process)))
@@ -2439,6 +2586,15 @@
              (set! *mp-remote-kill-index* (mod (+ *mp-remote-kill-index* 1) (-> *mp-remote-kills* length)))
              (process-entity-status! proc (entity-perm-status dead) #t)
              (deactivate proc)
+             )
+            ;; a mission's object another player collected: collected here as its touch does (its
+            ;; effect, its sound, its mission told: the count follows)
+            ((mp-mission-pickup? proc)
+             (set! (-> *mp-remote-kills* *mp-remote-kill-index*) aid)
+             (set! *mp-remote-kill-index* (mod (+ *mp-remote-kill-index* 1) (-> *mp-remote-kills* length)))
+             (if (and (-> proc next-state) (= (-> proc next-state name) 'idle))
+                 (send-event proc 'touch)
+                 )
              )
             )
           )
@@ -3998,6 +4154,100 @@
   (none)
   )
 
+(define-extern mp-give-own (function int float none)) ;; "Economy", below
+(define-extern mp-on-ram (function mp-event none :behavior mp-manager)) ;; multiplayer-world.gc
+
+;; ------------------------------------------------------------------------------------------------
+;; Co-op: mission timers
+;;
+;; Each machine runs its own task manager of a mission ("Missions started together"), started when
+;; that machine got there: their clocks (a countdown's start-time, against its time-limit; a
+;; stopwatch's state-time, as the arena training's) were seconds apart, and so were the timers on
+;; screen and the moment a time limit failed the mission. Once a second the host sends how long each
+;; of its managers has run, and in which state; a guest whose manager of the same node is in the same
+;; state moves its start-time (and state-time) there, the network's half round trip included, when
+;; they differ by more than 0.1 s.
+;; ------------------------------------------------------------------------------------------------
+
+(define *mp-timer-sent* 0)  ;; real-clock time of the host's last sending
+(define *mp-timer-fixes* 0) ;; test log: corrections applied here
+
+(defun mp-node-manager ((index int))
+  "The task manager of sub-task-list node `index` alive here, listed under its own node, #f none."
+  (let* ((nodes (-> *game-info* sub-task-list))
+         (node (-> nodes index))
+         (mgr (if (and node (-> node manager))
+                  (the-as task-manager (handle->process (-> node manager manager)))
+                  )
+              )
+         )
+    (if (and mgr (-> mgr next-state) (= (-> mgr node-info) node))
+        mgr
+        )
+    )
+  )
+
+(defun mp-send-mission-timers ()
+  "Every frame: in co-op, the host sends its managers' times once a second (see above)."
+  (when (and (= *mp-mode* (mp-mode host)) (mp-coop?) (> (mp-player-count) 0)
+             (>= (- (mp-now) *mp-timer-sent*) (seconds 1))
+             )
+    (set! *mp-timer-sent* (mp-now))
+    (dotimes (i (-> *game-info* sub-task-list length))
+      (let ((mgr (mp-node-manager i)))
+        (when mgr
+          (let ((ev (new 'stack 'mp-event))
+                (now (-> mgr clock frame-counter))
+                )
+            (set! (-> ev kind) (mp-event-kind mission-timer))
+            (set! (-> ev to) -1)
+            (set! (-> ev iarg 0) i)
+            (set! (-> ev iarg 1) (if (nonzero? (-> mgr start-time)) (the int (- now (-> mgr start-time))) -1))
+            (set! (-> ev iarg 2) (the int (- now (-> mgr state-time))))
+            (copyn-charp<-string (-> ev text) (symbol->string (-> mgr next-state name)) 32)
+            (pc-mp-send-event ev)
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
+(defun mp-apply-mission-timer ((ev mp-event))
+  "A guest in co-op: the host's manager of node iarg 0 has run iarg 1 frames since its start-time,
+   iarg 2 in its state (text): ours of that node, in that state, moves its clocks there."
+  (when (and (zero? (-> ev from)) (mp-coop?) (= *mp-mode* (mp-mode client)))
+    (let ((mgr (mp-node-manager (-> ev iarg 0))))
+      (when mgr
+        (let ((now (-> mgr clock frame-counter))
+              ;; half our round trip to the host, in frames (300 a second)
+              (half (/ (* (pc-mp-player-ping *mp-local-slot*) 300) 2000))
+              )
+          (when (and (>= (-> ev iarg 1) 0) (nonzero? (-> mgr start-time)))
+            (let ((want (- now (+ (-> ev iarg 1) half))))
+              (when (< (seconds 0.1) (abs (- want (-> mgr start-time))))
+                (set! (-> mgr start-time) want)
+                (+! *mp-timer-fixes* 1)
+                )
+              )
+            )
+          (string<-charp *mp-temp-string* (-> ev text))
+          (when (string= *mp-temp-string* (symbol->string (-> mgr next-state name)))
+            (let ((want (- now (+ (-> ev iarg 2) half))))
+              (when (< (seconds 0.1) (abs (- want (-> mgr state-time))))
+                (set! (-> mgr state-time) want)
+                (+! *mp-timer-fixes* 1)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  (none)
+  )
+
 (defbehavior mp-manager-handle-events mp-manager ()
   "Apply the events received since last frame."
   (let ((ev (-> self event)))
@@ -4101,6 +4351,18 @@
          )
         (((mp-event-kind coop-saved))
          (mp-coop-saved!)
+         )
+        (((mp-event-kind mission-timer))
+         (mp-apply-mission-timer ev)
+         )
+        (((mp-event-kind ram))
+         (mp-on-ram ev)
+         )
+        (((mp-event-kind gift))
+         ;; the host's /give or /trophies, from the host alone
+         (if (zero? (-> ev from))
+             (mp-give-own (-> ev iarg 0) (-> ev fvec x))
+             )
          )
         (((mp-event-kind econ-buy))
          (if (= *mp-mode* (mp-mode host))
@@ -5100,6 +5362,9 @@
   "Next to a remote player's vehicle, on foot: press triangle to steal it, L1 + triangle to ride along.
    Not while Daxter can jump on the shoulder of the Jak driving it (mp-update-perch, run first)."
   (set! *mp-prompt-slot* -1)
+  ;; the NPC vehicle's prompt too: kept from the last frame on foot, "take this vehicle" stayed
+  ;; drawn while we drove the one we took
+  (set! *mp-prompt-replica* -1)
   (when (and (< *mp-ride-slot* 0)
              (< *mp-perch-slot* 0)
              (or (< *mp-perch-candidate* 0) *mp-perch-l1?*)
@@ -5507,12 +5772,15 @@
    (invites    int32)       ;; test log: invitations received, decisions, reward given
    (decisions  int32)
    (given      float)
+   (retry-offered? symbol)  ;; reached but beaten: the challenge's failure screen was shown
+   (retries-offered int32)  ;; test log: those screens shown
    )
   )
 
 (define *mp-challenge* (new 'global 'mp-challenge-state))
 (set! (-> *mp-challenge* accept?) #f)
 (set! (-> *mp-challenge* was-daxter?) #f)
+(set! (-> *mp-challenge* retry-offered?) #f)
 (define *mp-challenge-name* (new 'global 'string 16 (the-as string #f)))
 ;; a line of ours: a button icon (<PAD_DPAD_UP>) expands to about 110 characters
 (define *mp-challenge-line* (new 'global 'string 256 (the-as string #f)))
@@ -5706,6 +5974,28 @@
     (set! (-> c last-state) #f)
     (set! (-> c live-score) 0.0)
     (set! (-> c manager) (the-as handle #f))
+    (set! (-> c retry-offered?) #f)
+    )
+  (none)
+  )
+
+(defun mp-challenge-offer-retry ((node game-task-node-info))
+  "We reached the objective of challenge `node` (its resolution) but another player did better: the
+   challenge's own failure screen (its fail-info: retry from its start, or quit), waiting for our
+   choice (auto-reset off), ours alone (a burning bush node: not voted, \"A mission failed\"). The
+   loser had none: its challenge ended as reached, its reward withheld."
+  (let ((src (if (and node (-> node reset)) (-> node reset fail-info))))
+    (when src
+      (let ((params (new 'stack 'resetter-params)))
+        (mem-copy! (the-as pointer params) (the-as pointer src) 48)
+        (logclear! (-> params flags) (resetter-flag auto-reset))
+        (set! (-> params message) (resetter-message mission-fail-or-retry))
+        (when (spawn-resetter! *resetter-control* params node)
+          (+! (-> *mp-challenge* retries-offered) 1)
+          (format 0 "[multiplayer] beaten in the challenge: its failure screen, retry or quit~%")
+          )
+        )
+      )
     )
   (none)
   )
@@ -6127,6 +6417,18 @@
          )
        )
       ((= (-> c phase) 5)
+       ;; reached, but another player did better: the challenge's failure screen, retry or quit
+       (when (and (not (-> c retry-offered?))
+                  *target*
+                  (logtest? (-> c players) (ash 1 me))
+                  (logtest? (-> c reached) (ash 1 me))
+                  (not (logtest? (-> c winners) (ash 1 me)))
+                  (not (get-resetter *resetter-control*))
+                  (not (focus-test? *target* dead))
+                  )
+         (set! (-> c retry-offered?) #t)
+         (mp-challenge-offer-retry (-> nodes (-> c node)))
+         )
        (when (and (< 0.0 (-> c pending)) *target* (logtest? (-> c winners) (ash 1 me)))
          (format 0 "[multiplayer] we won the challenge: its reward (~,,1f) is ours~%" (-> c pending))
          (+! (-> c given) (-> c pending))
@@ -8361,7 +8663,8 @@
   "Stock, except in co-op on foot with a living teammate (see above): 5 s watching it, our body on
    the ground, then back next to it, health full, 3 s invulnerable; no task manager told, so no
    mission fails."
-  (let ((mate (if (focus-test? self pilot) -1 (mp-living-teammate))))
+  ;; in our own challenge, the stock death: a challenge that fails on death fails, with its screen
+  (let ((mate (if (or (focus-test? self pilot) (= (-> *mp-challenge* phase) 3)) -1 (mp-living-teammate))))
     (when (>= mate 0)
       (let ((sp *mp-spectate*))
         (set! (-> sp until) (+ (mp-now) MP_RESPAWN_DELAY))
@@ -8392,6 +8695,11 @@
          (format 0 "[multiplayer] co-op: back next to player ~D~%" mate)
          (move-to-point! (-> self control) pos)
          (vector-reset! (-> self control transv))
+         ;; a fall or a drowning pinned the camera where we died (tf6, tf12, tf14: target-cam-pos
+         ;; returns alt-cam-pos). The stock reset makes a new player, without them; ours stays, and
+         ;; the camera stayed at the place of death after we came back
+         (logclear! (-> self target-flags) (target-flags tf6 tf12 tf14))
+         (send-event *camera* 'teleport)
          (set! (-> self fact health) (-> self fact health-max))
          (target-timed-invulnerable (seconds 3) self 1)
          (go target-stance)
@@ -8580,6 +8888,21 @@
           )
         )
       )
+    )
+  (none)
+  )
+
+(defun mp-give-own ((kind int) (amount float))
+  "Our player's game counts, as the HUD shows them, gain `amount` precursor orbs (kind 0) or skull
+   gems, the Metal Heads' (1); a negative amount takes them, down to 0. The Mods menu's gifts and the
+   host's /give and /trophies. No orb claim to the host: the give wrapper claims an orb entity's
+   alone, and our player has none."
+  (when *target*
+    (if (zero? kind)
+        (give *game-info* 'skill (fmax amount (- (-> *game-info* skill))) (process->handle *target*))
+        ;; no handle: the stock sends the giver 'handle-gem-pickup
+        (give *game-info* 'gem (fmax amount (- (-> *game-info* gem))) (the-as handle #f))
+        )
     )
   (none)
   )
@@ -9317,6 +9640,76 @@
 (define-extern mp-keep-seen-npcs (function none)) ;; multiplayer-world.gc
 (define-extern mp-update-title (function none)) ;; multiplayer-menu.gc
 (define-extern mp-skin-watch (function none))
+(define-extern mp-watch-pickups (function none)) ;; multiplayer-world.gc
+
+;; ------------------------------------------------------------------------------------------------
+;; Every mode sound bank, online
+;;
+;; A gun mod's sounds (and the board's, the lizard's, Dark and Light Jak's...) are in a "mode" sound
+;; bank, and the game loads the one of what our player holds alone (target-gun-type-set!): another
+;; player's shots were silent here unless both held the same mod, and Daxter's own shots silent on
+;; his machine (his mode holds modeidax). Online, the runtime keeps every mode bank loaded
+;; (mp::keep_mode_banks, the overlord's extra mode slots): each is loaded once here, one per frame
+;; while the sound loader is free.
+;; ------------------------------------------------------------------------------------------------
+
+(define *mp-mode-banks* (new 'static 'boxed-array :type symbol
+                          'modegur1 'modegur2 'modegur3 'modeguy1 'modeguy2 'modeguy3
+                          'modegub1 'modegub2 'modegub3 'modegud1 'modegud2 'modegud3
+                          'modebord 'modeflut 'modedark 'modelit 'modemech 'modeidax
+                          )
+        )
+
+(define *mp-mode-banks-loaded* 0) ;; mode banks asked for since we went online
+(define *mp-test-no-mode-banks* #f) ;; test switch (mode-banks 0): none loaded here, as before
+
+(defun mp-load-mode-banks ()
+  "Every frame: online, the next mode bank of *mp-mode-banks* asked for once the sound loader is
+   free (the overlord skips one already loaded); offline, the count starts again."
+  (cond
+    ((not (mp-online?))
+     (set! *mp-mode-banks-loaded* 0)
+     )
+    ((and (< *mp-mode-banks-loaded* (-> *mp-mode-banks* length)) (zero? (rpc-busy? 1)) (not *mp-test-no-mode-banks*))
+     (sound-bank-load (string->sound-name (symbol->string (-> *mp-mode-banks* *mp-mode-banks-loaded*))) 3 2)
+     (+! *mp-mode-banks-loaded* 1)
+     )
+    )
+  (none)
+  )
+
+;; The wasteland's vehicles have a sound bank each (wcar.gc bank-replace: the toad's wastoad...),
+;; which the levels load in place of wasall1 for the player who drives it alone: another player's
+;; vehicle was silent here (the toad's 696 sounds of 777 in no bank, vehicle-sounds). While another
+;; player of our place drives one, its bank is asked for (mode 3: an extra slot of the overlord, kept
+;; while online), each player's every second at most.
+(define *mp-vehicle-banks* (new 'static 'boxed-array :type symbol
+                             'wasturt 'wassnake 'wasscorp 'wastoad 'wassnake 'wasrhino
+                             'wasmir 'wassnake 'wassnake 'facveh 'wassnake 'wassnake
+                             )
+        ) ;; by vehicle-type from 12 (v-turtle) to 23 (v-marauder-b)
+
+(define *mp-vehicle-bank-slot* 0)    ;; the player looked at next
+(define *mp-vehicle-bank-time* 0)    ;; real-clock time of the last look
+
+(defun mp-load-vehicle-banks ()
+  "Every frame, online: four times a second the next player's vehicle, when it is a wasteland
+   vehicle, has its sound bank asked for (the overlord skips a bank loaded already)."
+  (when (and (mp-online?) (not *mp-test-no-mode-banks*) (>= (- (mp-now) *mp-vehicle-bank-time*) (seconds 0.25))
+             (zero? (rpc-busy? 1))
+             )
+    (set! *mp-vehicle-bank-time* (mp-now))
+    (set! *mp-vehicle-bank-slot* (logand (+ *mp-vehicle-bank-slot* 1) (+ MP_MAX_PLAYERS -1)))
+    (let ((st (mp-remote-state *mp-vehicle-bank-slot*)))
+      (when (and st (mp-slot-here? *mp-vehicle-bank-slot*) (logtest? (-> st flags) (mp-flag driving))
+                 (>= (-> st veh-type) 12) (< (-> st veh-type) (+ 12 (-> *mp-vehicle-banks* length)))
+                 )
+        (sound-bank-load (string->sound-name (symbol->string (-> *mp-vehicle-banks* (+ (-> st veh-type) -12)))) 3 2)
+        )
+      )
+    )
+  (none)
+  )
 
 (defun mp-frame-hook ()
   "Called every frame from main.gc through *mods-menu-hook*, even while paused: runs the Mods menu,
@@ -9354,6 +9747,8 @@
          )
      (mp-update-join-request)
      (mp-update-session-title)
+     (mp-load-mode-banks)
+     (mp-load-vehicle-banks)
      ;; when the process pool is full, retry once a second instead of every frame
      (when (and (not (handle->process (-> *mp-globals* manager)))
                 (>= (- (mp-now) (-> *mp-globals* manager-retry)) (seconds 1))
@@ -9378,6 +9773,8 @@
      (mp-chat-update)
      (mp-update-merchant)
      (mp-update-fluts)
+     (mp-watch-pickups)
+     (mp-send-mission-timers)
      (mp-update-fail)
      (mp-draw-fail-votes)
      (mp-update-challenge)

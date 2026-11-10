@@ -31,7 +31,7 @@ namespace mp {
 
 constexpr int kMaxPlayers = 8;
 // Bump when PlayerState, Event or the wire format change: mismatched peers are refused.
-constexpr u32 kProtocolVersion = 12;
+constexpr u32 kProtocolVersion = 13;
 constexpr int kDefaultPort = 7777;
 // Remote players are drawn this far in the past, so two snapshots surround the drawn time.
 constexpr double kInterpDelayMs = 100.0;
@@ -454,6 +454,11 @@ std::atomic<int>& dark_skin_draws();
 // Draws of a player's model with an outfit tint since boot (Merc2), read by the test log
 // (pc-mp-skin-draws).
 std::atomic<int>& skin_draws();
+// While online (set by pc_mp_update), the Jak 3 overlord keeps every "mode" sound bank it loaded
+// (game/overlord/jak3/srpc.cpp, sbank.cpp). A player loads the mode bank of what it holds alone
+// (its gun's mod, the board, the lizard...), one at a time: another player's shots were silent
+// here unless both held the same mod. GOAL loads every mode bank once online (multiplayer.gc).
+std::atomic<bool>& keep_mode_banks();
 
 }  // namespace mp
 

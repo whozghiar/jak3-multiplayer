@@ -54,6 +54,9 @@ s32 snd_PlaySoundVolPanPMPB(snd::BankHandle bank_handle,
                             s32 pitch_mod,
                             s32 pitch_bend);
 
+// MOD multiplayer: a loaded bank has this sound
+bool snd_HasSound(const char* sound_name);
+int snd_BankCount();
 s32 snd_PlaySoundByNameVolPanPMPB(snd::BankHandle bank_handle,
                                   char* bank_name,
                                   char* sound_name,

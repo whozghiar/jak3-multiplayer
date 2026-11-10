@@ -43,6 +43,9 @@ class Player {
                       s32 pm,
                       s32 pb);
   void DebugPrintAllSoundsInBank(BankHandle bank);
+  // MOD multiplayer: a loaded bank has this sound (the test log of the sounds other players play)
+  bool HasSound(const char* sound_name);
+  int BankCount();
   void SetSoundReg(u32 sound_id, u8 reg, u8 value);
   u8 GetSoundGroup(u32 sound_id);
   void SetGlobalExcite(u8 value) { GlobalExcite = value; };

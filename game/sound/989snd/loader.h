@@ -37,6 +37,7 @@ class Loader {
   void UnloadBank(BankHandle id);
 
   BankHandle BankLoad(std::span<u8> bank);
+  int BankCount() const { return (int)mBanks.size(); }  // MOD multiplayer: test log
 
  private:
   std::vector<std::unique_ptr<SoundBank>> mBanks;

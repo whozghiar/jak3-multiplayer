@@ -2344,12 +2344,16 @@
   )
 
 (defun mp-econ-grant-self ((kind int))
-  "The host credits itself 100 precursor orbs (kind 0) or Metal Head trophies (1): the server's own
-   account only, never a guest's (Mods menu)."
-  (when (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))
-    (pc-mp-econ-credit *mp-local-slot* kind 100 (mp-econ-player-name *mp-local-slot*))
-    (mp-econ-send *mp-local-slot* 0)
-    (mp-show-message (if (zero? kind) "+100 precursor orbs" "+100 Metal Head trophies"))
+  "Mods menu, a cheat: our player gains 100 precursor orbs (kind 0) or 100 skull gems, the Metal
+   Heads' (1), in the game's counts the HUD shows (mp-give-own). A host whose accounts are open (free
+   roam) also credits its own account 100 orbs or Metal Head trophies, never a guest's (\"Economy\")."
+  (when (mp-cheats-allowed?)
+    (mp-give-own kind 100.0)
+    (when (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))
+      (pc-mp-econ-credit *mp-local-slot* kind 100 (mp-econ-player-name *mp-local-slot*))
+      (mp-econ-send *mp-local-slot* 0)
+      )
+    (mp-show-message (if (zero? kind) "+100 precursor orbs" "+100 skull gems"))
     )
   (none)
   )
@@ -2398,12 +2402,12 @@
            :is-toggled? (lambda () *mp-invulnerable*)
            :on-confirm (lambda () (set! *mp-invulnerable* (and (not *mp-invulnerable*) (mp-cheats-allowed?))) (none))
            )
-      (new 'static 'popup-menu-button :label "Host: +100 precursor orbs"
-           :entry-disabled? (lambda () (not (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))))
+      (new 'static 'popup-menu-button :label "+100 precursor orbs"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
            :on-confirm (lambda () (mp-econ-grant-self 0) (none))
            )
-      (new 'static 'popup-menu-button :label "Host: +100 Metal Head trophies"
-           :entry-disabled? (lambda () (not (and (= *mp-mode* (mp-mode host)) (-> *mp-econ* open?))))
+      (new 'static 'popup-menu-button :label "+100 skull gems (Metal Heads)"
+           :entry-disabled? (lambda () (not (mp-cheats-allowed?)))
            :on-confirm (lambda () (mp-econ-grant-self 1) (none))
            )
       (new 'static 'popup-menu-dynamic-submenu :label "Teleport to a zone"

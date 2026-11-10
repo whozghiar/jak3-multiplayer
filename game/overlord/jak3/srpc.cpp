@@ -2,6 +2,7 @@
 
 #include "common/util/Assert.h"
 
+#include "game/kernel/jak3/kmultiplayer.h"
 #include "game/overlord/jak3/iso.h"
 #include "game/overlord/jak3/iso_api.h"
 #include "game/overlord/jak3/overlord.h"
@@ -470,7 +471,21 @@ void* RPC_Loader(unsigned int, void* msg, int size) {
         ovrld_log(LogCategory::PLAYER_RPC, "[RPC Loader] Got sound bank load command: {}",
                   cmd->bank_name.data);
         // src = &cmd->bank_name;
-        if (!LookupBank(cmd->bank_name.data)) {
+        SoundBankInfo* existing = LookupBank(cmd->bank_name.data);
+        // MOD multiplayer: a bank kept in an extra slot for another player's sounds, now wanted by
+        // the levels (the vehicle our player gets in): freed there, then loaded where they load it
+        // (they follow their own slots alone)
+        if (existing && existing->idx >= kNumStockBanks && cmd->mode != 3) {
+          auto snd_handle = existing->snd_handle;
+          existing->snd_handle = nullptr;
+          existing->in_use = 0;
+          existing->mode = 0;
+          existing->loaded = 0;
+          snd_UnloadBank(snd_handle);
+          snd_ResolveBankXREFS();
+          existing = nullptr;
+        }
+        if (!existing) {
           auto* info = AllocateBankName(cmd->bank_name.data, cmd->mode);
           if (info) {
             strncpyz(info->m_name1, cmd->bank_name.data, 0x10);
@@ -514,6 +529,12 @@ void* RPC_Loader(unsigned int, void* msg, int size) {
         ovrld_log(LogCategory::PLAYER_RPC, "[RPC Loader] Got bank load unload command: {}",
                   cmd->bank_name.data);
         SoundBankInfo* ifno = LookupBank(cmd->bank_name.data);
+        // MOD multiplayer: while online the mode banks stay. A player loads the mode bank of what
+        // it holds alone (its gun's mod, the board...), so the sounds another player's gun played
+        // here were found in no bank unless both held the same mod.
+        if (ifno && mp::keep_mode_banks() && memcmp(ifno->m_name1, "mode", 4) == 0) {
+          break;
+        }
         if (ifno) {
           auto snd_handle = ifno->snd_handle;
           ifno->snd_handle = nullptr;

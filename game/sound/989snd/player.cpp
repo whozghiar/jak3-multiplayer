@@ -168,6 +168,16 @@ void Player::DebugPrintAllSoundsInBank(BankHandle bank_id) {
   bank->DebugPrintAllSounds();
 }
 
+bool Player::HasSound(const char* sound_name) {
+  std::scoped_lock lock(mTickLock);
+  return mLoader.GetBankWithSound(sound_name) != nullptr;
+}
+
+int Player::BankCount() {
+  std::scoped_lock lock(mTickLock);
+  return mLoader.BankCount();
+}
+
 u32 Player::PlaySoundByName(BankHandle bank_id,
                             char* bank_name,
                             char* sound_name,

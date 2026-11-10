@@ -2,12 +2,14 @@
 
 #include "common/util/Assert.h"
 
+#include "game/kernel/jak3/kmultiplayer.h"
 #include "game/overlord/jak3/overlord.h"
 
 namespace jak3 {
 
-constexpr int kNumBanks = 8;
 SoundBankInfo* gBanks[kNumBanks];
+// MOD multiplayer: more mode banks, used once the stock one is taken (AllocateBankName)
+SoundBankInfo gExtraModeBanks[kNumBanks - kNumStockBanks];
 
 SoundBankInfo gCommonBank;
 SoundBankInfo gModeBank;
@@ -24,6 +26,9 @@ void jak3_overlord_init_globals_sbank() {
   gBanks[5] = &gLevel1hBank;
   gBanks[6] = &gLevel2Bank;
   gBanks[7] = &gLevel2hBank;
+  for (int i = kNumStockBanks; i < kNumBanks; i++) {
+    gBanks[i] = &gExtraModeBanks[i - kNumStockBanks];
+  }
 }
 
 // added
@@ -76,6 +81,13 @@ void InitBanks() {
   strncpyz(gBanks[7]->m_name2, "level2h", 0x10);
   gBanks[7]->m_nSpuMemSize = 0x28a00;
   gBanks[7]->m_nSpuMemLoc = 0x1d0600;
+
+  // MOD multiplayer: on PC a bank's data is the sound player's own, not SPU memory
+  for (int i = kNumStockBanks; i < kNumBanks; i++) {
+    strncpyz(gBanks[i]->m_name2, "mode", 0x10);
+    gBanks[i]->m_nSpuMemSize = gBanks[1]->m_nSpuMemSize;
+    gBanks[i]->m_nSpuMemLoc = gBanks[1]->m_nSpuMemLoc;
+  }
 }
 
 SoundBankInfo* AllocateBankName(const char* name, u32 mode) {
@@ -97,6 +109,21 @@ SoundBankInfo* AllocateBankName(const char* name, u32 mode) {
   } else if (memcmp(name, "mode", 4) == 0) {
     if (!gBanks[1]->in_use) {
       bank = gBanks[1];
+    }
+    // MOD multiplayer: the stock mode bank is kept for another player's sounds (srpc.cpp's
+    // UNLOAD_BANK while online): the next free extra one
+    for (int i = kNumStockBanks; i < kNumBanks && !bank; i++) {
+      if (!gBanks[i]->in_use) {
+        bank = gBanks[i];
+      }
+    }
+  } else if (mode == 3 && mp::keep_mode_banks()) {
+    // MOD multiplayer: the bank of the vehicle another player drives (wastoad...), which the
+    // levels load in place of wasall1 for the driver alone: an extra slot
+    for (int i = kNumStockBanks; i < kNumBanks && !bank; i++) {
+      if (!gBanks[i]->in_use) {
+        bank = gBanks[i];
+      }
     }
   }
 

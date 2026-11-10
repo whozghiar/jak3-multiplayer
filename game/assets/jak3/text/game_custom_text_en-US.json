@@ -435,5 +435,7 @@
   "15be": "Co-op progress is saved automatically by the host",
   "15bf": "No loading while online: leave the session first",
   "15c0": "Free roam is not saved: the server keeps your orbs and purchases",
-  "15c1": "Owned"
+  "15c1": "Owned",
+  "15c2": "~S: +~D precursor orbs",
+  "15c3": "~S: +~D skull gems"
 }

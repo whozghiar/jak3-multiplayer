@@ -12,8 +12,9 @@
 ;;     cursor. Our lines are light blue, the answers to the host's commands yellow.
 ;;   - A line starting with '/' is a command, the host's alone (the server's administrator): /help,
 ;;     /players, /kick <name>, /ban <name>, /tp <name>, /tpall, /give <name> <orbs>,
-;;     /trophies <name> <count>. A name may be the beginning of one, case ignored. The answer is
-;;     the host's alone (a chat line of slot -1).
+;;     /trophies <name> <count> (the game's orbs or skull gems; in free roam its account's orbs or
+;;     trophies too). A name may be the beginning of one, case ignored. The answer is the host's
+;;     alone (a chat line of slot -1).
 
 (define-extern pc-mp-chat-enable (function symbol none))
 (define-extern pc-mp-chat-draft (function string symbol))
@@ -128,27 +129,47 @@
          (cond
            ((< slot 0)
             )
-           ((not (-> *mp-econ* open?))
-            (mp-chat-answer (text-id progress-mp-chat-no-economy))
-            )
            (else
              (clear *mp-chat-arg*)
              (pc-mp-chat-arg line 2 *mp-chat-arg*)
              (let ((amount (the int (string->float *mp-chat-arg*))))
-               (if (zero? amount)
-                   (mp-chat-answer (text-id progress-mp-chat-help))
-                   (let ((total (pc-mp-econ-credit slot kind amount (mp-econ-player-name slot))))
-                     (format 0 "[multiplayer] chat: the host gives player ~D ~D of kind ~D (~D now)~%" slot amount kind total)
-                     (mp-econ-send slot 0)
-                     (format (clear *mp-chat-out*)
-                             (mp-chat-text (if (zero? kind) (text-id progress-mp-chat-given) (text-id progress-mp-chat-given-trophies)))
-                             (mp-econ-player-name slot)
-                             amount
-                             total
-                             )
-                     (pc-mp-chat-local *mp-chat-out*)
+               (cond
+                 ((zero? amount)
+                  (mp-chat-answer (text-id progress-mp-chat-help))
+                  )
+                 (else
+                   ;; the game's counts the HUD shows: orbs, or skull gems for trophies; ours at
+                   ;; once, another player's by its machine
+                   (if (= slot *mp-local-slot*)
+                       (mp-give-own kind (the float amount))
+                       (mp-send-event (mp-event-kind gift) slot kind (the float amount))
+                       )
+                   (cond
+                     ;; free roam: its account too
+                     ((-> *mp-econ* open?)
+                      (let ((total (pc-mp-econ-credit slot kind amount (mp-econ-player-name slot))))
+                        (format 0 "[multiplayer] chat: the host gives player ~D ~D of kind ~D (~D now)~%" slot amount kind total)
+                        (mp-econ-send slot 0)
+                        (format (clear *mp-chat-out*)
+                                (mp-chat-text (if (zero? kind) (text-id progress-mp-chat-given) (text-id progress-mp-chat-given-trophies)))
+                                (mp-econ-player-name slot)
+                                amount
+                                total
+                                )
+                        )
+                      )
+                     (else
+                       (format 0 "[multiplayer] chat: the host gives player ~D ~D of kind ~D (game counts)~%" slot amount kind)
+                       (format (clear *mp-chat-out*)
+                               (mp-chat-text (if (zero? kind) (text-id progress-mp-chat-gift-orbs) (text-id progress-mp-chat-gift-gems)))
+                               (mp-econ-player-name slot)
+                               amount
+                               )
+                       )
                      )
+                   (pc-mp-chat-local *mp-chat-out*)
                    )
+                 )
                )
              )
            )

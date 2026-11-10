@@ -217,9 +217,33 @@
       )
   )
 
+(defun mp-slot-in-desert? ((slot int))
+  "#t when player `slot` (this player included) stands in the wasteland, a desert level."
+  (let ((st (if (= slot *mp-local-slot*)
+                *mp-local*
+                (mp-remote-state slot)
+                )
+            )
+        )
+    (and st (mp-charp-prefix? (-> st level) "desert"))
+    )
+  )
+
+(defun mp-region-range ((a int) (b int))
+  "Distance within which player `a` sees the NPCs of authority `b` (beyond it, `a` simulates its
+   own): 90 m, 400 m when both stand in the wasteland. Its marauders spawn about 300 m out
+   (was-squad-control.gc) and drive fast: with 90 m the roles flipped as the players drove apart,
+   and each player saw its own marauders, which the other neither saw nor could hit."
+  (if (and (mp-slot-in-desert? a) (mp-slot-in-desert? b))
+      (meters 400)
+      (meters 90)
+      )
+  )
+
 (defun mp-provider-of ((slot int))
   "Slot of the player whose NPCs player `slot` sees: itself when it is an authority, else the first
-   authority within 90 m, else the host."
+   authority within its region range (mp-region-range: 90 m, 400 m in the wasteland), else the
+   host."
   (if (mp-authority-flag? slot)
       (return slot)
       )
@@ -227,7 +251,9 @@
     (when pos
       (dotimes (q MP_MAX_PLAYERS)
         (let ((other (mp-player-pos q)))
-          (if (and (!= q slot) other (mp-authority-flag? q) (mp-same-space? q slot) (< (vector-vector-distance pos other) (meters 90)))
+          (if (and (!= q slot) other (mp-authority-flag? q) (mp-same-space? q slot)
+                   (< (vector-vector-distance pos other) (mp-region-range slot q))
+                   )
               (return q)
               )
           )
@@ -239,8 +265,9 @@
 
 (defun mp-update-authority ()
   "Pick this player's role. The host always simulates its NPCs. A guest shows the NPCs of a
-   lower-slot authority within 60 m, and simulates its own once farther than 90 m from all of them,
-   after 2 s in the new situation (a player on the border does not flip every frame)."
+   lower-slot authority within 60 m (270 m in the wasteland), and simulates its own once farther than
+   90 m (400 m) from all of them (mp-region-range), after 2 s in the new situation (a player on the
+   border does not flip every frame)."
   (let* ((ws *mp-world-state*)
          (want (cond
                  ((= *mp-mode* (mp-mode host))
@@ -252,19 +279,26 @@
                  (else
                    (let ((me (mp-player-pos *mp-local-slot*))
                          (nearest (meters 1000000))
+                         (range (meters 90))
                          )
                      (when me
                        (dotimes (q *mp-local-slot*)
                          (let ((other (mp-player-pos q)))
-                           (if (and other (mp-authority-flag? q) (mp-slot-here? q))
-                               (set! nearest (fmin nearest (vector-vector-distance me other)))
+                           (when (and other (mp-authority-flag? q) (mp-slot-here? q))
+                             (let ((d (vector-vector-distance me other)))
+                               (when (< d nearest)
+                                 (set! nearest d)
+                                 (set! range (mp-region-range *mp-local-slot* q))
+                                 )
                                )
+                             )
                            )
                          )
                        )
+                     ;; shown within two thirds of the range, our own beyond it
                      (cond
-                       ((< nearest (meters 60)) #f)
-                       ((< (meters 90) nearest) #t)
+                       ((< nearest (* 0.6667 range)) #f)
+                       ((< range nearest) #t)
                        (else *mp-authority*)
                        )
                      )
@@ -474,7 +508,7 @@
    ;; sounds played since the last batch by the objects we send (mp-note-sound), latest call per
    ;; sound id
    (snd-count      int32)
-   (snd-pid        int32 24)
+   (snd-pid        int32 48)  ;; one per snd-out: 24 before, so slots 24-47 wrote over snd-out
    (snd-out        mp-sound 48 :inline)
    ;; recent sound ids of those objects, so a sound-stop on one reaches the others
    (known-pid      int32 32)
@@ -731,6 +765,71 @@
 (defconstant MP_SEND_RANGE (meters 100))         ;; characters sent this close to a player we serve
 (defconstant MP_SEND_RANGE_VEHICLE (meters 350)) ;; vehicles and boats: seen from farther (the port's barges, to 340 m)
 
+;; Marauders in vehicles (v-marauder, desert) chase the target their squad gave them at their
+;; spawn, our player (was-squad-control.gc): on the authority each goes after the player nearest to
+;; it, ours or another player's puppet, told again ('go-hostile, wvehicle's vehicle-method-143) when
+;; another player is 10 m nearer than the one it chases.
+(define *mp-marauder-pid* (new 'global 'boxed-array int32 32))    ;; a marauder's pid
+(define *mp-marauder-target* (new 'global 'boxed-array int32 32)) ;; the slot it chases
+(define *mp-marauder-next* 0)
+
+(defun mp-player-focusable ((slot int))
+  "Player `slot`'s body here, alive: our player, or another player's puppet; #f none."
+  (let ((proc (if (= slot *mp-local-slot*)
+                  *target*
+                  (mp-puppet-process slot)
+                  )
+              )
+        )
+    (if (and proc (not (logtest? (-> proc focus-status) (focus-status disable dead))))
+        proc
+        )
+    )
+  )
+
+(defun mp-marauder-retarget ((proc process-drawable))
+  "Authority: marauder vehicle `proc` chases the player nearest to it (see above)."
+  (let ((k -1)
+        (best -1)
+        (best-d (meters 100000))
+        )
+    (dotimes (i 32)
+      (if (= (-> *mp-marauder-pid* i) (-> proc pid))
+          (set! k i)
+          )
+      )
+    ;; a new one chases our player, as its squad told it
+    (when (< k 0)
+      (set! k *mp-marauder-next*)
+      (set! *mp-marauder-next* (logand (+ k 1) 31))
+      (set! (-> *mp-marauder-pid* k) (-> proc pid))
+      (set! (-> *mp-marauder-target* k) *mp-local-slot*)
+      )
+    (dotimes (i MP_MAX_PLAYERS)
+      (let ((pf (mp-player-focusable i)))
+        (when pf
+          (let ((d (vector-vector-distance (-> pf root trans) (-> proc root trans))))
+            (when (< d best-d)
+              (set! best-d d)
+              (set! best i)
+              )
+            )
+          )
+        )
+      )
+    (let* ((cur (-> *mp-marauder-target* k))
+           (cur-pf (if (>= cur 0) (mp-player-focusable cur)))
+           (cur-d (if cur-pf (vector-vector-distance (-> cur-pf root trans) (-> proc root trans)) (meters 100000)))
+           )
+      (when (and (>= best 0) (!= best cur) (< (+ best-d (meters 10)) cur-d))
+        (set! (-> *mp-marauder-target* k) best)
+        (send-event proc 'go-hostile (mp-player-focusable best))
+        )
+      )
+    )
+  (none)
+  )
+
 (defun mp-collect-actor ((proc process-drawable))
   "iterate-process-tree callback (authority): add `proc` when it is an NPC within 100 m of a player
    whose NPCs we simulate, 350 m for a vehicle (a player who is not an authority keeps its own
@@ -760,6 +859,9 @@
                                    )
                           )
             (mp-force-math proc)
+            )
+        (if (= (-> proc type symbol) 'v-marauder)
+            (mp-marauder-retarget proc)
             )
         )
       )
@@ -1139,6 +1241,7 @@
    (linger-since time-frame)       ;; when it began to stay in our view after its owner hid it or
                                    ;; stopped sending it (0: not lingering): it holds, then fades out
    (last-attack uint32)            ;; id of the last attack sent, so one blow counts once
+   (last-ram   time-frame)         ;; when our vehicle's last ram on this copy was sent (real clock)
    (fx-group   int32 MP_FX_TRACKERS) ;; particle groups the owner's object emits (mp-play-emitters)
    (fx-tracker handle MP_FX_TRACKERS)
    (pose-count int32)              ;; poses laid on this copy, and the last count received
@@ -1247,6 +1350,70 @@
                                )
             )
       (pc-mp-send-event ev)
+      )
+    )
+  (none)
+  )
+
+(define *mp-rams-sent* 0)    ;; test log: rams on copies sent to their owners
+(define *mp-rams-applied* 0) ;; ... and rams applied here on our vehicles
+
+(defbehavior mp-replica-ram mp-replica ((attacker process) (impact rigid-body-impact))
+  "Our vehicle rammed this copy of another player's vehicle (the collision sent the copy, a still
+   sphere, 'impact-impulse): the owner applies it to its vehicle, which takes the damage its
+   on-impact computes (a marauder destroyed by rams). Five a second at most per copy; in co-op a
+   teammate's own vehicles take none (as mp-replica-hit)."
+  (when (and impact
+             (logtest? (-> self net flags) (mp-actor-flag vehicle))
+             (not (and (mp-coop?) (logtest? (-> self net flags) (mp-actor-flag owned))))
+             attacker
+             (mp-from-local-player? attacker)
+             (< 0.0 (-> impact impulse))
+             (>= (- (mp-now) (-> self last-ram)) (seconds 0.2))
+             )
+    (set! (-> self last-ram) (mp-now))
+    (let* ((ev (new 'stack 'mp-event))
+           (f (the-as (pointer float) (-> ev text)))
+           )
+      (set! (-> ev kind) (mp-event-kind ram))
+      (set! (-> ev to) (the-as int (shr (-> self id) 24)))
+      (set! (-> ev iarg 0) (the-as int (logand (-> self id) #xffffff)))
+      (set! (-> ev iarg 1) (the-as int (-> impact prim-id)))
+      (vector-copy! (-> ev fvec) (-> impact point))
+      (set! (-> ev fvec w) (-> impact impulse))
+      (set! (-> f 0) (-> impact normal x))
+      (set! (-> f 1) (-> impact normal y))
+      (set! (-> f 2) (-> impact normal z))
+      (set! (-> f 3) (-> impact velocity x))
+      (set! (-> f 4) (-> impact velocity y))
+      (set! (-> f 5) (-> impact velocity z))
+      (pc-mp-send-event ev)
+      (+! *mp-rams-sent* 1)
+      )
+    )
+  (none)
+  )
+
+(defbehavior mp-on-ram mp-manager ((ev mp-event))
+  "Another player's vehicle rammed the copy of one of our NPC vehicles: the same impact on ours,
+   from that player's puppet (its on-impact: the damage, the crash effects)."
+  (let ((proc (mp-process-by-pid (-> ev iarg 0)))
+        (attacker (handle->process (-> self puppets (max 0 (min (-> ev from) (+ MP_MAX_PLAYERS -1))))))
+        (f (the-as (pointer float) (-> ev text)))
+        )
+    (when (and proc attacker (= (mp-actor-kind proc) 2) (not (mp-driven-vehicle? proc)))
+      (let ((impact (new 'stack 'rigid-body-impact)))
+        (vector-copy! (-> impact point) (-> ev fvec))
+        (set! (-> impact point w) 1.0)
+        (set-vector! (-> impact normal) (-> f 0) (-> f 1) (-> f 2) 0.0)
+        (set-vector! (-> impact velocity) (-> f 3) (-> f 4) (-> f 5) 0.0)
+        (set! (-> impact impulse) (-> ev fvec w))
+        (set! (-> impact process) attacker)
+        (set! (-> impact prim-id) (the-as uint (-> ev iarg 1)))
+        (+! *mp-rams-applied* 1)
+        (format 0 "[multiplayer] player ~D rammed ~A, impulse ~,,0f~%" (-> ev from) (-> proc type symbol) (-> impact impulse))
+        (send-event proc 'impact-impulse :from attacker impact)
+        )
       )
     )
   (none)
@@ -1503,9 +1670,19 @@
 (defstate mp-replica-idle (mp-replica)
   :event (behavior ((proc process) (argc int) (message symbol) (block event-message-block))
     (case message
-      (('attack)
-       (mp-replica-hit proc (the-as attack-info (-> block param 1)))
+      (('impact-impulse)
+       (mp-replica-ram proc (the-as rigid-body-impact (-> block param 0)))
        #t
+       )
+      (('attack)
+       ;; #t once per attack id, as mp-hurtbox-idle: each #t played the attacker's hit sound and
+       ;; effect again (a punch touches on several frames)
+       (let* ((info (the-as attack-info (-> block param 1)))
+              (again? (and info (logtest? (attack-mask id) (-> info mask)) (= (-> info id) (-> self last-attack))))
+              )
+         (mp-replica-hit proc info)
+         (not again?)
+         )
        )
       )
     )
@@ -1929,6 +2106,10 @@
       (let ((id (-> proc id)))
         (when (mp-get-vehicle-at (mp-vehicle-type-of-skel (-> proc net skel)) (-> proc root trans) (-> proc root quat))
           (mp-send-event (mp-event-kind vehicle-taken) (the-as int (shr id 24)) (the-as int (logand id #xffffff)) 0.0)
+          ;; its owner's late states, and its wheels', must not make it again (mp-stolen-copy?)
+          (set! *mp-taken-from* (the-as int (shr id 24)))
+          (set! *mp-taken-until* (+ (mp-now) (seconds 3)))
+          (vector-copy! *mp-taken-pos* (-> proc root trans))
           (mp-replica-remove index)
           (return #t)
           )
@@ -2067,20 +2248,33 @@
   (none)
   )
 
-(defun mp-stolen-copy? ((id uint) (flags mp-actor-flag))
-  "#t for a copy of the vehicle we just took from its player (body or wheel): dropped at once."
-  (and (>= *mp-stolen-from* 0)
-       (< (mp-now) *mp-stolen-until*)
-       (= (the-as int (shr id 24)) *mp-stolen-from*)
-       (= (logand flags (mp-actor-flag vehicle owned)) (mp-actor-flag vehicle owned))
-       )
+(defun mp-stolen-copy? ((id uint) (flags mp-actor-flag) (pos vector))
+  "#t for a copy of the vehicle we just took (body or wheel), at `pos`: from its player, or an NPC
+   vehicle of another authority, which keeps sending it until our vehicle-taken reaches it. Dropped
+   at once: those late states made the copy again, and it stood 4 s (held, then faded) where our own
+   vehicle appeared, the vehicle seen twice."
+  (or (and (>= *mp-stolen-from* 0)
+           (< (mp-now) *mp-stolen-until*)
+           (= (the-as int (shr id 24)) *mp-stolen-from*)
+           (= (logand flags (mp-actor-flag vehicle owned)) (mp-actor-flag vehicle owned))
+           )
+      ;; ponytail: by place, not by id (each wheel's copy has an id of its own): 5 m around the
+      ;; body taken, for 3 s
+      (and (>= *mp-taken-from* 0)
+           (< (mp-now) *mp-taken-until*)
+           (= (the-as int (shr id 24)) *mp-taken-from*)
+           (logtest? flags (mp-actor-flag vehicle))
+           (not (logtest? flags (mp-actor-flag owned)))
+           (< (vector-vector-distance pos *mp-taken-pos*) (meters 5))
+           )
+      )
   )
 
 (defun mp-replica-wanted? ((st mp-actor-state))
   "#f for an NPC of another authority standing nearer to us than to that player: our own world
    covers that place, so its copy would be a double; for a copy of a vehicle we just took; and for
    what a player in another place at our coordinates sends (\"Places at the same coordinates\")."
-  (and (not (mp-stolen-copy? (-> st id) (-> st flags))) (mp-slot-visible? (the-as int (shr (-> st id) 24))) (or (not *mp-authority*)
+  (and (not (mp-stolen-copy? (-> st id) (-> st flags) (-> st trans))) (mp-slot-visible? (the-as int (shr (-> st id) 24))) (or (not *mp-authority*)
       (logtest? (-> st flags) (mp-actor-flag owned))
       (let ((me (mp-player-pos *mp-local-slot*))
             (owner (mp-player-pos (the-as int (shr (-> st id) 24))))
@@ -2168,7 +2362,7 @@
                )
               ;; a vehicle we took: gone with no lingering, ours stands there; a copy whose owner went
               ;; to another place at our coordinates too
-              ((or (mp-stolen-copy? (-> ws replica-id i) (-> proc net flags))
+              ((or (mp-stolen-copy? (-> ws replica-id i) (-> proc net flags) (-> proc root trans))
                    (not (mp-slot-visible? (the-as int (shr (-> ws replica-id i) 24))))
                    )
                (mp-replica-remove i)
@@ -3088,6 +3282,11 @@
                         )
                     )
            )
+      ;; our player's shot: in the next frame's batch, not up to 66 ms later (a shot hitting a
+      ;; wall within that time was never drawn elsewhere)
+      (if (and shooter (type? shooter process) (mp-from-local-player? (the-as process shooter)))
+          (set! (-> *mp-world-state* last-send) 0)
+          )
       (when (and *mp-authority*
                  shooter
                  (type? shooter process)
@@ -3345,12 +3544,36 @@
        )
   )
 
+(defun mp-fx-pid ((proc process) (shots? symbol))
+  "Pid of the batch entry that carries an effect of `proc`: our player's for what our player fired
+   and the others do not draw from here (the scatter gun's blast is no projectile), and with
+   `shots?` for our shots too (sounds: a shot that hits within 66 ms is in no batch, and its sounds
+   went with it); else `proc`'s own when the others draw it from here; -1 none. Never a
+   part-tracker's: its effect is replayed on its own (the effect event)."
+  (cond
+    ((and *target* proc (nonzero? proc) (!= proc *target*)
+          (or (and shots? (type? proc projectile)) (not (mp-emitter-owner? proc)))
+          (not (type? proc part-tracker))
+          (mp-from-local-player? proc)
+          )
+     (-> *target* pid)
+     )
+    ((mp-emitter-owner? proc)
+     (-> proc pid)
+     )
+    (else
+      -1
+      )
+    )
+  )
+
 (defun mp-note-emitter ((proc process) (kind int) (ptr basic) (origin matrix))
   "`proc` used emitter `ptr` (a group for kind 0, a single launcher else) at `origin`: remember it
-   for the next batch, once per object and emitter, with the number of uses."
-  (when (and (not (-> *mp-fx* replaying?)) (mp-emitter-owner? proc))
+   for the next batch, once per object and emitter, with the number of uses. What our player fired
+   without being drawn from here (the scatter gun's blast) goes with our player (mp-fx-pid)."
+  (when (not (-> *mp-fx* replaying?))
     (let ((ps *mp-pose*)
-          (pid (-> proc pid))
+          (pid (mp-fx-pid proc #f))
           (slot -1)
           )
       (dotimes (i (-> ps emit-count))
@@ -3359,7 +3582,7 @@
           (set! i (-> ps emit-count))
           )
         )
-      (when (and (< slot 0) (< (-> ps emit-count) 64))
+      (when (and (< slot 0) (>= pid 0) (< (-> ps emit-count) 64))
         (set! slot (-> ps emit-count))
         (+! (-> ps emit-count) 1)
         (set! (-> ps emit-pid slot) pid)
@@ -3379,10 +3602,11 @@
 (defun mp-note-sound ((proc process) (name sound-name) (id sound-id) (vol int) (pitch int) (bend int) (trans object))
   "`proc` played sound `name` as `id`: remember the call for the next batch (the latest one per id)
    when the others draw `proc`. `trans` is a position, #t for the process's root, #f for a sound
-   without position (the others hear it at the copy)."
-  (when (and (not (-> *mp-fx* replaying?)) (nonzero? id) (mp-emitter-owner? proc))
+   without position (the others hear it at the copy). What our player fired goes with our player
+   (mp-fx-pid): a shot's sounds were lost when it hit before the next batch."
+  (when (and (not (-> *mp-fx* replaying?)) (nonzero? id))
     (let ((ps *mp-pose*)
-          (pid (-> proc pid))
+          (pid (mp-fx-pid proc #t))
           (slot -1)
           )
       (dotimes (i (-> ps snd-count))
@@ -3390,7 +3614,7 @@
             (set! slot i)
             )
         )
-      (when (and (< slot 0) (< (-> ps snd-count) 48))
+      (when (and (< slot 0) (>= pid 0) (< (-> ps snd-count) 48))
         (set! slot (-> ps snd-count))
         (+! (-> ps snd-count) 1)
         (set! (-> ps snd-pid slot) pid)
@@ -6143,15 +6367,71 @@
 
 (defun mp-on-entity-dead ((proc process))
   "An entity was marked dead here: when it is a crate or a pickup, the other players remove theirs
-   (enemies go through mark-as-dead instead, see multiplayer.gc)."
+   (enemies go through mark-as-dead instead, see multiplayer.gc); in co-op a mission's object
+   collected (the temple's board training tokens), the others collect theirs."
   (when (and (mp-online?)
-             (or (type? proc crate) (type? proc collectable))
+             (or (type? proc crate) (type? proc collectable) (and (mp-coop?) (mp-mission-pickup? proc)))
              (-> proc entity)
              (nonzero? (-> proc entity aid))
              (not (mp-remote-kill? (-> proc entity aid)))
              )
     (mp-send-event (mp-event-kind kill-entity) -1 (the-as int (-> proc entity aid)) 0.0)
     )
+  (none)
+  )
+
+;; Co-op: a mission's object collected without its entity marked dead (the arena training's
+;; tokens hide, and the manager counts those still there): seen here going from idle to hide, the
+;; others collect theirs (kill-entity, mp-apply-remote-kill). Watched while their mission runs.
+(defconstant MP_PICKUPS_WATCHED 64) ;; the arena training has 35 tokens
+(define *mp-pickup-aids* (new 'global 'boxed-array uint32 MP_PICKUPS_WATCHED)) ;; tokens seen waiting (idle)
+(define *mp-pickups-sent* 0) ;; test log: collections sent to the others
+
+(defun mp-watch-pickup ((proc process))
+  "iterate-process-tree callback: a mission's object waiting (idle) is noted; one noted that went to
+   hide was collected here."
+  (when (and (mp-mission-pickup? proc) (-> proc entity) (-> proc next-state))
+    (let ((aid (-> proc entity aid))
+          (idle? (= (-> proc next-state name) 'idle))
+          (k -1)
+          )
+      (dotimes (i MP_PICKUPS_WATCHED)
+        (if (= (-> *mp-pickup-aids* i) aid)
+            (set! k i)
+            )
+        )
+      (cond
+        ((and idle? (< k 0))
+         (dotimes (i MP_PICKUPS_WATCHED)
+           (when (zero? (-> *mp-pickup-aids* i))
+             (set! (-> *mp-pickup-aids* i) aid)
+             (set! i MP_PICKUPS_WATCHED)
+             )
+           )
+         )
+        ((and (not idle?) (>= k 0))
+         (set! (-> *mp-pickup-aids* k) (the-as uint 0))
+         (when (and (= (-> proc next-state name) 'hide) (not (mp-remote-kill? aid)))
+           (+! *mp-pickups-sent* 1)
+           (format 0 "[multiplayer] co-op: a mission's object collected here (~A ~D)~%" (-> proc type symbol) aid)
+           (mp-send-event (mp-event-kind kill-entity) -1 (the-as int aid) 0.0)
+           )
+         )
+        )
+      )
+    )
+  #f
+  )
+
+(defun mp-watch-pickups ()
+  "Every frame in co-op, while the arena training's collection runs: its tokens watched
+   (mp-watch-pickup); else the list emptied."
+  (if (and (mp-coop?) *entity-pool* (task-node-open? (game-task-node arena-training-1-collect)))
+      (iterate-process-tree *entity-pool* (the-as (function object object) mp-watch-pickup) *null-kernel-context*)
+      (dotimes (i MP_PICKUPS_WATCHED)
+        (set! (-> *mp-pickup-aids* i) (the-as uint 0))
+        )
+      )
   (none)
   )
 

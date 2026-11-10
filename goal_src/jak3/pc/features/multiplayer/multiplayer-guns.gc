@@ -122,7 +122,6 @@
 
 (deftype mp-daxter-gun-state (structure)
   ((out?      symbol)     ;; the gun is held before Daxter (target-gun-compute-pos places it)
-   (out-time  time-frame) ;; last time R1 was held (the gun is put away 2 s after)
    (fire-time time-frame) ;; last shot
    (gun-type  int32)      ;; mod in hand (pickup-type 26-37)
    (charge    handle)     ;; wave concussor or peace maker charging
@@ -763,7 +762,8 @@
 (defbehavior mp-daxter-gun-update target ()
   "Daxter's guns, every frame (run as the player, from the manager): R1 takes the gun out and fires
    the mod chosen with the D-pad; the D-pad takes it out too, the mod just chosen in his hand (as
-   Jak's gun shows it); the gun goes away 2 s after R1 is let go (or the D-pad's press)."
+   Jak's gun shows it). It stays out as Jak's does, until a state that does not allow it (a punch, a
+   hit, a vehicle...: mp-daxter-gun-allowed?); it went away 2 s after R1 before, from his hand."
   (let ((dg *mp-daxter-gun*))
     (cond
       ((not (mp-daxter-gun-allowed? self))
@@ -777,10 +777,9 @@
               (held? (cpad-hold? 0 r1))
               )
           (when (nonzero? type)
-            (when (or held? (cpad-pressed? 0 up down left right))
-              (set-time! (-> dg out-time))
-              (set! (-> dg out?) #t)
-              )
+            (if (or held? (cpad-pressed? 0 up down left right))
+                (set! (-> dg out?) #t)
+                )
             (when (-> dg out?)
               ;; the mod in hand is the gun's (its model and the HUD follow it), with its ranges
               (set! (-> self game gun-type) (the-as pickup-type type))
@@ -820,9 +819,6 @@
                  )
                 )
               (mp-daxter-gun-clips)
-              (if (and (not held?) (time-elapsed? (-> dg out-time) (seconds 2)))
-                  (mp-daxter-gun-put-away)
-                  )
               )
             )
           )

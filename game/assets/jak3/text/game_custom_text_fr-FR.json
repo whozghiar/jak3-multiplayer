@@ -435,5 +435,7 @@
   "15be": "La progression coop est sauvegardée automatiquement par l'hôte",
   "15bf": "Pas de chargement en ligne : quittez d'abord la session",
   "15c0": "L'exploration libre n'est pas sauvegardée : le serveur garde vos orbes et vos achats",
-  "15c1": "Possédé"
+  "15c1": "Possédé",
+  "15c2": "~S : +~D orbes précurseurs",
+  "15c3": "~S : +~D gemmes-crânes"
 }

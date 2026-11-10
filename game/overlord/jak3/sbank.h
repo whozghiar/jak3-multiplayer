@@ -21,10 +21,15 @@ struct SoundBankInfo {
   int unk0 = 0;
 };
 
+// MOD multiplayer: the stock 8 banks, then mode banks kept loaded while online
+// (mp::keep_mode_banks, game/kernel/jak3/kmultiplayer.h)
+constexpr int kNumStockBanks = 8;
+constexpr int kNumBanks = kNumStockBanks + 24;
+
 void jak3_overlord_init_globals_sbank();
 void InitBanks();
 SoundBankInfo* LookupBank(const char* name);
 SoundBankInfo* AllocateBankName(const char* name, u32 mode);
 void PrintBanks();
-extern SoundBankInfo* gBanks[8];
+extern SoundBankInfo* gBanks[kNumBanks];
 }  // namespace jak3

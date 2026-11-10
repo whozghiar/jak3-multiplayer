@@ -8,6 +8,7 @@
 ;; MOD multiplayer: a mission's introduction waits for the other co-op players
 ;; (pc/features/multiplayer/multiplayer-world.gc)
 (define-extern mp-scene-hold? (function symbol :behavior scene-player))
+(define-extern mp-scene-sync-hold? (function symbol :behavior scene-player))
 
 ;; DECOMP BEGINS
 
@@ -1142,6 +1143,11 @@
                         )
                     )
                   )
+        (set-blackout-frames (seconds 0.1))
+        (suspend)
+        )
+      ;; MOD multiplayer: loaded, held until every player watching it is at its start
+      (while (mp-scene-sync-hold?)
         (set-blackout-frames (seconds 0.1))
         (suspend)
         )

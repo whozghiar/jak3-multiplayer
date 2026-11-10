@@ -1787,6 +1787,8 @@
   (progress-mp-online-no-load #x15bf)
   (progress-mp-free-no-save #x15c0)
   (progress-mp-shop-owned-gun #x15c1)
+  (progress-mp-chat-gift-orbs #x15c2)
+  (progress-mp-chat-gift-gems #x15c3)
   )
 ;; ---text-id
 
