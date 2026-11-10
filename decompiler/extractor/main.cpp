@@ -177,6 +177,225 @@ void launch_game(const std::string& game_version) {
              .c_str());
 }
 
+// og:jak2-haven-city added: the level ports, run at a mod's install ###############################
+// A mod made with scripts/level_port (custom_assets/<game>/ports/<port>/port.jsonc) ships nothing
+// of its source game: its release ships the port as a one-file executable, level_port, next to this
+// extractor, which runs it before the compile, on the player's own extracted discs.
+
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#else
+#include <unistd.h>
+
+#include <sys/wait.h>
+#endif
+
+#include "common/util/json_util.h"
+
+/*!
+ * og:jak2-haven-city added: run a program (args[0], its path) with these arguments, with this
+ * process's standard input and output (the launcher's log shows them) and no console window on
+ * Windows, and wait for it. Returns its exit code, -1 if it couldn't start.
+ */
+int run_program(const std::vector<std::string>& args) {
+  fflush(stdout);
+  fflush(stderr);
+#ifdef _WIN32
+  // the command line: each argument quoted, the backslashes ending it doubled (CommandLineToArgvW's
+  // rules; the arguments are paths and names, never with a quote)
+  std::wstring cmd;
+  for (const auto& arg : args) {
+    const auto wide = utf8_string_to_wide_string(arg);
+    const auto last = wide.find_last_not_of(L'\\');
+    const size_t slashes = last == std::wstring::npos ? wide.size() : wide.size() - last - 1;
+    cmd += (cmd.empty() ? L"\"" : L" \"") + wide + std::wstring(slashes, L'\\') + L"\"";
+  }
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  for (HANDLE handle : {si.hStdInput, si.hStdOutput, si.hStdError}) {
+    if (handle && handle != INVALID_HANDLE_VALUE) {
+      SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    }
+  }
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
+                      nullptr, &si, &pi)) {
+    return -1;
+  }
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return static_cast<int>(code);
+#else
+  std::vector<char*> argv;
+  for (const auto& arg : args) {
+    argv.push_back(const_cast<char*>(arg.c_str()));
+  }
+  argv.push_back(nullptr);
+  const pid_t pid = fork();
+  if (pid == 0) {
+    execv(argv[0], argv.data());
+    _exit(127);
+  }
+  int status = 0;
+  if (pid < 0 || waitpid(pid, &status, 0) < 0) {
+    return -1;
+  }
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+
+/*!
+ * og:jak2-haven-city added: the extracted disc of a game a level port reads, found from this game's
+ * (iso_data_path): next to it (iso_data/<game>), in the launcher's layout (this game's is
+ * <install>/active/<this game>/data/iso_data/<this game>, the other's
+ * <install>/active/<game>/data/iso_data/<game>) or in the data folder (iso_data/<game>). Returns
+ * the first of these folders with a DGO folder, none if no folder has one.
+ */
+std::optional<fs::path> find_game_iso(const std::string& game, const fs::path& iso_data_path) {
+  auto iso = fs::absolute(iso_data_path);
+  if (!iso.has_filename()) {
+    iso = iso.parent_path();  // a path ending with a separator
+  }
+  const auto install = iso.parent_path().parent_path().parent_path().parent_path();
+  for (const auto& dir : {iso.parent_path() / game, install / game / "data" / "iso_data" / game,
+                          file_util::get_jak_project_dir() / "iso_data" / game}) {
+    if (fs::exists(dir / "DGO")) {
+      return dir;
+    }
+  }
+  return {};
+}
+
+/*!
+ * og:jak2-haven-city added: before the compile, run the level ports of the mod
+ * (data/custom_assets/<game>/ports/<port>/port.jsonc) with the level_port executable its release
+ * ships next to this extractor, on the player's extracted discs (iso_data_path, this game's, and
+ * the source game's, found by find_game_iso): they write the levels the compile builds. Nothing to
+ * do without a port, or without level_port (a development checkout, where `task level-port` runs
+ * the port). Returns SUCCESS, LEVEL_PORT_SOURCE_GAME_MISSING (the source game isn't installed) or
+ * LEVEL_PORT_FAILED.
+ */
+ExtractorErrorCode run_level_ports(const fs::path& iso_data_path, const std::string& game_name) {
+  const auto data = file_util::get_jak_project_dir();
+  const auto ports = data / "custom_assets" / game_name / "ports";
+  if (!fs::is_directory(ports)) {
+    return ExtractorErrorCode::SUCCESS;
+  }
+  const fs::path self = file_util::get_current_executable_path();
+  const auto exe = self.extension().string();  // ".exe" on Windows
+  const auto level_port = self.parent_path() / ("level_port" + exe);
+  if (!fs::exists(level_port)) {
+    lg::info("level ports: no {} (a development checkout: run task level-port)",
+             level_port.string());
+    return ExtractorErrorCode::SUCCESS;
+  }
+  for (const auto& entry : fs::directory_iterator(ports)) {
+    const auto manifest = entry.path() / "port.jsonc";
+    if (!fs::exists(manifest)) {
+      continue;
+    }
+    const std::string source =
+        parse_commented_json(file_util::read_text_file(manifest), manifest.string())
+            .value("source_game", "");
+    const auto title = source.size() > 3 ? "Jak " + source.substr(3) : source;  // jak2: Jak 2
+    const auto source_iso = find_game_iso(source, iso_data_path);
+    if (!source_iso) {
+      lg::error(
+          "This mod builds its levels from your own copy of {0}, which isn't installed. Install "
+          "{0} in the OpenGOAL Launcher (and let it finish), then reinstall this mod (or run its "
+          "Compile again).",
+          title);
+      return ExtractorErrorCode::LEVEL_PORT_SOURCE_GAME_MISSING;
+    }
+    lg::info("level port {}: from {} ({})", manifest.string(), title, source_iso->string());
+    const int code = run_program({level_port.string(), manifest.string(), "--root", data.string(),
+                                  "--iso", source + "=" + source_iso->string(), "--iso",
+                                  game_name + "=" + fs::absolute(iso_data_path).string(),
+                                  "--extractor", self.string(), "--fr3-check",
+                                  (self.parent_path() / ("fr3_check" + exe)).string()});
+    if (code != 0) {
+      lg::error(
+          "The level port {} failed (exit code {}), see the lines above. Reinstalling the mod "
+          "starts it again; if it fails again, report it with this log.",
+          manifest.string(), code);
+      return ExtractorErrorCode::LEVEL_PORT_FAILED;
+    }
+  }
+  return ExtractorErrorCode::SUCCESS;
+}
+
+// Mod models, made at a mod's install #############################################################
+// A mod whose models come from the games' discs (custom_assets/<game>/models/models.jsonc, made by
+// scripts/modding/mod_models.py) ships none of them: its release ships that tool as a one-file
+// executable, mod_models, next to this extractor, which runs it before the decompile (whose level
+// extraction bakes the models into their levels), on the player's own extracted discs.
+
+/*!
+ * Before the decompile, make the mod's models (and the other files its models.jsonc copies from a
+ * disc) with the mod_models executable its release ships next to this extractor, from the player's
+ * extracted discs: this game's (iso_data_path) and the other games' the manifest lists ("games",
+ * found by find_game_iso). Nothing to do without a manifest, without mod_models (a development
+ * checkout, where `task modding-models` runs the tool), or in an extraction the tool runs itself
+ * (OG_MOD_MODELS set: it rips a few levels with this extractor). Returns SUCCESS,
+ * LEVEL_PORT_SOURCE_GAME_MISSING (another game the models need isn't installed) or
+ * LEVEL_PORT_FAILED.
+ */
+ExtractorErrorCode run_mod_models(const fs::path& iso_data_path, const std::string& game_name) {
+  const auto data = file_util::get_jak_project_dir();
+  const auto manifest = data / "custom_assets" / game_name / "models" / "models.jsonc";
+  if (!fs::exists(manifest) || std::getenv("OG_MOD_MODELS")) {
+    return ExtractorErrorCode::SUCCESS;
+  }
+  const fs::path self = file_util::get_current_executable_path();
+  const auto exe = self.extension().string();  // ".exe" on Windows
+  const auto tool = self.parent_path() / ("mod_models" + exe);
+  if (!fs::exists(tool)) {
+    lg::info("mod models: no {} (a development checkout: run task modding-models)",
+             tool.string());
+    return ExtractorErrorCode::SUCCESS;
+  }
+  std::vector<std::string> args = {tool.string(),  "--game", game_name, "--root", data.string(),
+                                   "--extractor",  self.string(), "--iso",
+                                   game_name + "=" + fs::absolute(iso_data_path).string()};
+  const auto games = parse_commented_json(file_util::read_text_file(manifest), manifest.string())
+                         .value("games", std::vector<std::string>{});
+  for (const auto& game : games) {
+    if (game == game_name) {
+      continue;
+    }
+    const auto title = game.size() > 3 ? "Jak " + game.substr(3) : game;  // jak2: Jak 2
+    const auto iso = find_game_iso(game, iso_data_path);
+    if (!iso) {
+      lg::error(
+          "This mod makes its models from your own copy of {0}, which isn't installed. Install "
+          "{0} in the OpenGOAL Launcher (and let it finish), then reinstall this mod.",
+          title);
+      return ExtractorErrorCode::LEVEL_PORT_SOURCE_GAME_MISSING;
+    }
+    args.push_back("--iso");
+    args.push_back(game + "=" + iso->string());
+  }
+  lg::info("mod models: {}", manifest.string());
+  const int code = run_program(args);
+  if (code != 0) {
+    lg::error(
+        "Making the mod's models failed (exit code {}), see the lines above. Reinstalling the mod "
+        "starts it again; if it fails again, report it with this log.",
+        code);
+    return ExtractorErrorCode::LEVEL_PORT_FAILED;
+  }
+  return ExtractorErrorCode::SUCCESS;
+}
+
 int main(int argc, char** argv) {
   ArgumentGuard u8_guard(argc, argv);
 
@@ -398,6 +617,11 @@ int main(int argc, char** argv) {
   }
 
   if (flag_decompile) {
+    // the mod's models first: the level extraction bakes them into their levels
+    const auto models_code = run_mod_models(iso_data_path, game_name);
+    if (models_code != ExtractorErrorCode::SUCCESS) {
+      return static_cast<int>(models_code);
+    }
     try {
       const auto status_code = decompile(iso_data_path, data_subfolder, decomp_config_override);
       if (status_code != ExtractorErrorCode::SUCCESS) {
@@ -410,6 +634,12 @@ int main(int argc, char** argv) {
   }
 
   if (flag_compile) {
+    // og:jak2-haven-city added: the mod's level ports first (they write what the compile
+    // builds)
+    const auto port_code = run_level_ports(iso_data_path, game_name);
+    if (port_code != ExtractorErrorCode::SUCCESS) {
+      return static_cast<int>(port_code);
+    }
     const auto status_code = compile(iso_data_path, data_subfolder, instr_set);
     if (status_code != ExtractorErrorCode::SUCCESS) {
       return static_cast<int>(status_code);

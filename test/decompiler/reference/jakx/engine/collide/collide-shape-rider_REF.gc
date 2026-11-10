@@ -76,8 +76,10 @@
     ((collide-shape-prim-group)
      (let ((s4-0 (-> this prim-core collide-with))
            (s3-0 (-> (the-as collide-shape-prim-group arg0) child 0))
+           (s2-1 (the-as object (-> (the-as collide-shape-prim-group arg0) num-children)))
            )
-       (countdown (s2-1 (-> arg0 specific 0))
+       (while (nonzero? (the-as uint s2-1))
+         (set! s2-1 (+ (the-as uint s2-1) -1))
          (when (and (logtest? s4-0 (-> s3-0 prim-core collide-as))
                     (logtest? (-> s3-0 prim-core action) (collide-action can-ride))
                     )
@@ -103,9 +105,14 @@
          (let ((v1-13 (populate-for-prim-mesh *collide-mesh-cache* this)))
            (when v1-13
              (let* ((s4-1 (new 'stack-no-clear 'collide-tri-result))
-                    (f0-4
-                      (should-push-away-test s3-1 (-> v1-13 tris 0) s4-1 (-> arg0 prim-core world-sphere) (-> arg1 best-dist))
-                      )
+                    (f0-4 (should-push-away-test
+                            s3-1
+                            (-> v1-13 tris 0)
+                            (the-as collide-mesh-cache-tri s4-1)
+                            (-> arg0 prim-core world-sphere)
+                            (-> arg1 best-dist)
+                            )
+                          )
                     )
                (when (< f0-4 (-> arg1 best-dist))
                  (set! (-> arg1 best-dist) f0-4)
@@ -163,7 +170,9 @@
            )
       (set! *actor-list-length* 0)
       (if (logtest? s5-0 (collide-spec hit-by-others-list))
-          (set! *actor-list-length* (spatial-hash-method-38 *actor-hash* (-> s4-0 prim-core) *actor-list* 512))
+          (set! *actor-list-length*
+                (fill-actor-list-for-sphere *actor-hash* (-> s4-0 prim-core world-sphere) *actor-list* 512)
+                )
           )
       (when (logtest? s5-0 (collide-spec player-list))
         (let ((a0-2 (-> *collide-player-list* alive-list next0)))

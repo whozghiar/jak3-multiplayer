@@ -52,8 +52,9 @@ Each technical mod document should adopt a structured, educational approach:
    on and why, alignment requirements, and budget impact.
 6. **Debugging & troubleshooting guide:** common traps, known edge cases,
    and REPL verification steps taken while building the feature.
-7. **Change log:** what each change did and why, newest last. This is the
-   mod's only change log: the root `README.md` is for players and has none.
+
+No change log here: the author writes it by hand at release time (the release
+workflow's `changelog` input).
 
 ## 4. Texture packs for releases (`texture_packs/`)
 

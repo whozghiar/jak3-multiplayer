@@ -109,9 +109,11 @@ int main(int argc, char** argv) {
   app.add_flag("--version", show_version, "Display the built revision");
   app.add_option("-g,--game", game_name, "The game name: 'jak1' or 'jak2'");
   app.add_flag("-v,--verbose", verbose_logging, "Enable verbose logging on stdout");
-  app.add_flag(
-      "--port", port_number,
-      "Specify port number for listener connection (default is 8112 for Jak 1 and 8113 for Jak 2)");
+  // an option, not a flag: a flag took no value after a space ("--port 8120" left the default)
+  app.add_option("--port", port_number,
+                 "Port of the listener the compiler connects to ((lt \"127.0.0.1\" port)); default "
+                 "8111 + the game version: 8112 Jak 1, 8113 Jak 2, 8114 Jak 3. Each instance needs "
+                 "its own");
   app.add_flag("--no-avx2", disable_avx2, "Disable AVX2 for testing");
   app.add_flag("--no-display", disable_display, "Disable video display");
   app.add_flag("--profile", enable_profiling, "Enables profiling immediately from startup");

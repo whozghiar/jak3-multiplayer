@@ -110,8 +110,10 @@ void deci2_runner(SystemThreadInterface& iface) {
   // callback function so the server knows when to give up and shutdown
   std::function<bool()> shutdown_callback = [&]() { return iface.get_want_exit(); };
 
-  // create and register server
-  Deci2Server server(shutdown_callback, DECI2_PORT - 1 + (int)g_game_version);
+  // create and register server, on the port of --port (g_server_port, set before this thread
+  // starts; by default 8112 - 1 + the game version, as before). It used the default whatever
+  // --port said, so two instances could not listen on two ports.
+  Deci2Server server(shutdown_callback, g_server_port);
   ee::LIBRARY_sceDeci2_register(&server);
 
   // now its ok to continue with initialization

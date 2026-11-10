@@ -111,9 +111,9 @@ Read these before writing code:
 
 | Resource | Why |
 | :--- | :--- |
-| [`AGENTS.md`](../../../AGENTS.md), section 4 | The golden rules: every change off by default behind a runtime toggle, no edits to shared menu files, comments, change log. |
+| [`AGENTS.md`](../../../AGENTS.md), section 4 | The golden rules: every change off by default behind a runtime toggle, no edits to shared menu files, comments. |
 | [`mods_menu.md`](mods_menu.md) | How the in-game Mods menu (L3 + SELECT) works and how a mod registers in it. |
-| The Lisp wiki, [`.agents/skills/goal-lisp/wiki/`](../../../.agents/skills/goal-lisp/wiki/index.md) | Verified GOAL syntax and engine behavior: `common.md`, then the file of your game. The only place GOAL code examples live. |
+| The Lisp wiki, [`.agents/skills/goal-lisp/wiki/`](../../../.agents/skills/goal-lisp/wiki/index.md) | Verified GOAL syntax and engine behavior: `common.md`, then the file of your game. The only place GOAL code examples live. Its background pages cover GOAL's concepts, the engine and build, custom assets and textures. |
 | `goal_src/<game>/` | The decompiled game code you hook into. Search it for the system you change. |
 | `decompiler_out/<game>/` | Extracted assets (textures, levels) to find names and IDs. |
 
@@ -122,12 +122,9 @@ itself when the task matches:
 
 | Skill | Use it for |
 | :--- | :--- |
-| `goal-lisp` | GOAL syntax, types, processes, states, macros and their traps. |
-| `engine-internals` | The C++ runtime, the compiler, the decompiler, the build layers. |
-| `custom-actors-levels` | Custom models, animations, sound banks, FR3 injection, custom levels. |
-| `texture-modding` | Texture replacement, merging, texture packs. |
+| `smoke-tests` | Testing a feature in game with a scenario, and the mod's test notebook (section 4). |
 | `kb` | Recording a discovery (section 7). |
-| `verification-before-completion` | Proof before any "done". |
+| `documentalist` | The documentation rules. |
 
 ## 3. Wire the toggle and register your files
 
@@ -140,9 +137,10 @@ itself when the task matches:
    debug segment is not linked in a launcher boot. Names: config variables and helpers prefixed
    with the slug, builder named `mod-<slug>-build-menu` (see `mods_menu.md`).
 3. **Register every new `.gc` file:** its `.o` in a `.gd` list
-   (`goal_src/<game>/dgos/*.gd`, a menu file after `"mods-menu.o"`), plus a compile step in
-   `goal_src/<game>/game.gp`. Jak 2 and Jak 3 also need the file pre-marked so the build does not
-   look for it in the decompiler's index. The exact lines are in the Lisp wiki,
+   (`goal_src/<game>/dgos/*.gd`, a menu file after `"mods-menu.o"`). Jak 1 also needs a compile
+   step in `goal_src/jak1/game.gp`; Jak 2 and Jak 3 find the file by its name. A `build-actor`
+   art group listed in a stock level's `.gd` must be pre-marked in `game.gp`. The exact lines
+   are in the Lisp wiki,
    [Registering a new source file](../../../.agents/skills/goal-lisp/wiki/common.md#registering-a-new-source-file).
 
 ## 4. Iterate
@@ -166,27 +164,33 @@ Two traps when testing: a cold boot loads save slot 1, and toggled cheats and se
 in `%APPDATA%/OpenGOAL/<game>/settings/pc-settings.gc`. Both are shared by every mod you switch
 to.
 
+After each big feature, smoke test it in game: a scenario file drives the game and prints its
+results (`scripts/modding/smoke_test.py`, scenario template
+[`smoke_test.template.gc`](../templates/smoke_test.template.gc)), and the mod's test notebook
+(`docs/modding/current_mod/<slug>_tests.md`, from
+[`TEST_NOTEBOOK.template.md`](../templates/TEST_NOTEBOOK.template.md)) keeps each test and its
+last result. An AI agent follows the `smoke-tests` skill, and launches the game for it only with
+your go-ahead.
+
 ## 5. Custom assets (optional)
 
-- **Models, animations, sounds, levels:** sources under `custom_assets/<game>/`; the
-  `custom-actors-levels` skill walks through the Blender export and the build steps.
-- **Textures that are part of the mod:** PNGs under
-  `custom_assets/<game>/texture_replacements/`, baked by `task extract`; the `texture-modding`
-  skill has the layout and format rules. That folder is gitignored: commit the PNGs the mod
-  ships with `git add -f`. The release copies `custom_assets/` into the archive, and the mod's
-  extractor bakes them when a player installs it. This is how textures reach a mod's players.
-- **A standalone texture pack** is a `.zip` exported with the
-  [OpenGOAL Texture Pack Generator](https://github.com/whozghiar/open-goal-texture-pack-generator)
-  into `docs/modding/current_mod/texture_packs/`, registered with
-  `task modding-package-texture-pack`, committed with `git add -f`, and attached to the mod's
-  release. The OpenGOAL Launcher does not link a texture pack to a mod: its mod-source schema has no such field, it applies texture packs to the base game only, from a `.zip` the player adds in its Texture Packs screen, and its texture support for installed mods is not finished (checked on its `main` branch, 2026-10-02). A pack therefore reaches the base game, not the mod.
+- **Models, animations, sounds, levels:** sources under `custom_assets/<game>/`; the wiki's
+  [assets page](../../../.agents/skills/goal-lisp/wiki/assets.md) walks through the Blender
+  export and the build steps.
+- **Models taken from a game** (another game's character, a music file): never commit them.
+  Describe them in `custom_assets/<game>/models/models.jsonc`; `task modding-models` makes them
+  from your discs, and the release makes them from the player's at install:
+  [`models_from_the_discs.md`](models_from_the_discs.md).
+- **Textures:** inside the mod (PNGs under `custom_assets/<game>/texture_replacements/`, baked
+  at install), or as a texture pack published next to it, which the launcher applies to the base
+  game only. Both, step by step: [`texture_packs.md`](texture_packs.md).
 
 ## 6. Document the mod
 
 | File | For | Content |
 | :--- | :--- | :--- |
 | `README.md` at the root | Players | Overview, features, controls, demo video. No change log, no checklist. |
-| `docs/modding/current_mod/<slug>_readme.md` | Developers and agents | Architecture, the hooks you placed and why, memory and performance notes, and the change log. Link to the Lisp wiki instead of pasting GOAL code. |
+| `docs/modding/current_mod/<slug>_readme.md` | Developers and agents | Architecture, the hooks you placed and why, memory and performance notes. Link to the Lisp wiki instead of pasting GOAL code. |
 | `docs/img/mod/mod_cover.png` | The launcher | Optional cover thumbnail. |
 
 ## 7. Record what you learned in the knowledge base
@@ -275,9 +279,9 @@ Every repository picks the change up at its next Claude Code session, or with
    compiles. It may also rebuild the C++ (`task build-release-game`) or the decompiler.
 4. **You run the cold boot** it gives you (`task boot-game`, or `task boot-game-retail` for the
    Mods menu) and tell it what you see. A change is done only after that.
-5. **The agent documents** the change in `docs/modding/current_mod/<slug>_readme.md`, its
-   change log included; the README changes only when players need to know (a feature, a
-   control).
+5. **The agent documents** the change in `docs/modding/current_mod/<slug>_readme.md`; the README
+   changes only when players need to know (a feature, a control). The change log is written by
+   hand at release time (the release workflow's `changelog` input), not by the agent.
 6. **Knowledge:** ask it to record what was verified and reusable with the `kb` skill; it
    commits and pushes from `.agents/skills`.
 7. **Commit and push** the mod. Commit messages written with an agent end with `(AI-assisted)`.

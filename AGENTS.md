@@ -27,12 +27,24 @@ only when its description matches the task.
   `goalc --cmd`, no game window), `task build-release-game` and `task build-release-decomp`.
   Agents never launch the game (`gk`, `task boot-game*`, `task run-game`) and never attach the
   debugger (`(lt)`, `(dbg)`): give the user the exact command and ask what they see. In Claude
-  Code, a PreToolUse hook (`.claude/hooks/block_game_launch.py`) enforces this.
+  Code, a PreToolUse hook (`.claude/hooks/block_game_launch.py`) enforces this. The one
+  exception: when the user has authorized launches for tests, run smoke tests through
+  `python scripts/modding/smoke_test.py run`, one scenario per call.
+- **Several instances, one port each.** `gk --port <n>` gives an instance its own listener
+  (default 8111 + the game version: 8112 Jak 1, 8113 Jak 2, 8114 Jak 3); a compiler reaches it
+  with `(lt "127.0.0.1" <n>)`, and a second `goalc` takes its own `-p <nREPL port>` (default
+  8181) and `--debug-port`. On one shared port, Windows leaves the second instance without a
+  listener and Linux lets the compiler reach either instance.
+- **Smoke test every big feature.** After a mod gains a big feature, test it in game with a
+  scenario and record the result in the mod's test notebook,
+  `docs/modding/current_mod/<slug>_tests.md`: the `smoke-tests` skill.
 - **A cold boot is the final check.** Code hot-reloaded with `(mi)` into a running game can look
   fine while broken on a clean launch (stale definitions, declaration order, missing `.gp`
   registration). Ask the user for `task boot-game`, or `task boot-game-retail` for the Mods
   menu, before calling a gameplay change done.
-- **Register every new `.gc` file** in `goal_src/jak[1-3]/game.gp`, dependent types first.
+- **Register every new `.gc` file:** its `.o` in a `goal_src/jak[1-3]/dgos/*.gd` list, after the
+  files it depends on; Jak 1 also lists it in `game.gp` (the wiki's "Registering a new source
+  file").
 - **Saves and settings persist across boots.** A cold boot restores save slot 1
   (`%APPDATA%/OpenGOAL/jak[x]/saves/`), and toggled cheats and settings stay in
   `%APPDATA%/OpenGOAL/jak[x]/settings/pc-settings.gc`. Account for both when testing.
@@ -55,9 +67,6 @@ only when its description matches the task.
 5. **Non-destructive changes.** Never delete or wipe original `.gc` files; prefer surgical
    overrides and modular extensions. Never reformat a whole upstream `.gc` file: it trips the
    `og:preserve-this` lint and buries the real diff.
-6. **Traceability.** Log every change in the "Change log" section of
-   `docs/modding/current_mod/<slug>_readme.md`, next to the technical notes. The root `README.md`
-   is for players: no change log, no checklist.
 
 ## 5. Recording verified discoveries
 

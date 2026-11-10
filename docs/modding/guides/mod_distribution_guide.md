@@ -73,8 +73,9 @@ The `.github/workflows/release.yml` workflow lives on `master-dev`, so every mod
 > release is an explicit action, never a side effect of a `git push`.
 >
 > **Always a full rebuild.** Every release recompiles Windows and Linux from source.
-> The three fields `mod_name`, `mod_description` and `tag_name` are mandatory: you
-> decide the name, description and version number that ship to players.
+> `tag_name` is mandatory: you decide the version number that ships to players. Left
+> empty, `mod_name` and `mod_description` keep the previous release's (read from the mod's
+> `index.json`; the README's overview for a first release without a description).
 >
 > **Repository owner only.** The workflow checks `github.actor` against the
 > repository owner before doing anything else — write access to push is
@@ -88,9 +89,10 @@ The `.github/workflows/release.yml` workflow lives on `master-dev`, so every mod
 2. In the left menu, select **🚀 Build & Release OpenGOAL Mod Package**.
 3. Click **Run workflow**:
    - **Branch:** `main`.
-   - **Mod name (`mod_name`):** Mandatory. Display name (e.g. `Jak 3 JetBoard`).
-   - **Short description (`mod_description`):** Mandatory. A 1-2 sentence summary embedded as-is into the `index.json` catalog.
+   - **Mod name (`mod_name`):** Display name (e.g. `Jak 3 JetBoard`). Empty: the previous release's.
+   - **Short description (`mod_description`):** A 1-2 sentence summary embedded as-is into the `index.json` catalog. Empty: the previous release's.
    - **Version tag (`tag_name`):** Mandatory. An explicit tag (e.g. `v1.0.0`).
+   - **Changelog (`changelog`):** Optional. The path of a Markdown file committed in the repository (e.g. `docs/changelog/v1.1.0.md`). Its text goes under a *Changelog* heading in the release notes, and the file is attached to the release as `CHANGELOG-<tag>.md`. A wrong path stops the release before anything is published.
    - **Mark as pre-release:** Check if the version is experimental.
 4. Click **Run workflow**.
 
@@ -100,6 +102,10 @@ gh workflow run release.yml --repo <owner>/jak2-mod-my-mod --ref main \
   -f mod_name="Jak 3 JetBoard" \
   -f mod_description="Adds Jak 3's jetboard to Jak 2." \
   -f tag_name="v1.0.0"
+
+# a later release: same name and description, with a changelog
+gh workflow run release.yml --repo <owner>/jak2-mod-my-mod --ref main \
+  -f tag_name="v1.1.0" -f changelog="docs/changelog/v1.1.0.md"
 ```
 
 ---

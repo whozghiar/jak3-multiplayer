@@ -230,8 +230,8 @@ local branch `mods/<game>-mod-<name>`; give it a folder with
 In the mod's folder (or on `mods/<name>` after a switch): edit, verify with
 `task compile-check`, ask for a cold boot
 (`task boot-game-retail` checks the Mods menu), commit, then `git push`. The golden rules are in
-[`AGENTS.md`](../../../AGENTS.md): runtime toggle, native non-regression, comments, change log
-(in the mod's technical README, not in its player README).
+[`AGENTS.md`](../../../AGENTS.md): runtime toggle, native non-regression, comments. The change log
+is written by hand at release time (the release workflow's `changelog` input).
 
 `git push` on `mods/<name>` goes to that repository's `main`: the branch tracks `<name>/main`,
 and the remote `<name>` carries the push rule `refs/heads/mods/<name>:refs/heads/main`. VS

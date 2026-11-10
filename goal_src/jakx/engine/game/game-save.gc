@@ -2063,7 +2063,7 @@
       (set-height! gp-0 80)
       (set! (-> gp-0 flags) (font-flags shadow kerning))
       (format (clear *temp-string*) "~S / ~S ~D~%" (-> self mode) (-> self state name) (-> self which))
-      (print-game-text *temp-string* gp-0 #f 44 (bucket-id bucket787) #f (the-as dma-buffer #f))
+      (print-game-text *temp-string* gp-0 #f 44 (bucket-id hud-draw-hud-alpha) #f (the-as dma-buffer #f))
       )
     )
   (when (and (or (= (-> self mode) 'auto-save)
@@ -2117,13 +2117,9 @@
                (= (get-status *gui-control* (-> self icon-gui-id)) (gui-status active))
                )
       (with-dma-buffer-add-bucket ((s5-1 (-> *display* frames (-> *display* on-screen) global-buf))
-                                   (bucket-id bucket787)
+                                   (bucket-id hud-draw-hud-alpha)
                                    )
-        (-> self icon)
-        (let ((t9-8 (method-of-type hud-sprite hud-sprite-method-9)))
-          (-> self level)
-          (t9-8)
-          )
+        (draw (-> self icon) s5-1 (-> self level))
         )
       )
     )
@@ -2987,19 +2983,87 @@
                                   )
                     )
                )
-      (sound-group-pause (the-as sound-group #xffffffff))
+      (sound-group-pause (sound-group
+                           sfx
+                           music
+                           dialog
+                           sog3
+                           ambient
+                           dialog2
+                           special
+                           sog7
+                           sog8
+                           sog9
+                           sog10
+                           sog11
+                           sog12
+                           sog13
+                           sog14
+                           sog15
+                           sog16
+                           sog17
+                           sog18
+                           sog19
+                           sog20
+                           sog21
+                           sog22
+                           sog23
+                           sog24
+                           sog25
+                           sog26
+                           sog27
+                           sog28
+                           sog29
+                           sog30
+                           sog31
+                           )
+                         )
       (add-setting! 'process-mask 'set 0.0 (process-mask pause))
       )
     )
   :exit (behavior ()
-    (sound-group-continue (the-as sound-group #xffffffff))
+    (sound-group-continue (sound-group
+                            sfx
+                            music
+                            dialog
+                            sog3
+                            ambient
+                            dialog2
+                            special
+                            sog7
+                            sog8
+                            sog9
+                            sog10
+                            sog11
+                            sog12
+                            sog13
+                            sog14
+                            sog15
+                            sog16
+                            sog17
+                            sog18
+                            sog19
+                            sog20
+                            sog21
+                            sog22
+                            sog23
+                            sog24
+                            sog25
+                            sog26
+                            sog27
+                            sog28
+                            sog29
+                            sog30
+                            sog31
+                            )
+                          )
     )
   :trans (behavior ()
     (buzz-stop! 0)
     (buzz-stop! 1)
     (when (or (not *fmv-player*) (!= (-> *fmv-player* state name) 'idle))
       (with-dma-buffer-add-bucket ((s5-0 (-> *display* frames (-> *display* on-screen) global-buf))
-                                   (bucket-id bucket795)
+                                   (bucket-id debug-menu)
                                    )
         (let ((v1-11 (-> *viewport-array* default))
               (s4-0 *font-context*)
@@ -3034,7 +3098,7 @@
                *font-context*
                #f
                44
-               (bucket-id bucket787)
+               (bucket-id hud-draw-hud-alpha)
                #f
                s5-0
                )
@@ -3045,7 +3109,7 @@
                *font-context*
                #f
                44
-               (bucket-id bucket787)
+               (bucket-id hud-draw-hud-alpha)
                #f
                s5-0
                )
@@ -3056,7 +3120,7 @@
                *font-context*
                #f
                44
-               (bucket-id bucket787)
+               (bucket-id hud-draw-hud-alpha)
                #f
                s5-0
                )
@@ -3072,7 +3136,7 @@
                 *font-context*
                 #f
                 44
-                (bucket-id bucket787)
+                (bucket-id hud-draw-hud-alpha)
                 #f
                 s5-0
                 )
@@ -3080,7 +3144,7 @@
               (set-height! s4-0 40)
               (let ((s3-3 print-game-text))
                 (format (clear *temp-string*) (lookup-text! *common-text* (text-id text-id-174) #f) 1)
-                (s3-3 *temp-string* *font-context* #f 44 (bucket-id bucket787) #f s5-0)
+                (s3-3 *temp-string* *font-context* #f 44 (bucket-id hud-draw-hud-alpha) #f s5-0)
                 )
               (set-origin! s4-0 64 178)
               (set-height! s4-0 30)
@@ -3089,7 +3153,7 @@
                 *font-context*
                 #f
                 44
-                (bucket-id bucket787)
+                (bucket-id hud-draw-hud-alpha)
                 #f
                 s5-0
                 )
@@ -3100,7 +3164,7 @@
                 *font-context*
                 #f
                 44
-                (bucket-id bucket787)
+                (bucket-id hud-draw-hud-alpha)
                 #f
                 s5-0
                 )
@@ -3111,7 +3175,7 @@
                 *font-context*
                 #f
                 44
-                (bucket-id bucket787)
+                (bucket-id hud-draw-hud-alpha)
                 #f
                 s5-0
                 )

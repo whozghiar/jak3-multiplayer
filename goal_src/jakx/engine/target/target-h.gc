@@ -44,9 +44,11 @@
   )
 ;; ---target-flags
 
-(define-extern vehicle-spawn (function vehicle-type object process-drawable))
+(declare-type vehicle rigid-body-object)
+(define-extern vehicle-spawn (function vehicle-type vehicle-spawn-params vehicle))
 (define-extern target-exit (function none :behavior target))
 (define-extern target-generic-event-handler (function process int symbol event-message-block object :behavior target))
+(define-extern target-get-any-pos (function vector))
 
 ;; DECOMP BEGINS
 

@@ -148,8 +148,10 @@ def generate_release_notes(
     display_name: str = None,
     description: str = None,
     cover_url: str = None,
+    changelog_path: Path = None,
 ):
-  """Generates formatted markdown release notes for GitHub Releases."""
+  """Generates formatted markdown release notes for GitHub Releases. changelog_path: an optional
+  Markdown file whose text is added under a Changelog heading."""
   readme_desc = extract_metadata_from_readme(REPO_ROOT / "README.md")
   branch_match = re.match(r"^jak([123])/([^/]+)/(.+)$", branch)
   if branch_match:
@@ -204,6 +206,9 @@ def generate_release_notes(
       f"https://raw.githubusercontent.com/{repo}/{branch}/index.json",
       "```",
   ])
+
+  if changelog_path:
+    notes_parts.extend(["", "### Changelog", "", changelog_path.read_text(encoding="utf-8").strip()])
 
   if checksums_content:
     notes_parts.extend([
@@ -514,6 +519,11 @@ def main():
       help="Output file path to generate markdown release notes and exit",
   )
   parser.add_argument(
+      "--changelog-file",
+      default="",
+      help="Markdown changelog added to the release notes (with --generate-release-notes)",
+  )
+  parser.add_argument(
       "--checksums-file",
       default="",
       help="Path to SHA256SUMS.txt file to include in release notes",
@@ -562,13 +572,19 @@ def main():
   website_url = (f"https://github.com/{args.repo}" if repo_slug
                  else f"https://github.com/{args.repo}/tree/{branch}")
 
-  # Mod metadata resolution
+  # Mod metadata resolution: the arguments, else the mod's catalog entry (written by its last
+  # release), else the README
+  try:
+    released = json.loads(index_path.read_text(encoding="utf-8")).get("mods", {}).get(detected_slug) or {}
+  except (OSError, ValueError):
+    released = {}
   disp_arg = args.display_name.strip() if args.display_name else ""
-  display_name = disp_arg or variable_part
+  display_name = disp_arg or released.get("displayName") or variable_part
 
   desc_arg = args.description.strip() if args.description else ""
   description = (
       desc_arg
+      or released.get("description")
       or readme_desc
       or f"Mod OpenGOAL {detected_game.upper()} avec modifications C++ et LISP."
   )
@@ -648,6 +664,12 @@ def main():
     if checksums_path and not checksums_path.is_absolute():
       checksums_path = REPO_ROOT / checksums_path
 
+    changelog_path = Path(args.changelog_file) if args.changelog_file else None
+    if changelog_path and not changelog_path.is_absolute():
+      changelog_path = REPO_ROOT / changelog_path
+    if changelog_path and not changelog_path.is_file():
+      raise SystemExit(f"Changelog not found: {changelog_path}")
+
     generate_release_notes(
         output_path=output_path,
         branch=branch,
@@ -657,6 +679,7 @@ def main():
         display_name=display_name,
         description=description,
         cover_url=resolved_cover_url,
+        changelog_path=changelog_path,
     )
     return
 

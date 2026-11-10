@@ -14,14 +14,17 @@ on:
   workflow_dispatch:
     inputs:
       mod_name:
-        description: 'Mod display name (required, e.g. Jak 3 JetBoard)'
-        required: true
+        description: 'Mod display name (e.g. Jak 3 JetBoard). Empty: the name of the last release (index.json)'
+        required: false
       mod_description:
-        description: 'Short mod description, required (included as-is in index.json)'
-        required: true
+        description: 'Short mod description (included as-is in index.json). Empty: the description of the last release (index.json), else the README'
+        required: false
       tag_name:
         description: 'Mod version tag, required (e.g. v1.0.0)'
         required: true
+      changelog:
+        description: 'Optional: path in the repository to a Markdown changelog (e.g. docs/changelog/v1.1.0.md), added to the release notes and attached to the release'
+        required: false
       prerelease:
         description: 'Mark as pre-release'
         type: boolean
@@ -60,10 +63,11 @@ jobs:
   # This workflow no longer offers a "recompile or not" choice: a release
   # always rebuilds Windows + Linux from source. That is a deliberate choice
   # - a mod shipped without ever going through a full compile is exactly the
-  # kind of release we don't want to distribute to players. The mod name,
-  # description and version tag are `required: true` on workflow_dispatch
-  # (see above), so there is no "auto" value to detect here, only the
-  # metadata explicitly provided by whoever triggers the release.
+  # kind of release we don't want to distribute to players. The version tag
+  # is `required: true` on workflow_dispatch (see above), so there is no
+  # "auto" value to detect here, only the metadata provided by whoever
+  # triggers the release. An empty name or description reuses the last
+  # release's, from the branch's index.json.
   # =========================================================================
   check_mode:
     name: "🔍 Resolve Version & Metadata"
@@ -156,6 +160,53 @@ jobs:
         shell: cmd
         run: cmake --build build --config Release --target gk --target goalc --target extractor --parallel %NUMBER_OF_PROCESSORS%
 
+      # A mod made with scripts/level_port (custom_assets/<game>/ports/<port>/port.jsonc) ships
+      # nothing of its source game: its extractor runs the port at install time, on the player's
+      # own discs (decompiler/extractor/main.cpp, run_level_ports). It needs level_port (a one-file
+      # executable) and fr3_check next to it. Mods without a port skip these steps.
+      - name: Detect Level Ports
+        id: ports
+        shell: bash
+        run: |
+          if compgen -G "custom_assets/*/ports/*/port.jsonc" > /dev/null; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Python (level ports)
+        if: steps.ports.outputs.found == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Build level_port and fr3_check (level ports)
+        if: steps.ports.outputs.found == 'true'
+        shell: bash
+        run: |
+          cmake --build build --config Release --target fr3_check
+          python -m pip install pyinstaller
+          echo "from level_port.__main__ import main; main()" > level_port_entry.py
+          # PYTHONPATH: --collect-submodules imports the package to list the modules the manifest
+          # loads by name (games/, convert/)
+          PYTHONPATH=scripts python -m PyInstaller --onefile --name level_port --paths scripts \
+            --collect-submodules level_port --distpath build/level_port level_port_entry.py
+
+      # A mod whose models come from the games' discs (custom_assets/<game>/models/models.jsonc)
+      # ships no model: it ships the tool that makes them at the player's install, a one-file
+      # executable next to the extractor, which runs it before its decompile
+      # (decompiler/extractor/main.cpp, run_mod_models; scripts/modding/mod_models.py)
+      - name: Set up Python (mod models)
+        if: hashFiles('custom_assets/*/models/models.jsonc') != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Build mod_models (models made at install)
+        if: hashFiles('custom_assets/*/models/models.jsonc') != ''
+        shell: bash
+        run: |
+          python -m pip install pyinstaller numpy
+          python -m PyInstaller --onefile --name mod_models --distpath build/mod_models scripts/modding/mod_models.py
+
       - name: Package Windows Mod Bundle
         shell: bash
         run: |
@@ -168,6 +219,16 @@ jobs:
           cp build/bin/gk.exe "$PKG_DIR/"
           cp build/bin/goalc.exe "$PKG_DIR/"
           cp build/bin/extractor.exe "$PKG_DIR/"
+          if [ -f build/mod_models/mod_models.exe ]; then
+            cp build/mod_models/mod_models.exe "$PKG_DIR/"
+          fi
+          # level ports (see "Detect Level Ports"): the port, fr3_check, and the texture pool
+          # layout the port reads (game/graphics/texture/<game>_tpage_dir.cpp)
+          if [ -f build/level_port/level_port.exe ]; then
+            cp build/level_port/level_port.exe build/bin/fr3_check.exe "$PKG_DIR/"
+            mkdir -p "$PKG_DIR/data/game/graphics/texture"
+            cp game/graphics/texture/*_tpage_dir.cpp "$PKG_DIR/data/game/graphics/texture/"
+          fi
 
           cp -r decompiler/config "$PKG_DIR/data/decompiler/"
           cp -r goal_src "$PKG_DIR/data/"
@@ -241,6 +302,47 @@ jobs:
           strip build/goalc/goalc
           strip build/decompiler/extractor
 
+      # level ports: see the Windows job's "Detect Level Ports"
+      - name: Detect Level Ports
+        id: ports
+        run: |
+          if compgen -G "custom_assets/*/ports/*/port.jsonc" > /dev/null; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Python (level ports)
+        if: steps.ports.outputs.found == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Build level_port and fr3_check (level ports)
+        if: steps.ports.outputs.found == 'true'
+        run: |
+          cmake --build build --config Release --target fr3_check --parallel $(nproc)
+          strip build/tools/fr3_check
+          python -m pip install pyinstaller
+          echo "from level_port.__main__ import main; main()" > level_port_entry.py
+          PYTHONPATH=scripts python -m PyInstaller --onefile --name level_port --paths scripts \
+            --collect-submodules level_port --distpath build/level_port level_port_entry.py
+
+      # A mod whose models come from the games' discs (custom_assets/<game>/models/models.jsonc)
+      # ships no model: it ships the tool that makes them at the player's install, a one-file
+      # executable next to the extractor, which runs it before its decompile
+      # (decompiler/extractor/main.cpp, run_mod_models; scripts/modding/mod_models.py)
+      - name: Set up Python (mod models)
+        if: hashFiles('custom_assets/*/models/models.jsonc') != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Build mod_models (models made at install)
+        if: hashFiles('custom_assets/*/models/models.jsonc') != ''
+        shell: bash
+        run: |
+          python -m pip install pyinstaller numpy
+          python -m PyInstaller --onefile --name mod_models --distpath build/mod_models scripts/modding/mod_models.py
+
       - name: Package Linux Mod Bundle
         run: |
           TAG_VAL="${{ needs.check_mode.outputs.release_tag }}"
@@ -252,6 +354,17 @@ jobs:
           cp build/game/gk "$PKG_DIR/"
           cp build/goalc/goalc "$PKG_DIR/"
           cp build/decompiler/extractor "$PKG_DIR/"
+          if [ -f build/mod_models/mod_models ]; then
+            cp build/mod_models/mod_models "$PKG_DIR/"
+            chmod +x "$PKG_DIR/mod_models"
+          fi
+          # level ports: see the Windows job's package step
+          if [ -f build/level_port/level_port ]; then
+            cp build/level_port/level_port build/tools/fr3_check "$PKG_DIR/"
+            chmod +x "$PKG_DIR/level_port" "$PKG_DIR/fr3_check"
+            mkdir -p "$PKG_DIR/data/game/graphics/texture"
+            cp game/graphics/texture/*_tpage_dir.cpp "$PKG_DIR/data/game/graphics/texture/"
+          fi
           chmod +x "$PKG_DIR/gk" "$PKG_DIR/goalc" "$PKG_DIR/extractor"
 
           cp -r decompiler/config "$PKG_DIR/data/decompiler/"
@@ -358,9 +471,15 @@ jobs:
           TARGET_BRANCH: ${{ needs.check_mode.outputs.target_branch }}
           DISPLAY_NAME: ${{ needs.check_mode.outputs.display_name }}
           DESCRIPTION: ${{ needs.check_mode.outputs.description }}
+          CHANGELOG: ${{ github.event.inputs.changelog }}
         run: |
+          if [ -n "$CHANGELOG" ]; then
+            # attached to the release next to the packages (it fails here if the path is wrong)
+            cp "$CHANGELOG" "release-files/CHANGELOG-${RELEASE_TAG}.md"
+          fi
           python ./scripts/modding/update_mod_catalog.py \
             --generate-release-notes release_notes.md \
+            --changelog-file "${CHANGELOG}" \
             --branch "${TARGET_BRANCH}" \
             --tag "${RELEASE_TAG}" \
             --repo "${{ github.repository }}" \

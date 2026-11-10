@@ -101,7 +101,13 @@ temporarily, e.g. when its level isn't loaded.
 | `popup-menu-submenu` | nested page |
 | `popup-menu-dynamic-submenu` | list computed at draw time |
 
-Every entry also accepts a disabled-row predicate that greys the row out.
+Every entry also accepts a disabled-row predicate (`entry-disabled?`): while it answers `#t`, the
+row is drawn grey (a flag without its check mark), the cursor skips it, and X on it does nothing.
+
+In Jak 3, the root menu always ends with **Misc options**, the options of the whole game rather
+than of one mod. It holds **Weather**: the game's changing weather (the default, nothing forced) or
+a fixed one (sunny, cloudy, foggy, light rain, rain, thunderstorm, snow), held in every level until
+another is picked. It is not saved: each boot starts on the changing weather.
 
 ## 3. The standardised template
 

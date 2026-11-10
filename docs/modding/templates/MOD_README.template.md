@@ -100,7 +100,7 @@ task boot-game
 > *Demonstration videos must be hosted externally on YouTube to prevent repository bloating. Replace `{YOUTUBE_ID}` with your YouTube video ID (e.g. `MnqnybexhSA` from `https://youtu.be/MnqnybexhSA`).*
 
 ## Technical Documentation
-For the complete technical breakdown, architecture, developer notes and change log, refer to:
+For the complete technical breakdown, architecture and developer notes, refer to:
 - [`docs/modding/current_mod/{MOD_SLUG}_readme.md`](docs/modding/current_mod/{MOD_SLUG}_readme.md)
 
 ---

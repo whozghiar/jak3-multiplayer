@@ -45,6 +45,7 @@
   RESULTING HIERARCHY
   ------------------------------------------------------------------------------
     [L3 + SELECT] > Mods > [mod-slug] > [variant / sub-module] > [options]
+                         > Misc options > Weather (always last, see below)
 
   Example (branch jak3/features/spargus-invasion):
     Mods > spargus-invasion > blueguard-waves > [Enable / Disable]
@@ -130,15 +131,6 @@
 ;; refilled in place on every rebuild, so opening the menu never allocates.
 (define *mods-menu-items* (new 'global 'boxed-array popup-menu-entry MODS_MENU_MAX_ENTRIES))
 
-;; Shown when no mod registered anything, so the root menu is never empty
-;; (popup-menu's move-up!/move-down! would index a zero-length array).
-(define *mods-menu-empty-entry*
-  (new 'static 'popup-menu-button
-       :label "(no mod registered)"
-       :on-confirm (lambda () (none))
-       )
-  )
-
 ;; The popup-menu process, spawned lazily the first time the menu is opened.
 (define *mods-popup-menu* (the-as (pointer popup-menu) #f))
 
@@ -159,6 +151,101 @@
 (define *mods-menu-bind-consumed?* #f)
 
 ;; ============================================================================
+;; Misc options: settings of the whole game, not of one mod
+;; ============================================================================
+
+;; The weather picked in Misc options > Weather, in every level (Jak 2 and Jak 3
+;; share the weather system of engine/gfx/mood/mood.gc: clouds and fog drift
+;; towards random targets, it rains when both are high, it snows when the snow
+;; setting is on):
+;;   0  changing: the game's own weather, untouched. The default.
+;;   1  sunny, 2 cloudy, 3 foggy, 4 light rain, 5 rain, 6 thunderstorm, 7 snow:
+;;      fixed, held every frame by mods-menu-weather-update, so nothing the game
+;;      does (a level's, a mission's weather) takes it over.
+;; Not saved: every boot starts on 0. From the Haven City: New Dawn mod.
+(define *mods-menu-weather* 0)
+
+;; the weather held on the last frame the game ran (-1: none yet)
+(define *mods-menu-weather-held* -1)
+
+;; clouds, fog and snow of the fixed weathers (index: 3 * (weather - 1)). The
+;; rain comes from the clouds and the fog: min(0.75, 4 (cloud - 0.5) (fog - 0.5)).
+(define *mods-menu-weather-presets* (new 'static 'boxed-array :type float
+                                      ;; cloud fog snow
+                                      0.0 0.0 0.0   ;; sunny
+                                      0.75 0.4 0.0  ;; cloudy
+                                      0.4 1.0 0.0   ;; foggy
+                                      0.75 0.75 0.0 ;; light rain (0.25)
+                                      0.9 0.9 0.0   ;; rain (0.64)
+                                      1.0 1.0 0.0   ;; thunderstorm (0.75, the most)
+                                      1.0 0.5 1.0   ;; snow (no rain)
+                                      )
+        )
+
+(defun mods-menu-weather-update ()
+  "Hold the weather of *mods-menu-weather*. Called by mods-menu-update on every
+   frame the game runs (not while it is paused: the particles stand still then,
+   and rain switched off would leave its drops hanging under the new sky).
+   A fixed weather overrides the mood's clouds and fog and sets the snow; back
+   to 0, the sky starts from the fixed weather's and the game draws its own
+   again (set-time-for-random-weather!). Nothing happens while 0 stays picked."
+  (let ((ctrl *mood-control*)
+        (weather *mods-menu-weather*)
+        )
+    (cond
+      ((> weather 0)
+       (let ((i (* 3 (+ weather -1))))
+         (set! (-> ctrl overide cloud) (-> *mods-menu-weather-presets* i))
+         (set! (-> ctrl overide fog) (-> *mods-menu-weather-presets* (+ i 1)))
+         (set! (-> ctrl overide-weather-flag) #t)
+         (set! (-> *setting-control* user-default snow) (-> *mods-menu-weather-presets* (+ i 2)))
+         )
+       )
+      ((> *mods-menu-weather-held* 0)
+       ;; back to the changing weather, from the fixed one's sky
+       (set! (-> ctrl current-interp cloud) (-> ctrl overide cloud))
+       (set! (-> ctrl current-interp fog) (-> ctrl overide fog))
+       (set! (-> ctrl target-interp cloud) (-> ctrl overide cloud))
+       (set! (-> ctrl target-interp fog) (-> ctrl overide fog))
+       (set-time-for-random-weather! ctrl 900.0 900.0)
+       (set! (-> ctrl overide-weather-flag) #f)
+       (set! (-> *setting-control* user-default snow) 0.0)
+       )
+      )
+    (set! *mods-menu-weather-held* weather)
+    )
+  (none)
+  )
+
+(defmacro mods-menu-weather-flag (label weather)
+  "A choice of Misc options > Weather: checked while it is the weather picked."
+  `(new 'static 'popup-menu-flag :label ,label
+        :is-toggled? (lambda () (= *mods-menu-weather* ,weather))
+        :on-confirm (lambda () (set! *mods-menu-weather* ,weather) (none))
+        )
+  )
+
+;; The root menu's last row, after the mods: options of the whole game.
+(define *mods-menu-misc-entry*
+  (new 'static 'popup-menu-submenu :label "Misc options"
+    :entries (new 'static 'boxed-array :type popup-menu-entry
+      (new 'static 'popup-menu-submenu :label "Weather"
+        :entries (new 'static 'boxed-array :type popup-menu-entry
+          (mods-menu-weather-flag "Changing (the game's weather)" 0)
+          (mods-menu-weather-flag "Sunny" 1)
+          (mods-menu-weather-flag "Cloudy" 2)
+          (mods-menu-weather-flag "Foggy" 3)
+          (mods-menu-weather-flag "Light rain" 4)
+          (mods-menu-weather-flag "Rain" 5)
+          (mods-menu-weather-flag "Thunderstorm" 6)
+          (mods-menu-weather-flag "Snow" 7)
+          )
+        )
+      )
+    )
+  )
+
+;; ============================================================================
 ;; Rebuild
 ;; ============================================================================
 
@@ -177,7 +264,8 @@
   )
 
 (defun mods-menu-rebuild ()
-  "Refill the live root entry array from the registry, sorted by label.
+  "Refill the live root entry array from the registry, sorted by label, then
+   Misc options.
    Allocation-free: only the (already allocated) array's contents and length
    change. Runs on register and on every open, never per-frame."
   ;; stable, merge-proof ordering: sort registered mods alphabetically by slug
@@ -207,11 +295,9 @@
         )
       (set! iter (cdr iter))
       )
-    (when (zero? n)
-      (set! (-> *mods-menu-items* 0) *mods-menu-empty-entry*)
-      (set! n 1)
-      )
-    (set! (-> *mods-menu-items* length) n)
+    ;; Misc options always last (so the root menu is never empty either)
+    (set! (-> *mods-menu-items* (min n (+ MODS_MENU_MAX_ENTRIES -1))) *mods-menu-misc-entry*)
+    (set! (-> *mods-menu-items* length) (min (+ n 1) MODS_MENU_MAX_ENTRIES))
     )
   (none)
   )
@@ -360,6 +446,10 @@
   ;; state keeps running while the game is frozen and its `:trans` calls
   ;; `update-menu!`. Calling update-menu! from here as well would read the pad
   ;; and draw the menu twice per frame.
+  ;; --- Misc options > Weather, held on every frame the game runs -------------
+  (if (not (paused?))
+      (mods-menu-weather-update)
+      )
   ;; --- lazy spawn, deliberately LAST ---------------------------------------
   ;; Doing it here guarantees a spawn and an open never happen on the same
   ;; frame (see `mods-menu-spawn!`), and costs nothing until the game is

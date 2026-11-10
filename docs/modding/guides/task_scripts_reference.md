@@ -522,6 +522,24 @@ task modding-package-texture-pack -- --from-source --game jak2 --slug blue-kg-te
 task git-hooks
 ```
 
+### 10. `task modding-models [-- --check]`
+- **Script:** [`mod_models.py`](../../../scripts/modding/mod_models.py)
+- **When?** In a mod whose models come from the games' discs (`custom_assets/<game>/models/models.jsonc`), after a fresh clone or a manifest change; then `task extract`.
+- **Why?** Makes the models (and the other files the manifest copies) from the discs in `iso_data/`, ripping only the DGOs it lacks: the repository keeps no model taken from a game. The mod's release runs the same tool at the player's install. See [Models made from the player's discs](models_from_the_discs.md).
+
+### 11. In-game smoke tests: `smoke_test.py`
+- **Script:** [`smoke_test.py`](../../../scripts/modding/smoke_test.py) (no task: run it with Python)
+- **When?** After a big feature of a mod, and only when the user authorized launching the game (AGENTS.md).
+- **Why?** `install` copies a scenario (from [`smoke_test.template.gc`](../templates/smoke_test.template.gc)) into the GAME build, `run` boots the game until the scenario prints `SMOKE DONE` (or a timeout) and collects its log, screenshots and crash report in `out/smoke/<name>/`, `remove` takes the scenario out again. Record each run in the mod's test notebook. The `smoke-tests` skill explains the whole procedure.
+
+*Example:*
+```bash
+python scripts/modding/smoke_test.py install jak3 docs/modding/current_mod/my_mod_smoke.gc
+task compile-check
+python scripts/modding/smoke_test.py run jak3 my-feature --timeout 300
+python scripts/modding/smoke_test.py remove jak3
+```
+
 ---
 
 ## 11. Common Developer Workflows

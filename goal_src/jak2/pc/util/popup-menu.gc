@@ -40,6 +40,9 @@
   (none))
 
 (defmethod draw-entry ((this popup-menu-flag) (font-ctx font-context) (dma-buf dma-buffer) (hovering? symbol))
+  ;; a disabled flag draws like any disabled entry: a grey label, no check mark
+  (when (and (nonzero? (-> this entry-disabled?)) ((-> this entry-disabled?)))
+    (return ((method-of-type popup-menu-entry draw-entry) this font-ctx dma-buf hovering?)))
   (let ((old-x (-> font-ctx origin x))
         (old-y (-> font-ctx origin y))
         (old-color (-> font-ctx color)))
@@ -202,6 +205,8 @@
       ((-> menu-state on-dynamic-menu-entry-confirm) (-> menu-state entry-index))
       (let ((entry (-> menu-state entries (-> menu-state entry-index))))
         (cond
+          ;; a disabled entry (one the cursor landed on, e.g. the first row) does nothing
+          ((and (nonzero? (-> entry entry-disabled?)) ((-> entry entry-disabled?))))
           ((type? entry popup-menu-dynamic-submenu)
            ;; TODO - dont allow more than 10 nested menus
            (inc! (-> this curr-state-index))

@@ -108,13 +108,16 @@ files when it syncs, and keeps only `release.yml`, `lint.yml` and `build.yml`
 
 ## 6. Release (`release.yml`)
 
-- **Runs:** by hand only, owner only, from a mod repository, with the inputs `mod_name`,
-  `mod_description`, `tag_name` (e.g. `v1.0.0`) and `prerelease`.
+- **Runs:** by hand only, owner only, from a mod repository, with the inputs `tag_name` (e.g.
+  `v1.0.0`, required), `mod_name` and `mod_description` (empty: the last release's, from the
+  mod's `index.json`), `changelog` (optional path to a Markdown file in the repository) and
+  `prerelease`.
 - **Does:**
   - builds Windows and Linux binaries from clean source with static libraries, so players need
     no redistributable;
   - packages `gk`, `goalc`, `extractor` and `data/`, plus any texture pack found in
-    `docs/modding/current_mod/texture_packs/`;
+    `docs/modding/current_mod/texture_packs/`, and `mod_models` when the mod makes its models from
+    the player's discs ([Models made from the player's discs](models_from_the_discs.md));
   - writes `SHA256SUMS.txt`, updates the mod's own `index.json` and commits it back;
   - tags the release `<slug>-vX.Y.Z`. In a mod repository, the slug and game come from its
     `index.json` (else from its `<game>-mod-<slug>` name), so the launcher keeps the same

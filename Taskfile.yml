@@ -186,6 +186,10 @@ tasks:
     desc: "Merge the latest master-dev into every mod repository and push them, without touching this working directory (scripts/modding/sync_all_mods.py). e.g. -- --dry-run, or -- jak2-mod-a jak2-mod-b"
     cmds:
       - "{{.PYTHON}} ./scripts/modding/sync_all_mods.py {{.CLI_ARGS}}"
+  modding-models:
+    desc: "Make the mod's models from the games' discs as custom_assets/<game>/models/models.jsonc describes (scripts/modding/mod_models.py; rips what is missing), then run task extract. Add -- --check to list what is missing"
+    cmds:
+      - "{{.PYTHON}} ./scripts/modding/mod_models.py {{.CLI_ARGS}}"
   modding-sync-catalog:
     desc: "Regenerate master-dev root index.json global catalog from the most advanced release of each mod repository (scripts/modding/sync_global_catalog.py). Add -- --dry-run"
     cmds:
@@ -225,6 +229,9 @@ tasks:
   decomp-file:
     cmds:
       - '{{.DECOMP_BIN_RELEASE_DIR}}/decompiler "./decompiler/config/{{.DECOMP_CONFIG}}" "./iso_data" "./decompiler_out" --version "{{.DECOMP_CONFIG_VERSION}}" --config-override ''{"decompile_code": true, "levels_extract": false, "allowed_objects": ["{{.FILE}}"]}'''
+  decomp-files:
+    cmds:
+      - '{{.DECOMP_BIN_RELEASE_DIR}}/decompiler "./decompiler/config/{{.DECOMP_CONFIG}}" "./iso_data" "./decompiler_out" --version "{{.DECOMP_CONFIG_VERSION}}" --config-override ''{"decompile_code": true, "levels_extract": false, "allowed_objects": {{.FILES}}}'''
   decomp-clean:
     cmds:
       - '{{.PYTHON}} ./scripts/tasks/clean-decomp.py --game "{{.GAME}}"'
@@ -242,14 +249,6 @@ tasks:
       - task: decomp-file
       - '{{.PYTHON}} ./scripts/gsrc/update-from-decomp.py --game "{{.GAME}}" --file "{{.FILE}}"'
       - task: lint-gsrc-file
-  copy-common-naming:
-    cmds:
-      - '{{.PYTHON}} ./scripts/gsrc/copy-common-naming.py --file "{{.FILE}}" --decompiler "{{.DECOMP_BIN_RELEASE_DIR}}/decompiler"'
-      - task: format-json
-  copy-common-naming-from-refs:
-    cmds:
-      - '{{.PYTHON}} ./scripts/gsrc/copy-common-naming.py --update-names-from-refs --decompiler "{{.DECOMP_BIN_RELEASE_DIR}}/decompiler"'
-      - task: format-json
   # ASSET RIPPING
   rip-textures:
     cmds:

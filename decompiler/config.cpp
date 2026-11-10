@@ -328,7 +328,10 @@ Config make_config_via_json(nlohmann::json& json) {
     config.merged_objects.insert(x);
   }
 
-  config.levels_to_extract = inputs_json.at("levels_to_extract").get<std::vector<std::string>>();
+  // a config override can restrict the extraction to some levels (their DGO names)
+  config.levels_to_extract = json.contains("levels_to_extract")
+                                 ? json.at("levels_to_extract").get<std::vector<std::string>>()
+                                 : inputs_json.at("levels_to_extract").get<std::vector<std::string>>();
   config.levels_extract = json.at("levels_extract").get<bool>();
 
   // POC (jak2/features/merc-fr3-injection-poc): optional map of

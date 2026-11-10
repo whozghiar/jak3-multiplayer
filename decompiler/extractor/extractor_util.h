@@ -24,6 +24,10 @@ enum class ExtractorErrorCode {
   EXTRACTION_INVALID_ISO_PATH = 4040,
   EXTRACTION_ISO_UNEXPECTED_SIZE = 4041,
   COMPILATION_BAD_PROJECT_PATH = 4050,
+  // og:jak2-haven-city added: a level port (custom_assets/<game>/ports/*/port.jsonc) run before the
+  // compile (main.cpp, run_level_ports): its source game isn't installed, or the port failed
+  LEVEL_PORT_SOURCE_GAME_MISSING = 4060,
+  LEVEL_PORT_FAILED = 4061,
 };
 
 enum GameIsoFlags { FLAG_JAK1_BLACK_LABEL = (1 << 0) };

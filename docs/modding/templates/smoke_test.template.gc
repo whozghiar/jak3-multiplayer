@@ -1,0 +1,94 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; SMOKE TEST SCENARIOS of <my mod> (Jak 2 / Jak 3). Copy next to the mod's docs, e.g.
+;; docs/modding/current_mod/<slug>_smoke.gc, and keep one numbered scenario per test of the mod's
+;; test notebook (docs/modding/current_mod/<slug>_tests.md). Never list it in game.gd yourself:
+;;   python scripts/modding/smoke_test.py install <game> <this file> --scenario <n>
+;;   task compile-check
+;;   python scripts/modding/smoke_test.py run <game> <test name>     (only with the user's go-ahead)
+;;   python scripts/modding/smoke_test.py remove <game>
+;; The runner reads the lines this file prints with (format 0 ...): "SMOKE PASS ..." and
+;; "SMOKE FAIL ..." are the results, "SMOKE DONE" ends the run.
+;;
+;; This file is compiled last into GAME: the mod's GAME code is visible. A function or global of a
+;; level's code (another DGO) needs a define-extern here and exists only while its level is loaded.
+
+(defconstant SMOKE_SCENARIO 1) ;; set by `smoke_test.py install --scenario`
+
+;; ----------------------------------------------------------------------------
+;; Helpers
+;; ----------------------------------------------------------------------------
+
+(defmacro smoke-wait (secs)
+  "Wait secs seconds of the scenario's clock (real time, it runs under menus too)."
+  `(let ((t0 (current-time)))
+     (until (time-elapsed? t0 (seconds ,secs))
+       (suspend)
+       )
+     )
+  )
+
+;; Screenshot settings of our own, laid out as the kernel's: capture-pc.gc's are debug-only, so a
+;; retail boot has none.
+(deftype smoke-shot-settings (structure)
+  ((width   int32)
+   (height  int32)
+   (msaa    int32)
+   (name    uint8  244)
+   )
+  )
+
+(define *smoke-shot* (new 'static 'smoke-shot-settings :width 1280 :height 720 :msaa 4))
+
+(defun smoke-shot ((tag string))
+  "Save a screenshot <config>/OpenGOAL/<game>/screenshots/smoke-<tag>.png (written about 0.5 s
+later: wait before changing the scene). The runner copies it to out/smoke/<test>/."
+  (format (clear *temp-string*) "smoke-~S" tag)
+  (copyn-charp<-string (-> *smoke-shot* name) *temp-string* 244)
+  (pc-register-screen-shot-settings (the-as screen-shot-settings *smoke-shot*))
+  (pc-screen-shot)
+  (format 0 "SMOKE shot smoke-~S~%" tag)
+  (none)
+  )
+
+(defun smoke-check ((what string) (ok symbol))
+  "Print one result: SMOKE PASS <what> or SMOKE FAIL <what>."
+  ;; ~S prints a string without its quotes (~A keeps them)
+  (format 0 "SMOKE ~S ~S~%" (if ok "PASS" "FAIL") what)
+  (none)
+  )
+
+;; ----------------------------------------------------------------------------
+;; The scenarios
+;; ----------------------------------------------------------------------------
+
+(defbehavior smoke-test-code process ()
+  ;; run under the pause and START menus too, on the real clock
+  (process-mask-clear! (-> self mask) pause menu progress)
+  (set! (-> self clock) (-> *display* real-clock))
+  (format 0 "SMOKE start scenario ~D~%" SMOKE_SCENARIO)
+  ;; a debug boot loads save slot 1: wait for Jak, then for the level around him
+  (let ((t0 (current-time)))
+    (until (and *target* (time-elapsed? t0 (seconds 8)))
+      (suspend)
+      )
+    )
+  (case SMOKE_SCENARIO
+    ((1)
+     ;; example: turn the mod on, go somewhere, look, check
+     ;; (mod-my-slug-set-enabled #t)
+     ;; (start 'play (get-continue-by-name *game-info* "<continue point>"))
+     ;; (smoke-wait 15)
+     (smoke-shot "start")
+     (smoke-wait 1)
+     (smoke-check "Jak is in the game" (the-as symbol *target*))
+     )
+    )
+  (format 0 "SMOKE DONE~%")
+  (loop
+    (suspend)
+    )
+  )
+
+(process-spawn-function process smoke-test-code :name "smoke-test")
