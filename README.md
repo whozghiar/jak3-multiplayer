@@ -123,17 +123,19 @@ The Appearance page gives a color to each part of Jak's and Daxter's clothes. Ev
 - **Your save is safe:** joining loads the host's world and never writes into your own save.
 - **Pause for everyone** with the host's SELECT.
 - **Server administration** for the host: kick, ban, teleport players, allow cheats for guests.
-- **Cheats menu** (L3 + SELECT): every weapon, ammo, health, eco, invincibility, teleports.
+- **Cheats menu** (L3 + SELECT): every weapon, ammo, health, eco, 100 precursor orbs, 100 skull
+  gems, invincibility, teleports.
 
 ## Getting Started
 
 Every player needs the mod installed ([Download & Play](#download--play-via-opengoal-launcher-players)),
 in the same version.
 
-### 1. Enable multiplayer
-Open the Mods menu with **L3 + SELECT**, go to **multiplayer** and turn on **Enable multiplayer
-(START > Options)**. The title screen now lists **Host Game** and **Join Game**, and the pause
-menu gains **START > Options > Multiplayer**. The setting is remembered.
+### 1. Multiplayer is on
+The mod is on from the first boot: the title screen lists **Host Game** and **Join Game**, and the
+pause menu has **START > Options > Multiplayer**. To play the stock game, open the Mods menu with
+**L3 + SELECT**, go to **multiplayer** and turn off **Enable multiplayer (START > Options)**. The
+setting is remembered.
 
 ### 2. Choose your name and look (optional)
 In **START > Options > Multiplayer**:
@@ -259,7 +261,8 @@ gives only the mods you bought.
   new account everywhere, and a host's server no longer recognizes anyone. The server's database is
   `multiplayer-server.db` in the host's settings folder.
 - The host is trusted with the accounts, as on a game server hosted at home: its Mods menu gives it
-  100 orbs or 100 trophies, and its chat commands credit any player.
+  100 orbs or 100 trophies, and its chat commands credit any player. Those gifts also raise the
+  orbs and skull gems the game shows.
 
 ### Co-op
 
@@ -291,20 +294,26 @@ roles.
 - **Missions:** when one player talks to a mission giver, the other is asked to join (D-pad up to
   accept, D-pad down to decline, 15 seconds). Both must accept; the cutscene then waits while the
   other player is brought there.
-- **Cutscenes:** both players watch them together. One is skipped once both press triangle; only
-  the host can pause it. Jak wears the host's outfit, Daxter the outfit of the player who plays
-  him.
+- **Cutscenes:** both players watch them together, started at the same moment once both have
+  loaded them. One is skipped once both press triangle; only the host can pause it. Jak wears the
+  host's outfit, Daxter the outfit of the player who plays him.
+- **Collecting together:** objects a mission counts are shared. In the arena training, a token
+  either player takes disappears for both, and both counters go down.
+- **Same timers:** a mission's timer reads the same on both screens.
+- **Enemies:** they attack both players, the nearest first. In the wasteland, both players see the
+  same marauders and can destroy them.
 - **Waiting for each other:** a waypoint (the yellow beam) waits for both players ("Players here:
   1/2"), and a door that unloads the place behind it stays open for the player still behind it.
 - **Death and failure:** a player who dies on foot near a living partner watches them for 5
-  seconds, then comes back next to them. A failed mission shows for both players and waits for
-  both to choose retry or quit.
+  seconds, then comes back next to them, the camera on them again. A failed mission shows for both
+  players and waits for both to choose retry or quit.
 - **Races:** each player drives their own vehicle in the same race, and the race is won when one
   of the two finishes first.
 - **Every mission plays in co-op:** each player gets their own leaper, turret gun, torpedo, bomb
   robot or mech, and where the game leaves a lizard, two wait side by side.
 - **Burning bush challenges:** the other player can join for 30 seconds (D-pad up). Both play with
-  their own score; the best of those who complete it gets the reward.
+  their own score; the best of those who complete it gets the reward. The other one gets the
+  failure screen: retry the challenge from its start, or quit.
 - Players cannot hurt each other or each other's vehicles.
 
 ## Chat and Server Commands
@@ -323,8 +332,8 @@ does not matter.
 | `/ban name` | Disconnects that player and refuses them until the server stops. |
 | `/tp name` | Brings that player next to the host. |
 | `/tpall` | Brings every player next to the host. |
-| `/give name orbs` | Credits that player's precursor orbs (a negative number takes some). Free roam only. |
-| `/trophies name count` | Credits that player's Metal Head trophies. Free roam only. |
+| `/give name orbs` | Gives that player precursor orbs (a negative number takes some); in free roam, its account too. |
+| `/trophies name count` | Gives that player skull gems; in free roam, Metal Head trophies on its account too. |
 
 The same administration is in **START > Options > Multiplayer > Server administration** while you
 host: kick, ban, teleports, cheats for guests, players hitting each other, sharing story progress

@@ -43,8 +43,10 @@ nobody times out): it describes the local player, pumps the network, and draws n
 and the chat. A process, `mp-manager`, then applies the events received and keeps one copy per
 remote player and per remote object. Detail: [`multiplayer_readme.md` 4.1](multiplayer_readme.md#41-one-frame).
 
-**Off by default.** Nothing runs until the player turns on *Enable multiplayer* in the Mods menu,
-and the stock functions the mod wraps behave as stock outside a session (section 9).
+**On by default, off from the Mods menu.** The mod is on from the first boot (the user's choice);
+turning off *Enable multiplayer* in the Mods menu stops everything it runs and puts the stock
+title screen and options back. The stock functions the mod wraps behave as stock outside a session
+(section 9).
 
 ## 2. The session: one host, up to seven guests
 
@@ -97,7 +99,10 @@ Detail: [`multiplayer_readme.md` 1.1](multiplayer_readme.md#11-network) and
   about 76 ms behind on a local network, between two known states. The delay follows each sender's
   lateness and the amount sent drops on a struggling connection.
 - **Effects and sounds follow.** The mod notes the particle emitters and sounds started by what it
-  sends, and the copy plays the same ones at the same place.
+  sends, and the copy plays the same ones at the same place. A sound plays only from a loaded
+  sound bank, and the game loads the bank of the gun mod its own player holds, and of the vehicle it
+  drives, alone: online, every such "mode" bank stays loaded, and the bank of the vehicle another
+  player drives is loaded too, so their shots and engines are heard.
 - **Outlines.** The renderer draws another player hidden behind a wall as an outline in their
   color.
 
@@ -108,9 +113,11 @@ and [4.2](multiplayer_readme.md#42-puppets).
 
 - **Authority over NPCs.** Citizens, guards, enemies and traffic run on one machine and are copied
   everywhere else. The host simulates everything near it. A guest more than 90 m away from every
-  authority, for 2 seconds, starts simulating its own area and serves the guests near it; back
-  near the host, it hands over. So players can split up across the map and each keeps a living
-  world.
+  authority (400 m in the wasteland, crossed by vehicle), for 2 seconds, starts simulating its own
+  area and serves the guests near it; back near the host, it hands over. So players can split up
+  across the map and each keeps a living world.
+- **Enemies fight every player.** On the authority, an enemy picks the nearest player, the local
+  one or another player's puppet, every frame.
 - **Damage counts once,** on the machine that owns the victim: a player's shot on an NPC copy is
   sent to the NPC's authority, a blow on another player is sent to that player.
 - **Shared events.** Enemy deaths, broken crates, pickups taken, doors opening, elevator trips and
@@ -150,12 +157,15 @@ waits for the other player).
 | A door that unloads the area behind it | Hold | It stays open for the player still behind it. |
 | A race | One race | The host's race counts; the other player takes a racer's place. |
 | A death | Respawn | The player watches their partner for 5 s, then comes back next to them. |
+| A cutscene starts | Hold | Each machine waits, loaded, until the other has loaded it too. |
+| A mission's timer | Host's time | Once a second the host sends how long each mission has run; the guest's timer follows. |
+| An object a mission counts | Shared | Collected on one machine, collected on the other: one count. |
 
 **The co-op save** is a file of its own, `multiplayer-campaign.bin`, next to the memory card saves.
 Only the host writes it: after each story step (a mission's start or end) and wherever the game
 would auto-save. Each save sends a `coop-saved` event so both screens show the save icon.
 
-Detail: [`multiplayer_readme.md` 4.13 to 4.34](multiplayer_readme.md#413-co-op-skipping-a-cutscene-together).
+Detail: [`multiplayer_readme.md` 4.13 to 4.39](multiplayer_readme.md#413-co-op-skipping-a-cutscene-together).
 
 ## 7. The economy (free roam)
 

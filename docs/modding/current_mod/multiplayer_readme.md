@@ -60,7 +60,7 @@ Two layers, one rule: C++ moves bytes, GOAL gives them meaning.
   closes the connection with its reason as the closing text, which the guest shows; "Connection
   refused" or "Connection timed out" (8 s) when nothing answers.
 
-  Message types: `HELLO` (protocol version, now 11, and the player's secret id, 4.20), `WELCOME`
+  Message types: `HELLO` (protocol version, now 13, and the player's secret id, 4.20), `WELCOME`
   (slot), `STATE`, `LEAVE`, `EVENT`, `ACTORS`, `POSES`, `BLOB` (`[u8 from][u8 to][u32 total][u32
   offset][u32 id][bytes]`, 15000 bytes a message: the host's world for a guest that joins, 1.7,
   tagged with the guest's request: a guest takes blobs from the host alone, loads only the one of
@@ -240,6 +240,31 @@ touching every part of a vehicle for several frames counts once, as stock code c
   same objects, the latest call per sound id. The copy plays each one at its place with a sound id
   of its own per owner's id: the sound player updates a sound played again with the same id, so an
   engine stays one sound, and it stops when the owner stops it or stops updating it for 0.4 s.
+  What our player fired (a shot, the scatter gun's blast, which is no projectile) has its sounds
+  and effects sent with our player's entry (`mp-fx-pid`): a shot that hit before the next batch
+  was in none, and its sounds were lost. A shot of ours makes the next frame a batch. The sound
+  slots of a batch hold 48 sounds, their owners' pids too (`snd-pid` held 24: slots 24 to 47
+  wrote over the first sounds, and engines, updated every frame, lost theirs).
+- **Mode sound banks.** A gun mod's sounds (and the jet-board's, the lizard's, Dark and Light
+  Jak's, the mech's, Daxter's mode) are in a "mode" bank, and the game loads only the one of what
+  its player holds (`target-gun-type-set!`): another player's shots were silent unless both held
+  the same mod, and Daxter's own were silent on his machine (his mode holds `modeidax`). Online,
+  the Jak 3 overlord keeps every mode bank it loaded (`mp::keep_mode_banks`, extra mode slots in
+  `sbank.cpp`, unloads skipped in `srpc.cpp`), and `mp-load-mode-banks` loads the 18 of them
+  once, one per frame while the sound loader is free. The overlord looks a sound up by its name in
+  capitals, `-` as `_` (`strcpy_toupper`). Measured (`daxter-gun-hold`, `log`'s "in no bank"):
+  of the guest's shots the host replayed, 10 of 32 found no bank (`red-shot-hit`, which no bank
+  has), against 30 of 30 without the banks (`daxter-gun-hold-before`, `mode-banks 0`).
+- **Vehicle sound banks.** Each wasteland vehicle has a bank of its own (`wcar.gc` `bank-replace`:
+  the toad's `wastoad`, the turtle's `wasturt`, the snake's, the marauders' and others' `wassnake`,
+  `wasscorp`, `wasrhino`, `wasmir`, the factory car's `facveh`), which the levels load in place of
+  `wasall1` for the player who drives it alone: another player's vehicle was silent. While another
+  player of our place drives one, its bank is asked for (`mp-load-vehicle-banks`, mode 3: an extra
+  slot); a bank there that the levels then want (our own player gets into that vehicle) is freed
+  and loaded where they load it (`srpc.cpp` `LOAD_BANK`). Measured (`vehicle-sounds`, in the
+  desert, the host driving the toad by the guest): 696 of the 777 sounds the guest replayed were in
+  no bank; with the bank, 48 of 401 in a window, `toad-road` and `toad-scrape`, which no bank the
+  driver has holds either.
 - **Authority.** The host always simulates its NPCs. A guest shows the NPCs of a lower-slot
   authority within 60 m and simulates its own once farther than 90 m from all of them, after 2 s
   in the new situation (`mp-update-authority`); its state carries the `authority` flag. An
@@ -303,7 +328,8 @@ the union. Host setting **Share story progress** (on by default).
 - **Cutscenes.** Every cutscene starts in `scene-player-init`, wrapped: its scenes and continue
   point go to the others (`scene` events), and a player of the same region (same NPC authority)
   with no cutscene playing starts the same one, with its commands. Gated by **Share story
-  progress**. Its Jak wears the host's outfit and its Daxter the Daxter player's (4.17).
+  progress**. Its Jak wears the host's outfit and its Daxter the Daxter player's (4.17). Every
+  machine starts it at the same moment (4.38).
 - **Physics objects.** A `rigid-body-object` of the level (not a vehicle) within 300 m of a player
   goes with the authority's batch, named the same on every machine: its entity's aid, plus its
   rank among the objects that entity's process spawned (the volcano's lava platforms are 5
@@ -576,6 +602,20 @@ world and has NPCs react to online players, and to take the best of both. Read i
 | Co-op saves apart from the single-player saves, on their own, with the save icon (a mission's end included) | 1.7. |
 | A text chat between the players, the keyboard alone, commands for the administrator | 4.35. |
 | Kleiver's shop in Spargus, opened from his line, trading orbs | 4.20. |
+| Co-op: the objects a mission counts are shared, collected for both, one count | 4.36. |
+| A dead player's camera back on its player once it comes back | 4.19. |
+| Enemies attack every player, the nearest first | 4.39. |
+| The other players' weapon and vehicle sounds heard | 1.4. |
+| Cutscenes in step on every machine | 4.38. |
+| Daxter keeps his gun in hand | 4.8. |
+| Daxter's shots seen and heard by the others | 1.4. |
+| No vehicle shown twice when a player takes one | 4.3. |
+| The wasteland's marauders seen and hit by every player | 4.39. |
+| A blow on another player sounds once | 4.2. |
+| The mod on by default, turned off from its Mods menu entry | `mp-config-load!` (`enabled` 1 without a config); the Mods menu's toggle (`mp-set-enabled!`). Checked by `mod-toggle` (retail boot, no config): Host Game and Join Game listed, gone once turned off, back once on. |
+| Gifts of orbs and Metal Head skull gems | 4.40. |
+| Missions and their timers alike on every machine | 4.37. |
+| A challenge lost to another player offers its retry | 4.29. |
 
 ## 3. Vanilla touch points
 
@@ -597,7 +637,9 @@ mission pages (`#x159c`-`#x159f`), Daxter's L1 + triangle prompt (`#x15a0`), a f
 | `goal_src/jak3/engine/gfx/foreground/foreground.gc` | `*pc-merc-outlines*` (eight draw-controls, colors, Dark Jak levels, `off?`) and `pc-merc-bits outline`, `dark-skin`, `skin`: `pc-merc-draw-request` flags those models and puts their color at byte 20 of the flags, their Dark Jak level at byte 18 (4.9, 4.11); `*pc-merc-skins*` (24 draw-controls, 16 tints each): their tints after the flags (4.12). |
 | `game/graphics/opengl_renderer/TextureAnimator.cpp`, `.h`, `OpenGLRenderer.cpp`, `.h`, `foreground/Merc2.cpp`, `.h`, `loader/common.h`, `shaders/merc2.vert`, `.frag` | Dark Jak's skin built at 17 levels for a model flagged `dark-skin` (4.11); the outfit tints on the textures of each group (4.12), the cutscenes' high resolution Jak and Daxter included (4.17). |
 | `goal_src/jak3/levels/desert/race/course-race.gc`, `levels/desert/artifact-race/artifact-race.gc` | The race's start waits on `mp-race-hold?`; then `mp-race-bind-players!` (course-race.gc) puts the other player in a racer slot (4.15). |
-| `goal_src/jak3/engine/scene/scene.gc` | The scene player's wait loop also waits on `mp-scene-hold?`: a mission's introduction held until every player is there (4.24). |
+| `goal_src/jak3/engine/scene/scene.gc` | The scene player's wait loop also waits on `mp-scene-hold?`: a mission's introduction held until every player is there (4.24); after its last wait, the cutscene loaded, a loop on `mp-scene-sync-hold?`: started together (4.38). |
+| `game/overlord/jak3/sbank.cpp`, `.h`, `srpc.cpp` | 24 more bank slots; while online (`mp::keep_mode_banks`) a mode bank is not unloaded (every gun's sounds stay loaded for the other players' shots), and a bank asked in mode 3 (another player's vehicle) takes an extra slot, moved to the levels' slot when they want it (1.4). |
+| `game/sound/989snd/player.cpp`, `.h`, `loader.h`, `game/sound/sndshim.cpp`, `.h` | `snd_HasSound` and `snd_BankCount`, for the test log of the sounds no bank has (1.4). |
 | `goal_src/jak3/levels/desert/wvehicle/wvehicle-race.gc` | The racers' AI reads every other racer's forward direction through `mp-racer-fvec!`: another player's puppet in a racer slot has no rigid body (its `rbody` read crashed every racer, 4.15). |
 | `game/graphics/opengl_renderer/foreground/Merc2.cpp`, `.h`, `Shader.cpp`, `.h`, `OpenGLRenderer.cpp`, `shaders/merc2_outline.vert`, `.frag` | The outline pass (`Merc2::draw_outlines`), run after the `generic-warp` bucket (4.9). |
 | `game/kernel/jak3/kmachine_extras.cpp` | `pc_set_levels` adds the levels kept for a distant player's models (`mp::extra_render_levels`). |
@@ -610,6 +652,7 @@ Wrapped at load time, each calling the stock version kept by `define-perm`:
 | Function or method | File | Why |
 |---|---|---|
 | `enemy` `mark-as-dead` | `engine/common-obs/enemy-states.gc` | Share enemy deaths; a Metal Head's trophy for the player whose blow killed it (4.20). |
+| `enemy` `update-focus` | `engine/ai/enemy.gc` | Online, an enemy focused on a player picks the best player every frame, the nearest among the most aware (4.39). |
 | `progress` `set-menu-options` | `pc/progress/progress-pc.gc` | The `'multiplayer` page, the title screen's Host Game and Join Game pages, the lobby (1.8). |
 | `determine-pause-mode` | `engine/draw/drawable.gc` | Online, SELECT is the host's pause for everyone (a tap) and the player list (held); a guest's SELECT and START do nothing while the host paused (4.7, 4.10), nor during a cutscene, where the host's START pauses it for everyone (4.21). |
 | `blit-displays-work` `set-menu-mode` | `engine/gfx/blit-displays-h.gc` | No still copy of the screen while the world runs under the START menu (4.10). |
@@ -717,7 +760,14 @@ from the old place to the new one, across the world.
   receives for a moment (`mp-stolen-copy?`). Before, the stolen vehicle could show twice. Only the
   player vehicles: city bikes and cars (types 0-6) and Spargus buggies (12-19).
 - **NPC vehicles:** a player presses triangle next to the replica of another authority's NPC
-  vehicle, gets the same vehicle, and that authority removes its own (`vehicle-taken`).
+  vehicle, gets the same vehicle, and that authority removes its own (`vehicle-taken`). That
+  authority keeps sending its vehicle until the event reaches it: those late states made the copy
+  again, held then faded 4 s where our own vehicle appeared, the vehicle seen twice. The copies of
+  that owner's vehicles (bodies and wheels) within 5 m of the one taken are now dropped for 3 s
+  (`mp-stolen-copy?`, `*mp-taken-from*`). Its prompt is cleared every frame: kept from the last
+  frame on foot, "take this vehicle" stayed drawn while we drove the one taken. Checked by
+  `take-npc-vehicle`: after the take, the guest's screen holds its own turtle alone, the host's its
+  copy alone (body and four wheels), the host's NPC turtle gone.
 - **Daxter at the wheel:** a player playing Daxter gets in with the stock
   `'change-mode 'pilot-daxter` (`pilot` with `as-daxter?`: the target's art becomes Daxter's
   driving art), whose animations are now in GAME (section 3); `mp-pilot-mode` picks it from the
@@ -822,14 +872,16 @@ put away for him (`gun-type` 0) and `multiplayer-guns.gc` fires instead
   his mode too and sets `using-gun-type` on the D-pad; R1 fires it. The ranges each mod's shots and
   aim use (`fire-range`, `track-*`), which `target-gun-type-set!` sets for Jak only, are set
   when the gun comes out (`mp-daxter-gun-setup`). A D-pad press takes the gun out too, the mod
-  just chosen in his hand, without firing (2 s, as after R1); before, the mod changed unseen until
+  just chosen in his hand, without firing; before, the mod changed unseen until
   he fired (`daxter-moves`). The mod's name and ammo show above the prompts (`mp-draw-daxter-gun`,
   y 292; the prompts are at 320).
 - *Aim:* from his chest toward the nearest enemy, guard, civilian or crate within 40 m in a
   60-degree cone ahead (`fill-actor-list-for-box`, `find-nearest-focusable`, as
   `target-gun-find-track`), else straight ahead; the target found is the gun's tracked target
   for homing shots. `fire-point` is 0.6 m ahead, `fire-dir-out` the aim.
-- *The gun in his hand:* while he holds it (2 s after R1 is let go), `target-gun-compute-pos`
+- *The gun in his hand:* once out, it stays as Jak's does, until a state that does not allow it (a
+  punch, a hit, a vehicle: `mp-daxter-gun-allowed?`; it went away 2 s after R1 before, which the
+  user saw as the gun vanishing from his hand), `target-gun-compute-pos`
   (wrapped, called by the gun's post) puts it at his gun joint (the sidekick's node 28) at that
   joint's scale with `gun-daxter` 1, as the stock does when he fires from a vehicle, and sets the
   gun's clip to the mod's open shape (`gun-idle-red-ja`...: the gun's `idle` state holds its folded
@@ -1103,7 +1155,11 @@ which fails a mission that fails on death), then resets the game at the continue
 a player who dies on foot while a teammate is alive in game within 300 m (`mp-living-teammate`,
 the nearest) comes back 2 m from that teammate, health full, invulnerable for 3 s, in
 `target-stance`, and no task manager is told: a mission goes on while one player lives. Dying
-alone, or in a vehicle, stays the stock (the continue point; the mission fails if it does so).
+alone, in a vehicle, or during our own burning bush challenge (4.29) stays the stock (the continue
+point; the mission fails if it does so). The stock reset makes a new player; ours stays, so the
+flags a death in lava or water sets to pin the camera where it happened (`tf6`, `tf12`, `tf14`:
+`target-cam-pos` returns `alt-cam-pos`) are cleared and the camera teleported: it stayed at the
+place of death after the player came back (`coop-respawn-lava`, `die lava`).
 
 Before coming back, the dead player watches that teammate for 5 s, as himstan's death spectate
 does: its body stays where it fell, the camera follows the teammate's puppet (`'change-target`),
@@ -1184,9 +1240,9 @@ user plans (rare items, customization, more features), for free roam alone:
   within 1.2 m of him (a teleport or his spot moving onto it would trap it inside). He turns
   toward our player within 12 m, and his five idle clips (`*mp-kleiver-idles*`) follow one
   another every 6 s, blended 30 frames (`mp-kleiver-live`).
-- **The host's money.** The Mods menu gives the host "Host: +100 precursor orbs" and "Host: +100
-  Metal Head trophies" (`mp-econ-grant-self`): its own account only, while its accounts are open.
-  The chat's `/give` and `/trophies` credit any player (4.35).
+- **The host's money.** The Mods menu's "+100 precursor orbs" and "+100 skull gems (Metal Heads)"
+  (`mp-econ-grant-self`) also credit the host's own account while its accounts are open; the
+  chat's `/give` and `/trophies` credit any player (4.35). Both raise the game's counts too (4.40).
 - **Kleiver's shop.** At Kleiver's spot, within 4 m, on foot: his line ("Kleiver: Got orbs? I've
   got just what you need.") and "Press triangle to trade". Triangle's other uses there come first
   (a cutscene, L1 + triangle to ride along, another player's vehicle or shoulder, one of our
@@ -1461,7 +1517,14 @@ manager's handle or the handle of the orb it left). Both nodes carry the `bbush`
 and in free roam alike (multiplayer.gc "Burning bush challenges, side by side"):
 
 - **Each player's own.** The challenges' nodes are not shared (1.5) and their failures are not
-  voted (4.26: `personal?`): a player who fails one chooses alone, the others play on.
+  voted (4.26: `personal?`): a player who fails one chooses alone, the others play on. A player
+  who dies during its own challenge gets the stock death (its challenge fails, with its screen),
+  not the co-op return next to a teammate (4.19).
+- **Beaten.** Once decided, a player who reached the objective but not with the best score gets
+  the challenge's failure screen (its `fail-info`: retry from its start, or quit), waiting for its
+  choice (`mp-challenge-offer-retry`); before, its challenge ended as reached, its reward withheld,
+  with no way to try again. Checked by `challenge`: the guest, beaten 8.81 s to 6.03 s, gets the
+  screen, and X restarts the challenge from its start.
 - **The invitation.** When our play starts a challenge (`task-manager-init-by-other`, its node
   closed by us within 30 s), the others are invited (`challenge` event) for 30 s, when its
   introduction is open in their game: "Host started a challenge: D-pad up to join (28)". D-pad up
@@ -1710,6 +1773,89 @@ multiplayer-chat.gc, `kmultiplayer.cpp` "Chat", `game/graphics/pipelines/opengl.
 | `/tp name`, `/tpall` | That player, or every player, brought next to the host. |
 | `/give name orbs`, `/trophies name n` | That account credited (debited, negative), while the accounts are open (free roam). |
 
+### 4.36 Co-op: objects a mission counts, collected together
+
+The arena training (`arena-training-1`) counts the tokens left: its manager's `idle` sets
+`*game-info* counter` to the tokens of its actor group still answering `'alive`. A token taken
+(`'touch`) plays its effect and sound, tells the manager, and hides; its entity is not marked dead,
+so nothing was shared, and each player had its own count. multiplayer-world.gc "a mission's
+object collected": in co-op, while that node is open, the tokens are watched every frame
+(`mp-watch-pickups`, 64 at most: the arena has 35); one seen waiting (`idle`) that goes to `hide`
+was collected here, and the others get `kill-entity` with its entity. They collect theirs as its
+touch does (`mp-apply-remote-kill`, `mp-mission-pickup?`): effect, sound, manager told, so the
+count follows. The temple's board training tokens (`tpl-token`) mark their entity dead and go
+through `process-entity-status!`, which now shares them too in co-op. A collection received is
+noted in the remote-kill ring, so it is not sent back.
+
+Checked by `coop-tokens`: the host takes two tokens, the guest's count goes 35 to 33; the guest
+takes one, both read 32.
+
+### 4.37 Co-op: mission timers
+
+Each machine runs its own task manager of a mission (4.24), started when that machine got there:
+a countdown's `start-time` (against its `time-limit`, `hud-timer-handler`) and a stopwatch's
+`state-time` (the arena training's) were seconds apart, and so were the timers on screen and the
+moment a time limit failed. multiplayer.gc "Co-op: mission timers": once a second the host sends,
+for each manager alive under its own node, how long it has run since its `start-time` and in its
+state (`mission-timer` event, the state's name in the text). A guest whose manager of that node is
+in the same state moves its `start-time` and `state-time` there, half its round trip included,
+when they differ by more than 0.1 s.
+
+Checked by `coop-tokens` (the guest's manager started 2 s after the host's): the guest's timer
+started at the host's moment within 0.07 s, the guest's playout delay (`log-tokens`).
+
+### 4.38 Cutscenes started together
+
+Each machine loads a cutscene's art and sound at its own pace, the one that got the `scene` event
+a little later: they played apart. After the last wait of the scene player's `wait` state
+(`engine/scene/scene.gc`, art and sound loaded), a loop of the mod waits on `mp-scene-sync-hold?`
+(multiplayer.gc "Cutscenes started together"): while another player of our region watches a cutscene not yet
+loaded there nor playing (its state's `in-scene` without `scene-ready` or `scene-play`), 5 s at
+most. Our state carries `scene-ready` while held there and `scene-play` while ours plays, so the
+last machine ready starts at once and the others as soon as they see it.
+
+Checked by `scene-sync`: the host held 0.15 s and the guest 0.07 s, and they started at 57.22 s
+and 57.16 s of the host's clock (the guest reads it its playout delay, about 0.08 s, behind).
+
+### 4.39 Enemies and every player
+
+- **Hostile to the puppet.** A nav enemy turns hostile only to what stands within its notice
+  heights, read from `get-trans` mode 1 (`can-become-hostile-to?`, `engine/nav/nav-enemy.gc`), the
+  ground under it (`gspot-pos`). The puppet never probes the ground: its `gspot-pos` stayed at
+  -10000 m, so enemies noticed another player but went on fighting ours. `mp-puppet` gives its
+  position for mode 1 (`log-focus`: its ground point 3.1 m, its height).
+- **The nearest player.** An enemy keeps its focus while that focus lives, unless it has
+  `multi-focus` (`update-focus`, `engine/ai/enemy.gc`). Online, one focused on a player (ours or a
+  puppet) picks its best player every frame (`find-best-focus`: the most aware, then the nearest),
+  as the stock multi-focus enemies do (the `update-focus` wrapper). Checked by `enemy-focus` (the
+  sewers, `bring-enemy`): the host's hostile wasp brought 6.3 m from the guest's puppet and 7.7 m
+  from the host picks the puppet, hostile; flown back nearer the host, it turns to the host again.
+- **Marauders in vehicles** chase the target their squad gave them at their spawn, our player
+  (`was-squad-control.gc`). On the authority, each `v-marauder` sent goes after the player nearest
+  to it when another one is 10 m nearer than the one it chases (`'go-hostile`,
+  `mp-marauder-retarget`).
+- **Rams.** A copy of a vehicle is a still sphere: our vehicle's collision with it sends the copy
+  `'impact-impulse`, which it ignored, so marauders could only be shot. It is now sent to the
+  owner (`ram` event, `mp-replica-ram`: five a second at most, never a teammate's own vehicle in
+  co-op), which gives its vehicle the same impact from our puppet (`mp-on-ram`): its `on-impact`
+  computes the damage. Checked by `ram` (`ram-copy`, the collision's message to the copy): the
+  host's turtle, rammed hard on the guest's screen, explodes on the host's.
+- **The wasteland's regions.** A guest showed the host's NPCs within 60 m and took over its own
+  beyond 90 m; marauders spawn about 300 m out and the players drive apart: the roles flipped, and
+  each player saw its own marauders, which the other neither saw nor could hit. When both players
+  stand in a desert level, the range is 400 m (shown within two thirds of it, `mp-region-range`).
+  Checked by `desert-region`: the guest 150 m from the host in the desert shows the host's NPCs
+  (40 copies) and simulates none.
+
+### 4.40 Gifts of orbs and skull gems
+
+The Mods menu's "+100 precursor orbs" and "+100 skull gems (Metal Heads)" (any player allowed
+cheats) and the host's `/give` and `/trophies` raise the game's counts the HUD shows
+(`*game-info*` `skill` and `gem`, `mp-give-own`); another player's by a `gift` event. In free roam
+the account is credited as before (4.20). Before, they credited the account alone, which only
+Kleiver's page shows, and only in free roam: in co-op the entries were grayed and the commands
+answered that the economy runs in free roam only. Checked by `gift`.
+
 ## 5. Testing in game
 
 ### 5.1 Unit tests and compile
@@ -1794,7 +1940,7 @@ A script line is `<seconds> <command>`:
 
 | Command | Effect |
 |---|---|
-| `enable`, `name <w>`, `color <n>`, `character <n>` | Mod settings. |
+| `enable`, `disable`, `name <w>`, `color <n>`, `character <n>` | Mod settings (`disable`: the Mods menu toggle turned off). |
 | `host <ip:port>`, `join <ip:port>`, `leave` | Session. |
 | `press <button> <ms> [lx ly]`, `stick <lx> <ly> <ms>`, `stick-r <rx> <ry> <ms>` | Force pad 0 (button names in PS2 order, at full pressure: X drives a buggy; sticks 0-255, 128 centered; `press` with a left stick moves while it fires; the right stick turns the camera). |
 | `goto-player <slot> [x z]`, `face-player <slot>`, `goto-behind <slot> <m>` | Stand next to a remote player (or x and z meters from it), turn to it; stand that far behind it, out of its view. |
@@ -1838,7 +1984,14 @@ A script line is `<seconds> <command>`:
 | `log-econ`, `goto-merchant`, `goto-orb` | Our balances as the host sent them, our last purchase's answer, whether we stand at Kleiver's, and on the host its accounts' state; stand at Kleiver's shop; stand on the nearest precursor orb (it is taken). |
 | `econ-claim <aid>`, `econ-grant <slot> <orbs>`, `shop-buy <item>` | Claim the orb of that entity without taking it (0: the nearest, from where we stand), a cheat the host must refuse; the host credits a player (a test of its accounts; nothing on a guest); buy shop item n as the page's X does. |
 | `kill-mh <slot>` | On the host: a lethal blow from player slot's character (ours or its puppet) to the nearest Metal Head, credited by the economy. |
-| `die`, `log-respawn` | A blow that kills our player; the times we came back next to a teammate, our state and health, the teammate found. |
+| `die [mode]`, `log-respawn` | A blow that kills our player (`lava`: the death that pins the camera); the times we came back next to a teammate, our state and health, the teammate found, whether the camera is pinned at the place of death and how far it is from us. |
+| `mode-banks <0\|1>`, `log-banks` | 0: no mode sound bank loaded for the other players (counter-test, 1.4); the overlord's bank slots and the sound player's banks. `log` counts the sounds other players played here that no loaded bank has, and names them. |
+| `touch-nearest <type>`, `log-tokens` | Our player touches the nearest waiting process of that type (an `arena-token` collected); the arena training's tokens waiting and hidden, its counter, the collections sent, its timer and when it started in the host's clock (4.36, 4.37). |
+| `log-focus` | Each enemy within 40 m of a player: what it focuses (us, a puppet), its awareness, its distances; our health, the enemy blows on puppets forwarded, each puppet's ground point (4.39). |
+| `log-scene` | The cutscene playing here, how long, and when it started in the host's clock (4.38). |
+| `bring-enemy <type> <slot> <m>` | On the authority, its hostile enemy of that type (else the first) moved that far beyond player slot's puppet, away from us, 2 m up; then its best focus there (4.39). |
+| `ram-copy <skeleton> <impulse>`, `log-rams` | The nearest vehicle copy of that skeleton gets the `'impact-impulse` our vehicle's collision would send; the rams sent and applied, the state of our first turtle (4.39). |
+| `log-take` | The NPC vehicle copy triangle would take, what the prompt waits on, and each vehicle copy within 10 m (distance, flags, type, model, size) (4.3). |
 | `net <ms> <jitter> <loss %>`, `log-net` | The test network from now on (what this instance receives, as `--latency` and `--loss`); each peer's network pressure, the share of messages delivered both ways, the queueing and the bytes sent it last second. |
 | `look-player <slot>` | Face that player, the camera put 6 m behind us, 2 m up and 1.5 m aside on the line to it (`'teleport-to-vector-start-string`): a screenshot shows that player ahead. |
 | `log-outline` | Outlined models the renderer drew since boot, the pixels of fill and outline it drew last frame where walls hide players (`pc-mp-outline-pixels`), each player in the outline table with its color. |
@@ -2183,7 +2336,18 @@ public IP.
 - Past 256 events waiting in a paused game, the oldest effects are not replayed (4.30).
 - The economy is a proof of concept: one server per host machine (its `server=` id), free roam
   alone, eight gun mods and four outfits to buy. Co-op does not share the orb and skull gem
-  counters yet: each player counts what it takes.
+  counters yet: each player counts what it takes. The objects a mission counts are shared for two
+  types alone, the arena training's and the temple's board training tokens (4.36).
+- A ram on another player's vehicle damages it on its owner's machine, but does not push it (its
+  copy is a still sphere): only the rammer bounces.
+- The wasteland's regions are 400 m wide (4.39): beyond, each player simulates its own NPCs, and
+  marauders are each player's again.
+- An enemy picks the nearest player every frame, with no hysteresis: two players at the same
+  distance may trade its focus.
+- `take-npc-vehicle` depends on the host's empty turtle staying near the guest: it passed once
+  (the guest drives its own turtle, no copy of the host's left on either screen), and twice the
+  turtle was gone before the guest came (traffic sends an unseen empty vehicle back to its pool).
+- `red-shot-hit` is in no sound bank: the scatter gun's hits are silent, as in the stock game.
 - A player's account rests on its `multiplayer.cfg` (`uid=`): a player who loses that file loses
   its accounts on every server. The host can change any account (its database is on its machine).
 - The chat keeps printable ASCII: accented letters lose their accent; another script's letters
