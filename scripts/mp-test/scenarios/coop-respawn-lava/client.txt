@@ -1,0 +1,21 @@
+# Co-op respawn after a death in lava, guest side: lava pins the camera where Jak dies (tf6,
+# alt-cam-pos). The guest watches the host 5 s, comes back next to it; the camera must follow the
+# guest again, not stay at the place of death (the user's bug).
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+45 join 127.0.0.1:7777
+45.1 wait-joined
+46 character 0
+50 goto-player 0 12 0
+52 die lava
+55 log-respawn
+55.5 screenshot dying
+63 log-respawn
+63.5 log-me
+64 screenshot back
+66 stick 128 0 1500
+68 log-respawn
+68.5 screenshot walked
+70 log

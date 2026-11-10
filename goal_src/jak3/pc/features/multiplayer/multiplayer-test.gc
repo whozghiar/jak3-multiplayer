@@ -10,7 +10,7 @@
 ;; `mp-test-update`, called every frame from the multiplayer hook, runs it.
 ;;
 ;; Commands (one per line, after the time in seconds):
-;;   enable | name <word> | color <n> | character <n>       mod settings, in memory and saved
+;;   enable | disable | name <word> | color <n> | character <n>       mod settings, in memory and saved
 ;;   host <ip:port> | join <ip:port> | leave                 session
 ;;   address <ip:port> | log-lobby                           server address field only; menu page, title entries, lobby
 ;;   wait-menu <page>                                        the script waits: the menu shows that page (title...)
@@ -1201,6 +1201,12 @@
   (none)
   )
 
+;; the last sound another player played here that no loaded bank has (log)
+(define-extern pc-mp-sounds-missing (function string int))
+(define-extern pc-mp-sounds-checked (function int))
+(define-extern pc-mp-log-banks (function none))
+(define *mp-test-sound-name* (new 'global 'string 32 (the-as string #f)))
+
 (defun mp-test-log ()
   "Print the multiplayer state: session, local player, every remote player and its puppet."
   (format 0 "[mp-test] log mode ~D slot ~D players ~D~%" *mp-mode* *mp-local-slot* (+ 1 (mp-player-count)))
@@ -1249,6 +1255,10 @@
     (-> *mp-pose* emitters-shown)
     )
   (format 0 "[mp-test] sounds sent ~D played ~D~%" (-> *mp-pose* sounds-sent) (-> *mp-pose* sounds-played))
+  ;; the sounds other players played here that no loaded bank has: silent here
+  (let ((missing (pc-mp-sounds-missing (clear *mp-test-sound-name*))))
+    (format 0 "[mp-test] sounds looked up ~D, in no bank ~D (last ~S)~%" (pc-mp-sounds-checked) missing *mp-test-sound-name*)
+    )
   (format
     0
     "[mp-test] last emitter kind ~D index ~D home #x~X~%"
@@ -1267,10 +1277,12 @@
     )
   (format
     0
-    "[mp-test] pvp hits taken ~D reacted ~D last pushed ~m~%"
+    "[mp-test] pvp hits taken ~D reacted ~D last pushed ~m; blows on puppets ~D, landed ~D~%"
     (-> *mp-hit-stats* taken)
     (-> *mp-hit-stats* reacted)
     (-> *mp-hit-stats* pushed)
+    *mp-hurtbox-blows*
+    *mp-hurtbox-landed*
     )
   ;; the local props sent with the player
   (when (and *target* (nonzero? (-> *target* gun)))
@@ -1436,6 +1448,8 @@
 (define *mp-test-crates* 0)
 (define *mp-test-nearest* (the-as process-drawable #f))
 (define *mp-test-nearest-dist* 0.0)
+(define *mp-test-count-a* 0) ;; counters of iterate-process-tree callbacks (log-tokens)
+(define *mp-test-count-b* 0)
 
 (defun mp-test-crate-scan ((proc process-drawable))
   "iterate-process-tree callback: count live crates, keep the nearest to the player."
@@ -1568,6 +1582,18 @@
       (cond
         ((string= cmd "enable")
          (mp-set-enabled! #t)
+         )
+        ((string= cmd "log-banks")
+         ;; log-banks: the sound banks loaded (the overlord's slots, the sound player's count)
+         (pc-mp-log-banks)
+         )
+        ((string= cmd "mode-banks")
+         ;; mode-banks <0|1>: 0 loads no mode sound bank for the other players (counter-test)
+         (set! *mp-test-no-mode-banks* (zero? (mp-test-int)))
+         )
+        ((string= cmd "disable")
+         ;; disable: the Mods menu's toggle turned off (its on-confirm)
+         (mp-set-enabled! #f)
          )
         ((string= cmd "name")
          (mp-test-word)
@@ -1759,6 +1785,262 @@
                )
            )
          )
+        ((string= cmd "touch-nearest")
+         ;; touch-nearest <type>: our player touches the nearest waiting (idle) process of that type,
+         ;; as its collision would (an arena-token collected)
+         (mp-test-word)
+         (set! *mp-test-type-name* (string->symbol (-> *mp-test* word)))
+         (set! *mp-test-nearest* #f)
+         (set! *mp-test-nearest-dist* (meters 100000))
+         (iterate-process-tree *entity-pool*
+                               (lambda ((p process))
+                                 (when (and (= (-> p type symbol) *mp-test-type-name*) *target*
+                                            (-> p next-state) (= (-> p next-state name) 'idle)
+                                            )
+                                   (let ((d (vector-vector-distance (-> (the-as process-drawable p) root trans)
+                                                                    (-> *target* control trans)
+                                                                    )
+                                            )
+                                         )
+                                     (when (< d *mp-test-nearest-dist*)
+                                       (set! *mp-test-nearest-dist* d)
+                                       (set! *mp-test-nearest* (the-as process-drawable p))
+                                       )
+                                     )
+                                   )
+                                 #f
+                                 )
+                               *null-kernel-context*
+                               )
+         (format 0 "[mp-test] touch-nearest ~A at ~m~%" *mp-test-nearest* *mp-test-nearest-dist*)
+         (if *mp-test-nearest*
+             (send-event *mp-test-nearest* 'touch)
+             )
+         )
+        ((string= cmd "log-take")
+         ;; log-take: the NPC vehicle copy triangle would take here (*mp-prompt-replica*), what the
+         ;; prompt waits on, and each vehicle copy within 10 m: distance, flags, type, model loaded,
+         ;; size
+         (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
+           (format 0 "[mp-test] take prompt-replica ~D prompt-slot ~D ride ~D perch ~D candidate ~D l1 ~A~%"
+                   *mp-prompt-replica* *mp-prompt-slot* *mp-ride-slot* *mp-perch-slot* *mp-perch-candidate* *mp-perch-l1?*
+                   )
+           (format 0 "[mp-test] take want ~D ~D pilot/grabbed/dead ~A~%"
+                   (if mgr (-> mgr ride-want) -9) (if mgr (-> mgr steal-want) -9)
+                   (and *target* (focus-test? *target* pilot grabbed dead))
+                   )
+           )
+         (let ((ws *mp-world-state*))
+           (dotimes (i (-> ws replica-count))
+             (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
+               (when (and proc *target* (logtest? (-> proc net flags) (mp-actor-flag vehicle)))
+                 (let ((d (vector-vector-distance (-> proc root trans) (-> *target* control trans)))
+                       (vtype (mp-vehicle-type-of-skel (-> proc net skel)))
+                       )
+                   (when (< d (meters 10))
+                     (string<-charp *mp-temp-string* (-> proc net skel))
+                     (format 0 "[mp-test] take copy ~D ~S at ~,,2m flags #x~X type ~D~%" i *mp-temp-string* d
+                             (-> proc net flags) vtype
+                             )
+                     (format 0 "[mp-test] take copy ~D model ~A size ~,,2m~%" i (if (mp-vehicle-skel vtype) #t #f)
+                             (if (nonzero? (-> proc draw)) (-> proc draw bounds w) -1.0)
+                             )
+                     )
+                   )
+                 )
+               )
+             )
+           )
+         )
+        ((string= cmd "bring-enemy")
+         ;; bring-enemy <type> <slot> <meters>: on the authority, the enemy of that type alive and
+         ;; hostile (else the first) is moved that far beyond player slot's puppet, on the side away
+         ;; from us, 2 m up (a flying one: a Metal Head wasp), so that it is nearer to that player
+         ;; than to ours
+         (mp-test-word)
+         (set! *mp-test-type-name* (string->symbol (-> *mp-test* word)))
+         (let* ((slot (mp-test-int))
+                (dist (meters (the float (mp-test-int))))
+                (pp (mp-puppet-process slot))
+                (e (the-as enemy (or (search-process-tree *entity-pool*
+                                                          (lambda ((p process))
+                                                            (and (= (-> p type symbol) *mp-test-type-name*)
+                                                                 (not (focus-test? (the-as enemy p) dead))
+                                                                 (= (-> (the-as enemy p) focus aware) (enemy-aware hostile))
+                                                                 )
+                                                            )
+                                                          )
+                                     (search-process-tree *entity-pool*
+                                                          (lambda ((p process))
+                                                            (and (= (-> p type symbol) *mp-test-type-name*)
+                                                                 (not (focus-test? (the-as enemy p) dead))
+                                                                 )
+                                                            )
+                                                          )
+                                     )
+                           )
+                   )
+                )
+           (cond
+             ((and e pp *target*)
+              (let ((dir (vector-! (new 'stack-no-clear 'vector) (-> pp root trans) (-> *target* control trans))))
+                (set! (-> dir y) 0.0)
+                (vector-normalize! dir 1.0)
+                (vector+float*! (-> e root trans) (-> pp root trans) dir dist)
+                (+! (-> e root trans y) (meters 2))
+                (format 0 "[mp-test] bring-enemy ~A to ~,,1m from player ~D, ~,,1m from us~%" *mp-test-type-name*
+                        (vector-vector-distance (-> e root trans) (-> pp root trans)) slot
+                        (vector-vector-distance (-> e root trans) (-> *target* control trans))
+                        )
+                ;; its choice there and then, as its update-focus makes it every frame online
+                (find-best-focus e)
+                (let ((f (handle->process (-> e focus handle))))
+                  (format 0 "[mp-test] bring-enemy its best focus now ~A aware ~D~%"
+                          (cond
+                            ((not f) 'none)
+                            ((= f *target*) 'us)
+                            ((type? f mp-puppet) 'puppet)
+                            (else (-> f type symbol))
+                            )
+                          (-> e focus aware)
+                          )
+                  )
+                )
+              )
+             (else
+               (format 0 "[mp-test] bring-enemy: no ~A, or no puppet ~D~%" *mp-test-type-name* slot)
+               )
+             )
+           )
+         )
+        ((string= cmd "ram-copy")
+         ;; ram-copy <skeleton prefix> <impulse>: the nearest vehicle copy of that skeleton gets the
+         ;; 'impact-impulse our vehicle's collision with it would send (that impulse, from our
+         ;; player), as when we ram it
+         (mp-test-word)
+         (let ((ws *mp-world-state*)
+               (best (the-as mp-replica #f))
+               (best-d (meters 100000))
+               )
+           (dotimes (i (-> ws replica-count))
+             (let ((proc (the-as mp-replica (handle->process (-> ws replica i)))))
+               (when (and proc *target* (logtest? (-> proc net flags) (mp-actor-flag vehicle)))
+                 (format (clear *mp-temp-string*) "skel-~S" (-> *mp-test* word))
+                 (when (mp-charp-prefix? (-> proc net skel) *mp-temp-string*)
+                   (let ((d (vector-vector-distance (-> proc root trans) (-> *target* control trans))))
+                     (when (< d best-d)
+                       (set! best-d d)
+                       (set! best proc)
+                       )
+                     )
+                   )
+                 )
+               )
+             )
+           (let ((impulse (string->float (begin (mp-test-word) (-> *mp-test* word)))))
+             (cond
+               (best
+                (let ((impact (new 'stack 'rigid-body-impact)))
+                  (vector-copy! (-> impact point) (-> best root trans))
+                  (set-vector! (-> impact normal) 0.0 0.0 1.0 0.0)
+                  (set-vector! (-> impact velocity) 0.0 0.0 (meters 10) 0.0)
+                  (set! (-> impact impulse) impulse)
+                  (set! (-> impact process) *target*)
+                  (set! (-> impact prim-id) (the-as uint 0))
+                  (send-event best 'impact-impulse :from *target* impact)
+                  (format 0 "[mp-test] ram-copy ~,,1m away, impulse ~,,0f, rams sent ~D~%" best-d impulse *mp-rams-sent*)
+                  )
+                )
+               (else
+                 (format 0 "[mp-test] ram-copy: no copy of skel-~S~%" (-> *mp-test* word))
+                 )
+               )
+             )
+           )
+         )
+        ((string= cmd "log-rams")
+         ;; log-rams: rams on copies sent, rams applied here on our vehicles, the state of the first
+         ;; turtle (v-turtle) of ours
+         (let ((v (search-process-tree *active-pool* (lambda ((p process)) (= (-> p type symbol) 'v-turtle)))))
+           (format 0 "[mp-test] rams sent ~D applied ~D turtle ~A~%" *mp-rams-sent* *mp-rams-applied*
+                   (if (and v (-> v next-state)) (-> v next-state name) 'none)
+                   )
+           )
+         )
+        ((string= cmd "log-focus")
+         ;; log-focus: on the authority, each enemy alive within 40 m of a player: what it focuses
+         ;; (our player, another player's puppet by slot, something else, nothing), its awareness
+         ;; (0 unaware .. 3 hostile), its distance to our player and to player 1's puppet; and our
+         ;; health
+         (iterate-process-tree *entity-pool*
+                               (lambda ((p process))
+                                 (when (and (type? p enemy) (not (focus-test? (the-as enemy p) dead)))
+                                   (let* ((e (the-as enemy p))
+                                          (pp (mp-puppet-process 1))
+                                          (d0 (if *target* (vector-vector-distance (-> e root trans) (-> *target* control trans)) (meters 1000)))
+                                          (d1 (if pp (vector-vector-distance (-> e root trans) (-> pp root trans)) (meters 1000)))
+                                          (f (handle->process (-> e focus handle)))
+                                          )
+                                     (when (< (fmin d0 d1) (meters 40))
+                                       (format 0 "[mp-test] focus ~A on ~A aware ~D to-us ~,,1m to-p1 ~,,1m~%" (-> e type symbol)
+                                               (cond
+                                                 ((not f) 'none)
+                                                 ((= f *target*) 'us)
+                                                 ((type? f mp-puppet) 'puppet)
+                                                 (else (-> f type symbol))
+                                                 )
+                                               (-> e focus aware) d0 d1
+                                               )
+                                       )
+                                     )
+                                   )
+                                 #f
+                                 )
+                               *null-kernel-context*
+                               )
+         (format 0 "[mp-test] focus our health ~,,1f, enemy hits on puppets forwarded ~D~%" (if *target* (-> *target* fact health) 0.0)
+                 *mp-hits-forwarded*
+                 )
+         ;; the ground point the nav enemies check before they turn hostile (get-trans mode 1): at
+         ;; the puppet, not 10000 m below it as its gspot-pos was
+         (dotimes (i MP_MAX_PLAYERS)
+           (let ((pp (mp-puppet-process i)))
+             (if pp
+                 (format 0 "[mp-test] focus puppet ~D height ~,,1m ground point ~,,1m~%" i (-> pp root trans y) (-> (get-trans pp 1) y))
+                 )
+             )
+           )
+         )
+        ((string= cmd "log-tokens")
+         ;; log-tokens: the arena training's tokens here (waiting, hidden), its counter, the
+         ;; collections we sent the others
+         (set! *mp-test-count-a* 0)
+         (set! *mp-test-count-b* 0)
+         (iterate-process-tree *entity-pool*
+                               (lambda ((p process))
+                                 (when (and (= (-> p type symbol) 'arena-token) (-> p next-state))
+                                   (if (= (-> p next-state name) 'idle)
+                                       (+! *mp-test-count-a* 1)
+                                       (+! *mp-test-count-b* 1)
+                                       )
+                                   )
+                                 #f
+                                 )
+                               *null-kernel-context*
+                               )
+         (format 0 "[mp-test] tokens waiting ~D hidden ~D counter ~,,0f sent ~D~%" *mp-test-count-a* *mp-test-count-b*
+                 (-> *game-info* counter) *mp-pickups-sent*
+                 )
+         ;; the timer on screen and the host's clock now (a guest's: the host as drawn here, its
+         ;; playout delay behind): their difference is the same on every machine when the timers
+         ;; agree
+         (let ((host-s (* 0.0001 (the float (if (= *mp-mode* (mp-mode client)) (pc-mp-clock 0) (pc-mp-clock -1))))))
+           (format 0 "[mp-test] timer ~,,3f s host clock ~,,3f s, timer started at host ~,,3f s, fixes ~D~%"
+                   (/ (the float (-> *game-info* timer)) 300.0) host-s
+                   (- host-s (/ (the float (-> *game-info* timer)) 300.0)) *mp-timer-fixes*
+                   )
+           )
+         )
         ((string= cmd "go-state")
          ;; go-state <process type> <state>: the first process of that type goes to that virtual state
          ;; (a mission's task manager taken to a later step, its own code running from there)
@@ -1787,8 +2069,9 @@
                  (-> *mp-econ* orbs) (-> *mp-econ* trophies) (-> *mp-econ* items) (-> *mp-econ* result) (-> *mp-econ* near?)
                  (-> *mp-econ* open?)
                  )
-         (format 0 "[mp-test] econ host key ~S credits ~D refused ~D saves ~D game skill ~f~%" (-> *mp-econ* key)
+         (format 0 "[mp-test] econ host key ~S credits ~D refused ~D saves ~D game skill ~f gem ~f~%" (-> *mp-econ* key)
                  (-> *mp-econ* credits) (-> *mp-econ* refused) (pc-mp-econ-saves) (-> *game-info* skill)
+                 (-> *game-info* gem)
                  )
          (let ((mgr (the-as mp-manager (handle->process (-> *mp-globals* manager)))))
            ;; the label drawn over his spot (in yellow, mp-draw-merchant-name) in the game's language
@@ -1999,11 +2282,14 @@
            )
          )
         ((string= cmd "die")
-         ;; die: a blow that kills our player (co-op: back next to a living teammate)
+         ;; die [mode]: a blow that kills our player (co-op: back next to a living teammate); mode
+         ;; lava pins the camera where we die (tf6), as falling into lava does
          (when *target*
            (set! (-> *target* fact health) 1.0)
            (send-event *target* 'attack #f (static-attack-info :mask (vehicle-impulse-factor)
-                                             ((id (new-attack-id)) (mode 'generic) (damage 100.0)
+                                             ((id (new-attack-id))
+                                              (mode (if (mp-test-word) (string->symbol (-> *mp-test* word)) 'generic))
+                                              (damage 100.0)
                                               (vehicle-damage-factor 1.0) (vehicle-impulse-factor 1.0)
                                               )
                                              )
@@ -2021,6 +2307,14 @@
                       (= (handle->process (-> *camera* focus handle)) (mp-puppet-process (-> *mp-spectate* slot)))
                       )
                  )
+         ;; where the camera looks from: pinned at the place of death (tf6 tf12 tf14), its distance to us
+         (when *target*
+           (format 0 "[mp-test] respawn camera pinned ~A camera-to-us ~,,2m focus-us ~A~%"
+                   (logtest? (-> *target* target-flags) (target-flags tf6 tf12 tf14))
+                   (vector-vector-distance (camera-pos) (-> *target* control trans))
+                   (and *camera* (= (handle->process (-> *camera* focus handle)) *target*))
+                   )
+           )
          )
         ((string= cmd "shop-buy")
          ;; shop-buy <item>: buy shop item n, as the shop page's X does
@@ -2962,6 +3256,24 @@
          (set! (-> *mp-test-wait* kind) 'scene)
          (pc-mp-test-pause #t)
          )
+        ((string= cmd "log-scene")
+         ;; log-scene: the cutscene playing here, how long, and when it started in the host's clock
+         ;; (a guest's: the host as drawn here): the same on every machine when they start together
+         (let ((sp (mp-skippable-scene)))
+           (if (and sp (-> sp next-state) (= (-> sp next-state name) 'play-anim))
+               (let* ((played (/ (the float (- (-> sp clock frame-counter) (-> sp state-time))) 300.0))
+                      (host-s (* 0.0001 (the float (if (= *mp-mode* (mp-mode client)) (pc-mp-clock 0) (pc-mp-clock -1)))))
+                      )
+                 (format 0 "[mp-test] scene ~A plays for ~,,3f s, started at host ~,,3f s; held at its start ~D time(s)~%"
+                         (-> sp scene name) played (- host-s played) *mp-scene-holds*
+                         )
+                 )
+               (format 0 "[mp-test] scene none playing (~A); held at its start ~D time(s)~%"
+                       (if (and sp (-> sp next-state)) (-> sp next-state name) 'none) *mp-scene-holds*
+                       )
+               )
+           )
+         )
         ((string= cmd "log-skip")
          ;; log-skip: the cutscene playing here, our vote, the votes and the players watching
          (let ((sp (mp-skippable-scene)))
@@ -3864,6 +4176,7 @@
            (format 0 "winners #x~X pending ~,,1f given ~,,1f skill ~,,1f invites ~D decisions ~D~%"
                    (-> ch winners) (-> ch pending) (-> ch given) (-> *game-info* skill) (-> ch invites) (-> ch decisions)
                    )
+           (format 0 "[mp-test] challenge failure screens offered when beaten ~D~%" (-> ch retries-offered))
            (let ((judge (process-by-name "judge" *active-pool*)))
              (format 0 "[mp-test] challenge manager ~A live ~,,2f judge ~A character ~D indax ~A~%" (-> ch last-state) (-> ch live-score)
                      (if (and judge (-> judge next-state)) (-> judge next-state name) 'none)

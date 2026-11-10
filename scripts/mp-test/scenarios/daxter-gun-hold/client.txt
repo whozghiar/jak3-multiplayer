@@ -1,0 +1,31 @@
+# Daxter keeps his gun and his shots are heard, guest side: plays Daxter with every weapon, fires the
+# scatter gun once and keeps the gun (it went away 2 s after R1, from his hand); then fires the
+# blaster (29) and the vulcan fury (32) at the host from 7 m, whose machine must find their sounds.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+52 cheat weapons
+52.2 cheat invuln
+54 goto-player 0 4
+54.5 look-player 0
+54.8 daxter-mod 26
+55 press r1 200
+56 log-daxter-gun
+60 log-daxter-gun
+60.2 screenshot gun-5s
+66 log-daxter-gun
+66.2 screenshot gun-11s
+68 goto-player 0 7
+68.5 look-player 0
+68.8 daxter-mod 29
+69 press r1 200
+70 press r1 200
+71 press r1 200
+73 daxter-mod 32
+73.5 press r1 1500
+76 log-daxter-gun
+77.5 log-banks
+78 log

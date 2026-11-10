@@ -1,0 +1,11 @@
+# Daxter keeps his gun and his shots are heard, host side: plays Jak with no gun out, so its own
+# mode bank is none of the guest's guns; logs the sounds of the guest's shots it found no bank for.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 cheat invuln
+67 log
+77.5 log-banks
+78 log

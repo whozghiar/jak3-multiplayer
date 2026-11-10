@@ -1,6 +1,7 @@
 # Burning bush challenge in co-op, guest side: invited when the host starts the challenge, accepts
 # with D-pad up, goes to the challenge's start and plays it; reaches it about 8 s after its start,
-# slower than the host: no reward.
+# slower than the host: no reward, and the challenge's failure screen (retry or quit); X retries it
+# from its start.
 1 enable
 1 name Guest
 1 color 2
@@ -32,6 +33,12 @@
 97 wait-challenge 5
 98 log-challenge
 98.5 screenshot decided
+100 log-fail
+100.5 screenshot beaten
 102 log-challenge
 103 log-econ
-104 log
+106 press x 100
+112 log-me
+112.5 log-tasks
+113 screenshot retried
+114 log

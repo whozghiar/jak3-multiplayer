@@ -1,0 +1,25 @@
+# Enemies attack every player, the nearest first, host side (the authority): co-op in the sewers
+# (sewer-met-hum), where Metal Head wasps fly. The guest stands next to the host; the host brings a
+# wasp 6 m beyond the guest's puppet, on the side away from itself: the wasp turns to the puppet,
+# hostile, and its blows on it go to the guest (log-focus); then 6 m beyond the host itself: back
+# to the host.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission sewer-met-hum
+63 press x 100
+70 wait-player 1
+71 cheat invuln
+76 log-focus
+77 bring-enemy mh-wasp 1 6
+79 log-focus
+82 log-focus
+82.5 screenshot host-view
+86 log-focus

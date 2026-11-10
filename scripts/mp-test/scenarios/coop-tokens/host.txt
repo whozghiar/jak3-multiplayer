@@ -1,0 +1,25 @@
+# Co-op: the arena training's tokens shared, host side. Co-op starts at the training's collection
+# (arena-training-1); both managers taken to its tokens (go-state wait-more, as touching the judge
+# does), the guest's a few seconds later. The host collects two tokens, the guest one: each machine's
+# tokens and counter follow, and the guest's timer follows the host's (log-tokens: when it started, host clock).
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+25 title
+26 wait-menu title
+28 press down 100
+29 press x 100
+30 wait-menu mp-lobby-host
+31 coop-mission arena-training-1
+63 press x 100
+70 wait-player 1
+76 go-state task-manager-arena-training wait-more
+79 log-tokens
+80 touch-nearest arena-token
+82 touch-nearest arena-token
+84 log-tokens
+84.5 screenshot host-collected
+90 log-tokens
+90.5 screenshot host-after-guest

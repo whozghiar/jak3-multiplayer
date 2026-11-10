@@ -1,0 +1,14 @@
+# A guest takes one of the host's NPC vehicles, host side: an empty turtle (traffic spawn path) in
+# front of the host, an NPC vehicle it sends; the guest gets in. The vehicles around, before and
+# after (log-vehicles: a vehicle shown twice).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 merchant-spot 2
+50 spawn-vehicle 12
+58 log-vehicles
+62 log-vehicles
+62.5 screenshot taken
+66 log-vehicles

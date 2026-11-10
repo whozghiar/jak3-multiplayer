@@ -1,0 +1,12 @@
+# The mod on by default, turned off from the Mods menu (run with --retail). The runner leaves no
+# multiplayer.cfg, as a first boot: the title screen lists Host Game and Join Game without an
+# `enable` line. The Mods menu's toggle turned off gives the stock list back; on again, they return.
+26 wait-menu title
+27 log-lobby
+27.5 screenshot title-on
+28 disable
+29 log-lobby
+29.5 screenshot title-off
+30 enable
+31 log-lobby
+31.5 screenshot title-on-again

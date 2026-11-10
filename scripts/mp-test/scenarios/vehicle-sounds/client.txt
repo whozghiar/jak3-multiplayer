@@ -1,0 +1,13 @@
+# Vehicle sounds heard by the other player, guest side: in the desert by the host while it drives;
+# logs the sounds of the host's objects it replayed, and those in no loaded bank.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+47 continue desert-start
+60 goto-player 0 6 0
+70 log
+70.2 log-banks
+76 log
+76.5 log-banks

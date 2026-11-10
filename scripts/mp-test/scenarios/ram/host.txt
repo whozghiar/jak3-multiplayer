@@ -1,0 +1,15 @@
+# Rams on another player's vehicles, host side: an empty turtle (an NPC vehicle the host simulates)
+# in front of it; the guest rams its copy hard: the host's turtle takes the impact (on-impact) and
+# is destroyed (log-rams: the turtle's state).
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 merchant-spot 2
+50 spawn-vehicle 12
+54 log-rams
+62 log-rams
+62.5 screenshot rammed
+68 log-rams
+74 log-rams

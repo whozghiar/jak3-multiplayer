@@ -1,0 +1,13 @@
+# Cutscenes started together, host side: starts a Spargus cutscene; the guest next to it gets it a
+# moment later and loads it at its own pace. Each machine logs when its cutscene started playing,
+# in the host's clock (log-scene): the same within a state's delay.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55 scene wascity-pre-game-intro
+60 log-scene
+63 log-scene
+63.5 screenshot scene
+70 log

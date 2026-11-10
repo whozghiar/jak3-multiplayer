@@ -1,0 +1,12 @@
+# Cutscenes started together, guest side: next to the host when its cutscene starts, plays it too;
+# logs when it started playing, in the host's clock.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+54 log-scene
+57 log-scene
+60 log-scene
+60.5 screenshot scene
+66 log

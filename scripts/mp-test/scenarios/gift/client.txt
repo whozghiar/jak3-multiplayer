@@ -1,0 +1,11 @@
+# Gifts of orbs and skull gems in co-op, guest side: its game counts before and after the host's
+# /give Guest 5 and /trophies Guest 3.
+1 enable
+1 name Guest
+1 color 2
+1 character 1
+45 join 127.0.0.1:7777
+45.1 wait-joined
+50 log-econ
+60 log-econ
+60.5 screenshot hud

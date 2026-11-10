@@ -1,0 +1,19 @@
+# Gifts of orbs and skull gems in co-op (no accounts), host side: the Mods menu's +100 precursor
+# orbs and +100 skull gems raise the game's counts the HUD shows; /give and /trophies raise the
+# guest's.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+50 log-econ
+51 econ-grant-self 0
+52 econ-grant-self 1
+53 log-econ
+53.5 screenshot hud
+55 chat-say /give Guest 5
+57 chat-say /trophies Guest 3
+59 log-chat
+60 log-econ

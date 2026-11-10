@@ -1,0 +1,12 @@
+# NPC regions in the wasteland, guest side: in the desert, 150 m from the host: not an authority
+# (log-place), the host's objects copied here.
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+47 continue desert-start
+60 goto-player 0 150 0
+64 log-place
+72 log-place
+72.5 screenshot far

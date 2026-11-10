@@ -1,0 +1,20 @@
+# A guest takes one of the host's NPC vehicles, guest side: stands at the copy of the host's turtle,
+# triangle; its own turtle there, and no copy of the host's left beside it while the host's late
+# states come (it stood 4 s, held then faded, before).
+1 enable
+1 name Guest
+1 color 2
+45 join 127.0.0.1:7777
+45.1 wait-joined
+54 goto-npc v-turtle 1.5
+55 log-take
+56 press triangle 100
+56.5 log-take
+57 log-vehicles
+57.2 log-take
+57.3 screenshot taken-1
+57.5 log-vehicles
+58 log-vehicles
+59 log-vehicles
+59.2 screenshot taken-2
+61 log-vehicles

@@ -1,0 +1,16 @@
+# Vehicle sounds heard by the other player, host side: both players in the desert (its sound banks
+# hold the wasteland vehicles' sounds; Spargus' do not, for the driver either); drives a buggy near
+# the guest (engine, wheels, impacts); the guest counts the sounds it replays and those no loaded
+# bank has.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 continue desert-start
+64 vehicle 15
+67 press x 3000
+71 press x 3000 60 128
+75 press x 3000 200 128
+79 log
+79.5 log-banks

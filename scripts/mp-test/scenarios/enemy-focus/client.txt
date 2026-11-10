@@ -1,0 +1,23 @@
+# Enemies attack every player, the nearest first, guest side: stays next to the host while the
+# host brings a wasp beyond it; its health and the blows it receives logged.
+1 enable
+1 name Guest
+1 color 2
+1 character 0
+25 title
+26 address 127.0.0.1:7777
+26.5 wait-menu title
+27.5 press down 100
+28 press down 100
+29 press x 100
+30 wait-menu mp-join-game
+37 press down 100
+37.5 press x 100
+38.5 wait-menu mp-lobby-join
+57 press x 100
+62 wait-joined
+68 log-focus
+74 log-focus
+76 screenshot guest-view
+80 log-focus
+86 log

@@ -1,0 +1,13 @@
+# Co-op respawn after a death in lava, host side: stands still while the guest dies 12 m away and
+# comes back next to it.
+1 enable
+1 name Host
+1 color 1
+1 character 0
+1 mode 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+55 log-respawn
+56 log-focus
+64 screenshot guest-back
+70 log

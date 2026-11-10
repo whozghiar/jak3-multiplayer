@@ -1,0 +1,11 @@
+# NPC regions in the wasteland, host side: both players in the desert; the guest 150 m away still
+# shows the host's NPCs (its marauders), it no longer takes over its own beyond 90 m (each player
+# then had marauders the other neither saw nor could hit). log-place: role and copies.
+1 enable
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+48 continue desert-start
+70 log-place
+80 log-place

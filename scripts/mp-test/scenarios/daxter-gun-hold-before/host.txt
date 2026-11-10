@@ -1,0 +1,12 @@
+# Counter-test of daxter-gun-hold, host side: no mode sound bank loaded for the other players (as
+# before): the guest's shots of another mod than ours are in no bank here.
+1 enable
+1 mode-banks 0
+1 name Host
+1 color 1
+38 host 0.0.0.0:7777
+44.9 wait-player 1
+54 cheat invuln
+67 log
+77.5 log-banks
+78 log
