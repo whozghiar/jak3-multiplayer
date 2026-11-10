@@ -1897,7 +1897,9 @@ in order (`MP_TEST_LATENCY`, `Session::receive_all` in `kmultiplayer.cpp`), and 
 drops that share of the datagrams received (`MP_TEST_LOSS`): both instances run on one machine,
 these stand in for the network between two. `--shot-size` renders the screenshots at that size
 (`MP_TEST_SHOT_SIZE`, 1280x720 by default): 2560x1440 shows Daxter's hands from a few meters.
-`--english` puts the instances' game in English (`game-language`, `text-language` and
+`--port-base <n>` gives instance i its own compiler listener, port n + i (`gk --port`): by default
+only the first instance opens the game's port (8114), and a compiler of another session started
+for the same game could reach a test instance there. `--english` puts the instances' game in English (`game-language`, `text-language` and
 `subtitle-language` 0 in their `pc-settings.gc`), whatever the user's language.
 
 The root `README.md`'s captures come from the scenarios `readme-free-roam`, `readme-coop` and

@@ -107,6 +107,9 @@ def main() -> int:
                         help="no network pressure: every send at its full rate (MP_TEST_FIXED_CADENCE, a baseline)")
     parser.add_argument("--english", action="store_true",
                         help="the game in English, whatever the user's language (captures for the README)")
+    parser.add_argument("--port-base", type=int, default=0,
+                        help="instance i listens for the compiler on this port + i (gk --port), not on the "
+                             "game's default port, which only the first instance could open")
     parser.add_argument("--settings-from", default="",
                         help="scenario whose instances' economy files and multiplayer.cfg to start with")
     args = parser.parse_args()
@@ -150,8 +153,10 @@ def main() -> int:
         # sleep once hung every instance in SDL's controller detection
         env.update(NO_CONTROLLER)
         log = open(folder / "gk.log", "w", encoding="utf-8", errors="replace")
-        cmd = [str(GK), "-v", "--game", "jak3", "--config-path", str(folder),
-               "--", "-boot", "-fakeiso"] + ([] if args.retail else ["-debug"])
+        cmd = [str(GK), "-v", "--game", "jak3", "--config-path", str(folder)]
+        if args.port_base:
+            cmd += ["--port", str(args.port_base + index)]
+        cmd += ["--", "-boot", "-fakeiso"] + ([] if args.retail else ["-debug"])
         print(f"[run] {name}: {' '.join(cmd)}")
         procs.append((name, folder, log,
                       subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)))
